@@ -37,7 +37,7 @@ export const P = {
   gravityPower: 2.0,
   gravityOffsetMin: 30,
   propensityIncomeElasticity: 0.3,
-  personsPerPCU: 2.0,
+  personsPerCar: 1.4,
   freightPCUShare: 0.3,       // 여객 PCU 대비 화물차 PCU
   targetKrMotorwayVC: 0.65,   // 기준 연도 보정 목표: 남측 고속도로 평균 V/C
   targetKrRailVC: 1.0,        // 기준 연도 보정 목표: 남측 철도 V/C 상위 5% 구간 (경부고속선 등 포화 구간)
@@ -45,6 +45,26 @@ export const P = {
   calibrationRounds: 5,
   railASCStep: 25,            // 보정 반복마다 철도 상수 조정 폭(분)
   msaIterations: 3,
+  msaIterationsWarm: 1,       // 해마다 지난해 결과에서 이어 배정할 때 (지난해 교통량과 반씩 섞는다)
+
+  // --- 대중교통 (버스 + 도시철도)
+  busTimeFactor: 1.15,        // 같은 도로에서 승용차 대비 버스 주행시간
+  busStopMinPerKm: 1.0,       // 고속도로 밖 정류장 정차 지체 (분/km)
+  busAccessFactor: 1.5,       // 정류장까지 접근 (간선 도로망이 성기므로 승용차 접근보다 길게)
+  busWaitMin: 8,
+  metroWaitMin: 4,
+  metroCandidates: 3,
+  metroRadiusKm: 6,
+  metroTrainsPerDay: 500,     // 양방향
+  metroPaxPerTrain: 1000,
+  transferMin: 6,             // 도시철도역 ↔ 버스 환승
+  transitBaseFare: 1500,      // 원
+  transitFarePerKm: 100,      // 10km 초과분
+  transitASC: 10,
+  transitASCStep: 25,
+  targetKrTransitShare: 0.3,  // 기준 연도 보정 목표: 남측 지역 간 통행의 대중교통 분담률 (가정값)
+  carlessPenaltyMin: 60,      // 자동차 보유가 적은 지역의 승용차 이용 불편 (소득에 따라 줄어듦)
+  carOwnershipIncome: 20000,
 
   // --- 남북 통합
   borderPenaltyMin: 300,      // 통합도 0일 때 남북 간 추가 일반화비용(분)

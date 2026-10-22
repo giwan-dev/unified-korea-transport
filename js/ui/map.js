@@ -86,6 +86,14 @@ export function addLayers(map, zonesFC, linksFC) {
       'line-width': ['interpolate', ['linear'], ['coalesce', ['feature-state', 'vol'], 0], 0, 1, 20000, 1.8, 100000, 3.5, 400000, 7],
     },
   });
+  map.addLayer({
+    id: 'metro', type: 'line', source: 'links', filter: ['all', ['==', ['get', 'mode'], 2], ['==', ['get', 'building'], 0]],
+    paint: {
+      'line-color': '#1a9a6c',
+      'line-width': ['interpolate', ['linear'], ['coalesce', ['feature-state', 'vol'], 0], 0, 1, 50000, 2, 300000, 5],
+      'line-opacity': ['interpolate', ['linear'], ['zoom'], 6, 0.4, 9, 0.9],
+    },
+  });
   // 공사 중인 신설 노선은 회색 점선
   map.addLayer({
     id: 'links-building', type: 'line', source: 'links', filter: ['==', ['get', 'building'], 1],
@@ -99,17 +107,17 @@ export function addLayers(map, zonesFC, linksFC) {
   map.addSource('points', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({
     id: 'points', type: 'circle', source: 'points',
-    filter: ['any', ['==', ['get', 'isNew'], 1], ['>=', ['zoom'], ['match', ['get', 'kind'], 'station', 7, 9]]],
+    filter: ['any', ['==', ['get', 'isNew'], 1], ['>=', ['zoom'], ['case', ['==', ['get', 'metro'], 1], 10, ['==', ['get', 'kind'], 'station'], 7, 9]]],
     paint: {
       'circle-radius': ['match', ['get', 'kind'], 'station', 4, 3],
       'circle-color': ['match', ['get', 'kind'], 'station', '#ffffff', '#1d232b'],
-      'circle-stroke-color': ['match', ['get', 'kind'], 'station', '#6c3fa0', '#ffffff'],
+      'circle-stroke-color': ['case', ['==', ['get', 'metro'], 1], '#1a9a6c', ['==', ['get', 'kind'], 'station'], '#6c3fa0', '#ffffff'],
       'circle-stroke-width': 1.5,
     },
   });
   map.addLayer({
     id: 'point-labels', type: 'symbol', source: 'points',
-    filter: ['any', ['==', ['get', 'isNew'], 1], ['>=', ['zoom'], ['match', ['get', 'kind'], 'station', 8, 10]]],
+    filter: ['any', ['==', ['get', 'isNew'], 1], ['>=', ['zoom'], ['case', ['==', ['get', 'metro'], 1], 11, ['==', ['get', 'kind'], 'station'], 8, 10]]],
     layout: {
       'text-field': ['get', 'name'], 'text-size': ['case', ['==', ['get', 'isNew'], 1], 13, 11],
       'text-offset': [0, 1.0], 'text-anchor': 'top', 'text-font': ['Noto Sans Regular'],
@@ -156,5 +164,5 @@ export function legendHTML(metric) {
     <div style="margin-top:6px">도로 혼잡도 (V/C)</div>
     <div class="ramp" style="background:linear-gradient(to right,#3f9e63,#c5c23a,#e8962c,#d9452f,#7d1d16)"></div>
     <div class="ends"><span>여유</span><span>1.0</span><span>정체</span></div>
-    <div style="margin-top:6px"><span style="color:#2453c9">━</span> 고속철 <span style="color:#6c3fa0">━</span> 일반철도 (굵기 = 이용객)</div>`;
+    <div style="margin-top:6px"><span style="color:#2453c9">━</span> 고속철 <span style="color:#6c3fa0">━</span> 일반철도 <span style="color:#1a9a6c">━</span> 도시철도<br>(굵기 = 이용객)</div>`;
 }

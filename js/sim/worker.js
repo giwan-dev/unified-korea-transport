@@ -37,7 +37,7 @@ self.onmessage = (ev) => {
       model.setNetwork(msg.net);
       // 지난 1년의 교통 조건으로 경제·인구를 갱신한 뒤 새 해의 통행을 배정한다
       model.advanceYear(msg.ctx.integration, msg.ctx.policy);
-      const totals = model.assign(msg.ctx.integration, (v) => post('progress', { label: '통행배정', value: v }));
+      const totals = model.assign(msg.ctx.integration, (v) => post('progress', { label: '통행배정', value: v }), true);
       results(totals);
     }
   } catch (err) {

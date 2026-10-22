@@ -30,8 +30,8 @@ export class Graph {
       this.target[fill[a]] = b; this.edgeFrom[fill[a]] = a; this.edgeLink[fill[a]++] = i;
       this.target[fill[b]] = a; this.edgeFrom[fill[b]] = b; this.edgeLink[fill[b]++] = i;
     }
-    this.dist = new Float64Array(nodeCount);
-    this.predEdge = new Int32Array(nodeCount);
+    this.dist = new Float64Array(nodeCount).fill(Infinity);
+    this.predEdge = new Int32Array(nodeCount).fill(-1);
     this.order = new Int32Array(nodeCount);
     this.settled = 0;
     this.heap = new MinHeap(nodeCount);
@@ -45,8 +45,8 @@ export class Graph {
    */
   shortestPaths(source, linkCost, init) {
     const { dist, predEdge, order, heap, offset, target, edgeLink } = this;
-    dist.fill(Infinity);
-    predEdge.fill(-1);
+    // 직전 탐색에서 건드린 노드만 되돌린다 (철도처럼 작은 부분망을 여러 번 탐색할 때 빠르다)
+    for (let k = 0; k < this.settled; k++) { dist[order[k]] = Infinity; predEdge[order[k]] = -1; }
     heap.clear();
     if (Array.isArray(source)) {
       source.forEach((s, k) => {

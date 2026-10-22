@@ -68,7 +68,8 @@ export function effectiveNetwork(base, state) {
     delete m.geom;
     links.push(m);
   }
-  const stations = base.stations.map((s) => s[1]).concat(state.newStations);
+  const stations = base.stations.map((s) => s[1])
+    .concat((base.metro_stations || []).map((s) => s[1]), state.newStations);
   return { nodes, links, stations: [...new Set(stations)] };
 }
 
@@ -169,7 +170,7 @@ export function startNewBuild(base, state, plan) {
   const label = `${spec.label} ${endName(0)}–${endName(nodeIds.length - 1)} (${kmTotal.toFixed(0)}km)`;
   startProject(state, {
     id: crypto.randomUUID(), kind: 'new', type: plan.type, links: links.map((l) => l.id),
-    stations: spec.mode === 1 ? nodeIds.filter((_, i) => plan.names[i]?.kind === 'station') : [],
+    stations: spec.mode >= 1 ? nodeIds.filter((_, i) => plan.names[i]?.kind === 'station') : [],
     cost: total, years: spec.years, label,
   });
   return { ok: true };
@@ -235,6 +236,7 @@ function completeProject(base, state, p) {
 
 /** 민원 대상: 남은 고속도로·간선국도와 철도, 북은 모든 도로·철도 */
 function requestable(l) {
+  if (l.mode === 2) return false; // 도시철도는 아직 개량 메뉴가 없다
   return l.len > 1 && (l.mode === 1 || l.kp || l.cls === 'motorway' || l.cls === 'trunk');
 }
 

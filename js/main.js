@@ -9,7 +9,7 @@ import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.j
 import { kmBetween } from './sim/model.js';
 
 const $ = (s) => document.querySelector(s);
-const CLASS_LABEL = { motorway: '고속도로', trunk: '간선국도', primary: '주요 도로', secondary: '지방 도로', hsr: '고속철도', conv: '일반철도' };
+const CLASS_LABEL = { motorway: '고속도로', trunk: '간선국도', primary: '주요 도로', secondary: '지방 도로', hsr: '고속철도', conv: '일반철도', metro: '도시철도' };
 const POLICY_LABEL = { free: '자유 이주', limited: '이주 제한 (허가제)', closed: '이주 통제' };
 
 let map, base, zonesFC, zoneProps, places, grid, namer, worker;
@@ -66,6 +66,7 @@ function ctx() {
 function resetNamer() {
   const existing = [
     ...base.stations.map(([name]) => ({ name, kind: 'station' })),
+    ...(base.metro_stations || []).map(([name]) => ({ name, kind: 'station' })),
     ...base.junctions.map(([name]) => ({ name, kind: 'IC' })),
     ...Object.values(state.names).map((v) => ({ name: v.name, kind: v.kind })),
   ];
@@ -189,6 +190,7 @@ function nodeCoord(id) {
 function nodeNames() {
   const out = new Map();
   for (const [name, node] of base.stations) if (!out.has(node)) out.set(node, { name, kind: 'station', isNew: 0 });
+  for (const [name, node] of base.metro_stations || []) if (!out.has(node)) out.set(node, { name, kind: 'station', isNew: 0, metro: 1 });
   for (const [name, node] of base.junctions) {
     if (out.has(node)) continue;
     out.set(node, { name, kind: /JCT|분기점/.test(name) ? 'JCT' : 'IC', isNew: 0 });
@@ -244,14 +246,14 @@ function bindMap() {
     const box = [[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]];
     const pt = map.queryRenderedFeatures(box, { layers: ['points'] })[0];
     if (pt) return select({ type: 'node', id: pt.properties.node });
-    const ln = map.queryRenderedFeatures(box, { layers: ['rails', 'roads', 'links-building'] })[0];
+    const ln = map.queryRenderedFeatures(box, { layers: ['rails', 'metro', 'roads', 'links-building'] })[0];
     if (ln) return select({ type: 'link', id: ln.properties.id });
     const zn = map.queryRenderedFeatures(e.point, { layers: ['zones-fill'] })[0];
     if (zn) return select({ type: 'zone', id: zn.id });
     select(null);
   });
   map.on('dblclick', (e) => { if (draft) { e.preventDefault(); } });
-  for (const l of ['roads', 'rails', 'points']) {
+  for (const l of ['roads', 'rails', 'metro', 'points']) {
     map.on('mouseenter', l, () => { if (!draft) map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', l, () => { if (!draft) map.getCanvas().style.cursor = ''; });
   }
@@ -331,7 +333,7 @@ function addDraftPoint(lngLat) {
 function nameDraftPoint(pt) {
   const spec = NEW_BUILDS[draft.type];
   const existing = pt.node != null ? nodeNames().get(pt.node) : null;
-  if (spec.mode === 1) {
+  if (spec.mode >= 1) {
     if (existing && existing.kind === 'station') { pt.name = existing.name; pt.kind = 'station'; pt.existing = true; return; }
     pt.kind = 'station';
     pt.name = namer.suggest(pt.lon, pt.lat, 'station');
@@ -466,7 +468,7 @@ function renderStatus() {
     <h4>교통</h4>
     <table class="kv">
       <tr><td>지역 간 통행 (일)</td><td>${fmtPop(t.trips)} 통행</td></tr>
-      <tr><td>철도 분담률</td><td>${pct(t.rail / t.trips)}</td></tr>
+      <tr><td>수단 분담 (승용차·철도·대중교통)</td><td>${pct(t.road / t.trips, 0)} · ${pct(t.rail / t.trips, 0)} · ${pct(t.transit / t.trips, 0)}</td></tr>
       <tr><td>남북 간 통행 (일)</td><td>${fmtPop(t.kpkr)} 통행</td></tr>
       <tr><td>정체 도로 (V/C&gt;1)</td><td>${Math.round(cong).toLocaleString()} km</td></tr>
     </table>
@@ -539,11 +541,11 @@ function pointRow(p, i) {
   const spec = NEW_BUILDS[draft.type];
   const tag = p.node != null ? '연결' : '신규';
   if (!p.name) {
-    const toggle = spec.mode === 1 ? `<button class="small" data-ptoggle="${i}">역 설치</button>` : '';
+    const toggle = spec.mode >= 1 ? `<button class="small" data-ptoggle="${i}">역 설치</button>` : '';
     return `<div class="name-row"><span class="kind">${tag}</span><span style="flex:1;color:var(--muted)">경유점 ${i + 1}</span>${toggle}</div>`;
   }
   if (p.existing) return `<div class="name-row"><span class="kind">${tag}</span><span style="flex:1">${esc(p.name)}</span></div>`;
-  const toggle = spec.mode === 1 && i > 0 && i < draft.points.length - 1 ? `<button class="small" data-ptoggle="${i}">통과</button>` : '';
+  const toggle = spec.mode >= 1 && i > 0 && i < draft.points.length - 1 ? `<button class="small" data-ptoggle="${i}">통과</button>` : '';
   return `<div class="name-row"><span class="kind">${p.kind === 'station' ? '역' : p.kind}</span>
     <input type="text" data-pname="${i}" value="${esc(p.name)}">
     <button class="small" data-pauto="${i}" title="자동 이름">↻</button>${toggle}</div>`;
@@ -689,7 +691,10 @@ function linkPanel(id) {
   const ups = UPGRADES.filter((u) => u.mode === l.mode && u.applies(l));
   const route = sameRoute(id);
   const routeKm = route.reduce((sum, x) => sum + linkAt(base, state, x).len, 0);
-  const rows = isRoad
+  const rows = l.mode === 2
+    ? `<tr><td>표정 속도</td><td>${l.speed} km/h</td></tr>
+       <tr><td>이용객</td><td>${Math.round(vol).toLocaleString()} 명/일</td></tr>`
+    : isRoad
     ? `<tr><td>차로</td><td>${l.lanes}차로${l.paved ? '' : ' (비포장)'}</td></tr>
        <tr><td>설계·실제 속도</td><td>${l.speed} / ${speed.toFixed(0)} km/h</td></tr>
        <tr><td>교통량</td><td>${Math.round(vol).toLocaleString()} PCU/일</td></tr>`
@@ -757,9 +762,11 @@ function nodePanel(id) {
   let riders = '';
   if (n.kind === 'station' && result) {
     const k = result.stations.node.indexOf(id);
+    const metro = n.metro || allLinks().some((l) => l.mode === 2 && (l.a === id || l.b === id));
     riders = k >= 0
       ? `<table class="kv"><tr><td>일 승하차 (지역 간 통행)</td><td>${Math.round(result.stations.riders[k]).toLocaleString()}명</td></tr></table>`
-      : '<p class="hint">아직 운행하지 않는 역입니다.</p>';
+      : metro ? '<p class="hint">도시철도역 (노선별 이용객은 구간을 눌러 보세요)</p>'
+        : '<p class="hint">아직 운행하지 않는 역입니다.</p>';
   }
   return `${header(n.name)}
     <p class="hint">${kindLabel}${n.isNew ? (state.names[id]?.auto ? ' · 자동 이름' : ' · 직접 지은 이름') : ' · 기존 시설 (OSM)'}</p>
