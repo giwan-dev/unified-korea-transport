@@ -13,10 +13,12 @@ import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.j
 import { kmBetween, routeKey } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
 import { smoothSegments, polylineKm } from './game/curve.js';
-import { extendWorld } from './game/world.js';
+import { extendWorld, urbanLanes } from './game/world.js';
 import { autoLineName, cityStem, makeForeignTest } from './game/lines.js';
 import { saveSim, loadSim, clearSim } from './game/simstore.js';
-import { SERVICE_KINDS, OPERATING, lineStations, planService, trainsets, setCost, startService, updateService, removeService } from './game/services.js';
+import { SERVICE_KINDS, OPERATING, lineStations, planService, railPath, trainsets, setCost, startService, updateService, removeService } from './game/services.js';
+import { showLineDiagram, stopLineDiagram } from './ui/linediagram.js';
+import { P } from './sim/params.js';
 
 const $ = (s) => document.querySelector(s);
 const CLASS_LABEL = { motorway: '고속도로', trunk: '간선국도', primary: '주요 도로', secondary: '지방 도로', hsr: '고속철도', conv: '일반철도', metro: '도시철도' };
@@ -56,6 +58,7 @@ async function init() {
   zoneProps = z; base = decodeNetwork(nmeta, nbin); grid = new Float32Array(g);
   // 국외 거점·국경 연결·여객선 항로·공항
   extendWorld(base, zoneProps, world);
+  urbanLanes(base, grid);
   // 존 경계는 배경지도와 같은 시군구 도형을 쓴다
   zonesFC = await dl.fetch('data/admin/sgg.geojson', 'json');
   // 지명은 새 역·IC 이름을 지을 때만 필요하므로 첫 화면 뒤에 받는다
@@ -291,6 +294,9 @@ let pendingStep = false;
 function nextYear() {
   if (busy || !result) return;
   cancelDraft();
+  // 노선도는 지난해 결과로 그렸으므로 닫는다
+  stopLineDiagram();
+  $('#linediagram').hidden = true;
   const done = advanceBudgetYear(base, state);
   if (done.some((p) => p.kind === 'rename')) refreshNames(map);
   if (done.length) { refreshLinks(); refreshPoints(); }
@@ -1254,7 +1260,7 @@ function renderStats() {
     <h4>역 순위 (지역 간 승하차)</h4><table class="cmp"><tr><th>역</th><th>명/일</th></tr>${stRows}</table>
     <h4>노선 순위 (최대 구간 이용객)</h4><table class="cmp"><tr><th>노선</th><th>명/일</th><th>V/C</th></tr>${railRows}</table>
     <h4>노선별 수익성 (철도·도시철도, 연간)</h4><table class="cmp"><tr><th>노선</th><th>수입</th><th>비용</th><th>영업계수</th></tr>${econRows}</table>
-    <p class="hint">영업계수 = 영업비용 ÷ 영업수입 × 100 (100 미만이면 흑자). 수입은 구간 이용객 × 거리 × km당 운임, 비용은 운행 열차-km와 선로 유지비로 셈한 추정입니다.</p>
+    <p class="hint">영업계수 = 영업비용 ÷ 영업수입 × 100 (100 미만이면 흑자). 수입은 구간 이용객 × 거리 × km당 운임, 비용은 운행 열차-km와 선로 유지비로 셈한 추정입니다. 도시철도는 시군구 사이 이용만 셈해 수입이 실제보다 적습니다.</p>
     ${svcRows ? `<h4>운행 계통</h4><table class="cmp"><tr><th>계통</th><th>회/일</th><th>최대 구간</th><th>승차율</th><th>영업계수</th></tr>${svcRows}</table>` : ''}
     <h3 style="margin-top:16px">도로</h3>
     <h4>가장 막히는 고속도로·간선국도</h4><table class="cmp"><tr><th>노선</th><th>PCU/일</th><th>V/C</th></tr>${roadRows}</table>
@@ -1325,6 +1331,7 @@ function renderSelection() {
   else el.innerHTML = nodePanel(selection.id);
   el.querySelector('.close')?.addEventListener('click', () => select(null));
   if (selection.type === 'service') bindService(el);
+  el.querySelector('#line-diagram')?.addEventListener('click', () => openLineDiagram(selection.id));
   el.querySelector('#svc-new')?.addEventListener('click', (ev) => openServiceEditor(ev.target.dataset.line, ev.target.dataset.cls));
   el.querySelectorAll('[data-svc-edit]').forEach((b) => {
     b.onclick = () => {
@@ -1518,9 +1525,10 @@ function bindService(el) {
 function serviceSection(l) {
   const ec = lineEconomics().find((x) => x.name === l.name);
   const econ = ec ? `<p class="hint">이 노선: 연 수입 ${formatWon(ec.rev / 1e8)} · 비용 ${formatWon(ec.cost / 1e8)} · 영업계수 <b class="${ec.ratio > 100 ? 'neg' : ''}">${fmtRatio(ec.ratio)}</b></p>` : '';
-  if (l.mode === 2) return `<h4>수익성</h4>${econ}`;
+  const diagram = '<button class="small" id="line-diagram">노선도 보기 (열차 위치·정차역·혼잡도)</button>';
+  if (l.mode === 2) return `<h4>노선도 · 수익성</h4>${diagram}${econ}<p class="hint">도시철도는 시군구 사이를 오가는 이용만 셈해서 수입이 실제보다 적게 나옵니다(같은 구 안 이용은 빠짐).</p>`;
   const list = (state.services || []).filter((s) => s.line === l.name);
-  return `<h4>운행 계통 · 수익성</h4>${econ}
+  return `<h4>노선도 · 운행 계통 · 수익성</h4>${diagram}${econ}
     <div class="list">${list.map((s) => `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
       <span>${esc(s.name)} <span class="m">${s.name.includes(SERVICE_KINDS[s.kind].label) ? "" : `${SERVICE_KINDS[s.kind].label} · `}${s.stops.length}개 역 · 하루 ${s.trains}회${s.built ? '' : ' · 차량 제작 중'}</span></span>
       <button class="small" data-svc-edit="${s.id}">고치기</button></div></div>`).join('')}</div>
@@ -1589,6 +1597,72 @@ function airRatio(aps, a, b, pax, freq) {
   const fare = (45000 + 90 * km) * (A.country !== B.country ? 1.6 : 1);
   const cost = 2 * freq * (9e6 + 14000 * km);
   return pax > 0 ? (cost / (pax * fare)) * 100 : Infinity;
+}
+
+// ------------------------------------------------------------ 노선 모식도
+
+/** 운행 중 계통별 구간(정차역 사이) 이용객 (시뮬레이션 결과의 가상 링크 순서대로) */
+function svcSegVols() {
+  const out = new Map(), sv = result?.links.svcVol;
+  const built = (state.services || []).filter((s) => s.built);
+  if (!sv || sv.length !== built.reduce((n, s) => n + s.segs.length, 0)) return out;
+  let k = 0;
+  for (const s of built) out.set(s.id, s.segs.map(() => sv[k++]));
+  return out;
+}
+
+function openLineDiagram(id) {
+  if (!result) return;
+  const l0 = linkAt(base, state, id);
+  const mode = l0.mode, line = l0.name;
+  const net = effectiveNetwork(base, state);
+  const stSet = mode === 2 ? new Set((base.metro_stations || []).map(([, n]) => n)) : railStationSet();
+  const nodes = lineStations(net, stSet, line, mode);
+  if (nodes.length < 2) { alert('이 노선에는 역이 둘 이상 있어야 노선도를 그릴 수 있습니다.'); return; }
+  const nn = nodeNames(), { vol, vc } = result.links;
+  const stations = [], segs = [], segTime = [];
+  let km = 0;
+  nodes.forEach((n, i) => {
+    if (i) {
+      const via = railPath(net.links, nodes[i - 1], n, line, mode) || [];
+      const len = via.length ? via.reduce((a, k) => a + net.links[k].len, 0) : kmBetween(...net.nodes[nodes[i - 1]], ...net.nodes[n]);
+      km += len;
+      segs.push({ vc: Math.max(0, ...via.map((k) => vc[k] || 0)), vol: Math.max(0, ...via.map((k) => vol[k] || 0)), gap: !via.length });
+      segTime.push(via.length ? via.reduce((a, k) => a + (net.links[k].len / net.links[k].speed) * 60, 0) : (len / 80) * 60);
+    }
+    stations.push({ name: nn.get(n)?.name || `역 ${n}`, km });
+  });
+  const timesFor = (first, last, stops, tf) => {
+    const t = [];
+    t[first] = 0;
+    for (let i = first + 1; i <= last; i++) t[i] = t[i - 1] + (stops.has(i - 1) && i - 1 !== first ? P.railDwellMin : 0) + segTime[i - 1] * tf;
+    return t;
+  };
+  const rows = [];
+  const idx = new Map(nodes.map((n, i) => [n, i]));
+  const segVols = svcSegVols();
+  for (const s of (state.services || []).filter((x) => x.line === line)) {
+    const stopIdx = s.stops.map((n) => idx.get(n)).filter((i) => i != null).sort((a, b) => a - b);
+    if (stopIdx.length < 2) continue;
+    const first = stopIdx[0], last = stopIdx[stopIdx.length - 1], stops = new Set(stopIdx);
+    const v = segVols.get(s.id);
+    const segVC = [];
+    if (v) {
+      const cap = s.trains * OPERATING.paxPerTrain[s.cls === 'hsr' ? 'hsr' : 'conv'];
+      for (let j = 0; j + 1 < stopIdx.length; j++) for (let i = stopIdx[j]; i < stopIdx[j + 1]; i++) segVC[i] = (v[j] || 0) / cap;
+    }
+    rows.push({ name: s.name, kind: s.kind, first, last, stops, trains: s.built ? s.trains : 0, times: timesFor(first, last, stops, P.serviceTimeFactor[s.kind]),
+      segVC: v ? segVC : null,
+      label: `${SERVICE_KINDS[s.kind].label} · ${s.trains}회/일 · ${stops.size}역${s.built ? '' : ' · 제작 중'}` });
+  }
+  // 기본 운행: 모든 역에 서는 열차. 운행 횟수는 이용객을 승차율 65%로 실을 만큼으로 어림한다
+  const cls = mode === 2 ? 'metro' : l0.cls === 'hsr' ? 'hsr' : 'conv';
+  const peak = Math.max(0, ...segs.map((s) => s.vol));
+  const baseTrains = Math.min(300, Math.max(OPERATING.minTrains[cls], Math.round(peak / (OPERATING.paxPerTrain[cls] * OPERATING.loadFactor))));
+  const all = new Set(nodes.map((_, i) => i));
+  rows.push({ name: '기본 운행', kind: 'base', first: 0, last: nodes.length - 1, stops: all, trains: baseTrains,
+    times: timesFor(0, nodes.length - 1, all, 1), segVC: null, label: `모든 역 · 약 ${baseTrains}회/일` });
+  showLineDiagram($('#linediagram'), { title: `${line} · ${km.toFixed(0)}km · ${nodes.length}역`, stations, segs, rows });
 }
 
 function header(title) {

@@ -150,3 +150,23 @@ select { font: inherit; padding: 4px; border-radius: 4px; border: 1px solid var(
 .ld-steps li.now, .ld-steps li.ok { color: var(--ink); }
 .ld-steps li.ok .p { width: 100% !important; background: var(--good); }
 .ld-tip { font-size: 12px; color: var(--muted); }
+
+/* 노선 모식도 (지도 아래쪽에 겹쳐 띄움) */
+#linediagram {
+  position: absolute; left: 0; right: 380px; bottom: 0; z-index: 4; max-height: 55%;
+  background: var(--panel); border-top: 1px solid var(--line); display: flex; flex-direction: column;
+}
+#linediagram[hidden] { display: none; }
+.ld-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.ld-head .close { margin-left: auto; }
+.ld-clock { font-variant-numeric: tabular-nums; font-weight: 700; }
+.ld-legend { color: var(--muted); font-size: 12px; }
+.ld-scroll { overflow: auto; }
+.ld-scroll svg { display: block; }
+.ld-st { font-size: 11px; fill: var(--ink); }
+.ld-row { font-size: 12px; font-weight: 700; fill: var(--ink); }
+.ld-sub { font-size: 10px; fill: var(--muted); }
+.ld-dot { fill: var(--panel); stroke: var(--ink); stroke-width: 1.5; }
+@media (max-width: 760px) {
+  #linediagram { right: 0; max-height: 45vh; }
+}

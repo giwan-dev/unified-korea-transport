@@ -59,3 +59,31 @@ export function extendWorld(base, zoneProps, world) {
     .concat(world.foreign.map((f) => ({ id: f.id, name: `${f.name} 공항`, lon: f.lon, lat: f.lat, cap: 60, intl: true, ext: 1, country: f.country })));
   return base;
 }
+
+/**
+ * 도심 간선도로 차로 수 보정. OSM에 차로 수가 없으면 2차로로 들어오는데,
+ * 인구가 많은 곳(주변 3×3km 평균 2,000명/km², 지방 도로는 5,000명/km² 이상)의 간선은 대개 4차로 이상이다.
+ * @returns {number} 고친 구간 수
+ */
+export function urbanLanes(base, grid) {
+  const g = grid instanceof Float32Array ? grid : new Float32Array(grid);
+  const DX = 0.0113, DY = 0.009;   // 약 1km
+  const bins = new Map();
+  for (let c = 0; c < g.length; c += 4) {
+    const k = `${Math.floor(g[c] / DX)}:${Math.floor(g[c + 1] / DY)}`;
+    bins.set(k, (bins.get(k) || 0) + g[c + 2]);
+  }
+  const density = (x, y) => {
+    const i = Math.floor(x / DX), j = Math.floor(y / DY);
+    let s = 0;
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) s += bins.get(`${i + a}:${j + b}`) || 0;
+    return s / 9;
+  };
+  let n = 0;
+  for (const l of base.links) {
+    if (l.mode !== 0 || l.lanes >= 4 || !['trunk', 'primary', 'secondary'].includes(l.cls)) continue;
+    const [ax, ay] = base.nodes[l.a], [bx, by] = base.nodes[l.b];
+    if (density((ax + bx) / 2, (ay + by) / 2) >= (l.cls === 'secondary' ? 5000 : 2000)) { l.lanes = 4; n++; }
+  }
+  return n;
+}

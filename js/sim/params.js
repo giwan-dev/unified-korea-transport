@@ -56,8 +56,8 @@ export const P = {
   calibrationRounds: 5,
   railASCStep: 25,            // 보정 반복마다 철도 상수 조정 폭(분)
   msaIterations: 5,
-  msaIterationsWarm: 1,       // 해마다 지난해 결과에서 이어 배정할 때
-  warmMsaOffset: 3,           // 그때 새 배정을 1/(1+3)만 섞는다
+  msaIterationsWarm: 2,       // 해마다 지난해 결과에서 이어 배정할 때 (한 번이면 경로가 해마다 이리저리 튄다)
+  warmMsaOffset: 3,           // 그때 새 배정을 1/4, 1/5씩 섞는다
 
   // --- 대중교통 (버스 + 도시철도)
   busTimeFactor: 1.15,        // 같은 도로에서 승용차 대비 버스 주행시간

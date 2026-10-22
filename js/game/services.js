@@ -85,10 +85,10 @@ export function lineStations({ links, nodes }, stationSet, name, mode = 1) {
 }
 
 /** 철도 최단경로 (주행시간 기준) — 정차역 사이 실제 선로 구간. 제 노선(line)을 따라가고, 다른 노선은 끊긴 곳을 이을 때만 쓴다 */
-export function railPath(links, from, to, line) {
+export function railPath(links, from, to, line, mode = 1) {
   const adj = new Map();
   links.forEach((l, i) => {
-    if (l.mode !== 1 || !l.active || l.via || l.ext) return;
+    if (l.mode !== mode || !l.active || l.via || l.ext) return;
     const t = (l.len / l.speed) * (line && l.name !== line ? 4 : 1);
     for (const [u, v] of [[l.a, l.b], [l.b, l.a]]) {
       if (!adj.has(u)) adj.set(u, []);
