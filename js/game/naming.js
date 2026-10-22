@@ -51,6 +51,10 @@ export class Namer {
     if (near.length) {
       const dir = bearingWord(near[0][2], near[0][3], lon, lat);
       if (dir) candidates.push(dir + base + suffix);
+      // 대체 이름은 가까운 동네(동·읍·마을)부터: 멀리 있는 큰 도시 이름이 붙지 않도록
+      const local = this.places.filter((p) => p[1] !== 'city' && Math.abs(p[2] - lon) < 0.06 && Math.abs(p[3] - lat) < 0.05)
+        .map((p) => [kmBetween(lon, lat, p[2], p[3]), p]).filter(([d]) => d < 5).sort((x, y) => x[0] - y[0]);
+      for (const [, p] of local) candidates.push(stem(p[0]) + suffix);
       for (const p of near.slice(1)) candidates.push(stem(p[0]) + suffix);
     }
     for (const c of candidates) if (!this.isUsed(c, kind)) return this.take(c, kind);

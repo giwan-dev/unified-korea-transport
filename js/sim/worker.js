@@ -7,15 +7,18 @@ function post(type, payload, transfer = []) {
   self.postMessage({ type, ...payload }, transfer);
 }
 
-function results(totals) {
+function results(totals, { withState = true } = {}) {
   const links = model.linkResults();
   const zones = model.zoneResults();
   const stations = model.stationResults();
   const subs = model.subResults();
   const air = model.airResults();
+  // 다시 열 때 바로 이어 시작할 수 있도록 계산 상태도 함께 넘긴다 (IndexedDB에 저장)
+  const sim = withState ? model.exportBaseline(totals, null) : null;
   post('result', {
     links, zones, stations, subs, air, totals, summary: model.summary(), snapshot: model.snapshot(),
-  }, [links.vol.buffer, links.vc.buffer, links.speed.buffer]);
+    sim: sim && { sizes: sim.json.sizes, bin: sim.bin },
+  }, [links.vol.buffer, links.vc.buffer, links.speed.buffer, ...(sim ? [sim.bin] : [])]);
 }
 
 const progress = (label) => (v) => post('progress', { label, value: v });
@@ -41,7 +44,12 @@ self.onmessage = (ev) => {
         if (bl && model.importBaseline(bl.json, bl.bin)) results(bl.json.totals);
         else results(calibrateFresh(msg.ctx));
       } else {
-        // 저장된 게임: 저장된 상태에 기준 연도 교통량을 출발점으로 이어 배정한다
+        // 저장된 게임: 그해 계산 상태가 저장돼 있으면 그대로 잇고, 없으면 기준 연도 교통량에서 이어 배정한다
+        const sv = msg.saved;
+        if (sv && model.importBaseline({ sizes: sv.sizes, snapshot: msg.snapshot }, sv.bin)) {
+          results(sv.totals, { withState: false });
+          return;
+        }
         model.restore(msg.snapshot);
         const warm = !!(bl && model.importBaseline(bl.json, bl.bin, { volumesOnly: true }));
         const totals = model.assign(msg.ctx.integration, progress('저장된 해 통행배정'), warm);

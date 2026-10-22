@@ -13,6 +13,7 @@ import { kmBetween } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
 import { smoothSegments, polylineKm } from './game/curve.js';
 import { extendWorld } from './game/world.js';
+import { saveSim, loadSim, clearSim } from './game/simstore.js';
 
 const $ = (s) => document.querySelector(s);
 const CLASS_LABEL = { motorway: '고속도로', trunk: '간선국도', primary: '주요 도로', secondary: '지방 도로', hsr: '고속철도', conv: '일반철도', metro: '도시철도' };
@@ -27,6 +28,7 @@ let busy = false;
 let historic = [];         // 옛 이름 되찾기 대상 (data/historic_targets.json)
 let happiness = null;      // 존별 주민 행복도 (0~100)
 let lastIncome = null;
+let dataStamp = null;
 let wholeRoute = false;    // 개량을 같은 이름 노선 전체에 적용
 
 
@@ -53,6 +55,9 @@ async function init() {
   subPop0 = zoneProps.flatMap((zp) => zp.subs.map((s) => s[2] * zp.pop));
   state = load() || newGame('normal');
   const baseline = await loadBaseline(meta);
+  // 저장된 게임의 그해 계산 상태 (같은 해·같은 데이터일 때만)
+  const saved = state.snapshot ? await loadSim() : null;
+  const savedOk = saved && saved.year === state.year && saved.stamp === meta?.stamp ? saved : null;
   loading.done('data');
   // 읍면동 경계는 지도에만 쓰므로 기다리지 않는다
   const subsReady = fetch('data/subzones.geojson').then((r) => r.json()).then((fc) => { subsFC = fc; });
@@ -66,8 +71,9 @@ async function init() {
   };
   worker.postMessage({
     type: 'init', zones: zoneProps, grid: grid.buffer.slice(0), net: effectiveNetwork(base, state),
-    ctx: ctx(), snapshot: state.snapshot, baseline,
-  }, baseline ? [baseline.bin] : []);
+    ctx: ctx(), snapshot: state.snapshot, baseline, saved: savedOk,
+  }, [...(baseline ? [baseline.bin] : []), ...(savedOk ? [savedOk.bin] : [])]);
+  dataStamp = meta?.stamp;
 
   // 3) 지도
   loading.stage('map');
@@ -224,6 +230,7 @@ function applyResult(res) {
     });
   }
   save(state);
+  if (res.sim) saveSim({ year: state.year, stamp: dataStamp, sizes: res.sim.sizes, totals: res.totals, bin: res.sim.bin });
   setBusy(false);
   renderAll();
 }
@@ -891,6 +898,7 @@ function renderSettings() {
   $('#btn-new').onclick = () => {
     if (!confirm('지금 게임을 지우고 새로 시작할까요?')) return;
     clearSave();
+    clearSim();
     const d = $('#difficulty').value;
     state = newGame(d);
     save(state);

@@ -222,7 +222,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addSource('points', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({
     id: 'points', type: 'circle', source: 'points',
-    filter: ['any', ['==', ['get', 'isNew'], 1], ['>=', ['zoom'], ['case', ['==', ['get', 'metro'], 1], 10, ['==', ['get', 'kind'], 'station'], 7, 9]]],
+    filter: ['any', ['==', ['get', 'isNew'], 1], ['>=', ['zoom'], ['case', ['==', ['get', 'metro'], 1], 11, ['==', ['get', 'kind'], 'station'], 9, 10]]],
     paint: {
       'circle-radius': ['match', ['get', 'kind'], 'station', 4, 3],
       'circle-color': ['match', ['get', 'kind'], 'station', '#ffffff', '#1d232b'],
@@ -232,7 +232,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   });
   map.addLayer({
     id: 'point-labels', type: 'symbol', source: 'points',
-    filter: ['any', ['==', ['get', 'isNew'], 1], ['>=', ['zoom'], ['case', ['==', ['get', 'metro'], 1], 11, ['==', ['get', 'kind'], 'station'], 8, 10]]],
+    filter: ['any', ['==', ['get', 'isNew'], 1], ['>=', ['zoom'], ['case', ['==', ['get', 'metro'], 1], 12, ['==', ['get', 'kind'], 'station'], 10, 11]]],
     layout: {
       'text-field': ['get', 'name'], 'text-size': ['case', ['==', ['get', 'isNew'], 1], 13, 11],
       'text-offset': [0, 1.0], 'text-anchor': 'top', 'text-font': FONT,
@@ -243,9 +243,9 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   // 항공: 노선(호)과 공항(원 크기 = 하루 여객)
   map.addSource('airroutes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({
-    id: 'airroutes', type: 'line', source: 'airroutes',
+    id: 'airroutes', type: 'line', source: 'airroutes', filter: ['>=', ['get', 'pax'], 2000],
     paint: {
-      'line-color': '#b04a9c', 'line-opacity': 0.45,
+      'line-color': '#b04a9c', 'line-opacity': 0.3,
       'line-width': ['interpolate', ['linear'], ['get', 'pax'], 300, 0.6, 20000, 2.5, 100000, 6],
     },
   });

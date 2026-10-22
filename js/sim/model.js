@@ -350,7 +350,9 @@ export class Model {
     const o0 = this.zoneSub0[i], on = this.zoneSubN[i], d0 = this.zoneSub0[j], dn = this.zoneSubN[j];
     let total = 0;
     for (let o = o0; o < o0 + on; o++) {
+      if (!this.subW[o]) continue;
       for (let d = d0; d < d0 + dn; d++) {
+        if (!this.subW[d]) continue;
         let best = Infinity, bs = -1, bt = -1;
         for (let a = 0; a < K; a++) {
           const s = this.subSt[o * K + a];
@@ -423,6 +425,7 @@ export class Model {
         for (let j = 0; j < Z; j++) {
           let c = 0;
           for (let d = this.zoneSub0[j]; d < this.zoneSub0[j] + this.zoneSubN[j]; d++) {
+            if (!this.subW[d]) continue;   // 인구 없는 소구역 (0 × 무한대 방지)
             let best = Infinity;
             for (let k = d * R; k < d * R + R; k++) {
               if (this.subRoadNode[k] < 0) break;
@@ -447,6 +450,8 @@ export class Model {
         for (let j = 0; j < Z; j++) {
           let c = 0;
           for (let d = this.zoneSub0[j]; d < this.zoneSub0[j] + this.zoneSubN[j]; d++) {
+            egress[d] = -1;
+            if (!this.subW[d]) continue;
             let best = Infinity, node = -1;
             for (let k = d * R; k < d * R + R; k++) {
               if (this.subRoadNode[k] < 0) break;
