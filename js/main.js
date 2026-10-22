@@ -53,7 +53,15 @@ async function init() {
   const placesReady = fetch('data/places.json').then((r) => r.json()).then((p) => { places = p; });
   fetch('data/historic_targets.json').then((r) => (r.ok ? r.json() : [])).then((h) => { historic = h; }).catch(() => {});
   subPop0 = zoneProps.flatMap((zp) => zp.subs.map((s) => s[2] * zp.pop));
-  state = load() || newGame('normal');
+  state = load();
+  // 데이터가 바뀌면(노선망·존 구성 변경) 예전 저장 게임은 맞지 않으므로 새로 시작한다
+  if (state && meta && state.dataStamp !== meta.stamp) {
+    state = newGame(state.difficulty || 'normal');
+    state.log.unshift('지도·노선 데이터가 새로 바뀌어 이전 저장 게임 대신 새 게임으로 시작합니다.');
+    clearSim();
+  }
+  state ||= newGame('normal');
+  if (meta) state.dataStamp = meta.stamp;
   const baseline = await loadBaseline(meta);
   // 저장된 게임의 그해 계산 상태 (같은 해·같은 데이터일 때만)
   const saved = state.snapshot ? await loadSim() : null;
