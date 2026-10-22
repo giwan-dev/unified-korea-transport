@@ -47,7 +47,7 @@ export function showLineDiagram(el, d, onClose) {
   // 위: 역 이름과 구간 혼잡도 (실제 선로 V/C)
   let svg = '';
   d.stations.forEach((s, i) => {
-    svg += `<text x="${xs[i]}" y="${top - 14}" transform="rotate(-50 ${xs[i]} ${top - 14})" class="ld-st">${esc(s.name)}</text>`;
+    svg += `<text x="${xs[i]}" y="${top - 14}" transform="rotate(-50 ${xs[i]} ${top - 14})" class="ld-st" data-st="${i}"><title>${esc(s.name)} 역 정보</title>${esc(s.name)}</text>`;
   });
   d.segs.forEach((sg, i) => {
     svg += `<line x1="${xs[i]}" y1="${top}" x2="${xs[i + 1]}" y2="${top}" stroke="${vcColor(sg.vc)}" stroke-width="7" ${sg.gap ? 'stroke-dasharray="3 3"' : ''}>
@@ -84,6 +84,7 @@ export function showLineDiagram(el, d, onClose) {
     <div class="ld-scroll"><svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${svg}</svg></div>`;
   el.hidden = false;
   el.querySelector('#ld-close').onclick = () => { stopLineDiagram(); el.hidden = true; onClose?.(); };
+  if (d.onStation) el.querySelectorAll('[data-st]').forEach((t) => { t.onclick = () => d.onStation(+t.dataset.st); });
 
   // 열차 위치: 계통마다 하루 운행을 05~23시에 고르게 나누고, 역별 도착 시각을 따라 움직인다
   const groups = [...el.querySelectorAll('.ld-trains')];

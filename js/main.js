@@ -1332,6 +1332,10 @@ function renderSelection() {
   el.querySelector('.close')?.addEventListener('click', () => select(null));
   if (selection.type === 'service') bindService(el);
   el.querySelector('#line-diagram')?.addEventListener('click', () => openLineDiagram(selection.id));
+  el.querySelectorAll('[data-st-diagram]').forEach((b) => { b.onclick = () => openLineDiagram(+b.dataset.stDiagram); });
+  el.querySelectorAll('[data-st-goto]').forEach((a) => {
+    a.onclick = (ev) => { ev.preventDefault(); const nd = +a.dataset.stGoto; flyToNode(nd); select({ type: 'node', id: nd }); };
+  });
   el.querySelector('#svc-new')?.addEventListener('click', (ev) => openServiceEditor(ev.target.dataset.line, ev.target.dataset.cls));
   el.querySelectorAll('[data-svc-edit]').forEach((b) => {
     b.onclick = () => {
@@ -1630,7 +1634,7 @@ function openLineDiagram(id) {
       segs.push({ vc: Math.max(0, ...via.map((k) => vc[k] || 0)), vol: Math.max(0, ...via.map((k) => vol[k] || 0)), gap: !via.length });
       segTime.push(via.length ? via.reduce((a, k) => a + (net.links[k].len / net.links[k].speed) * 60, 0) : (len / 80) * 60);
     }
-    stations.push({ name: nn.get(n)?.name || `역 ${n}`, km });
+    stations.push({ name: nn.get(n)?.name || `역 ${n}`, km, node: n });
   });
   const timesFor = (first, last, stops, tf) => {
     const t = [];
@@ -1662,7 +1666,10 @@ function openLineDiagram(id) {
   const all = new Set(nodes.map((_, i) => i));
   rows.push({ name: '기본 운행', kind: 'base', first: 0, last: nodes.length - 1, stops: all, trains: baseTrains,
     times: timesFor(0, nodes.length - 1, all, 1), segVC: null, label: `모든 역 · 약 ${baseTrains}회/일` });
-  showLineDiagram($('#linediagram'), { title: `${line} · ${km.toFixed(0)}km · ${nodes.length}역`, stations, segs, rows });
+  showLineDiagram($('#linediagram'), {
+    title: `${line} · ${km.toFixed(0)}km · ${nodes.length}역`, stations, segs, rows,
+    onStation: (i) => { flyToNode(stations[i].node); select({ type: 'node', id: stations[i].node }); },
+  });
 }
 
 function header(title) {
@@ -1876,21 +1883,106 @@ function nodePanel(id) {
   const n = nodeNames().get(id);
   if (!n) return header('노드');
   const kindLabel = { station: '역', IC: 'IC', JCT: 'JCT' }[n.kind];
-  let riders = '';
-  if (n.kind === 'station' && result) {
-    const k = result.stations.node.indexOf(id);
-    const metro = n.metro || allLinks().some((l) => l.mode === 2 && (l.a === id || l.b === id));
-    riders = k >= 0
-      ? `<table class="kv"><tr><td>일 승하차 (지역 간 통행)</td><td>${Math.round(result.stations.riders[k]).toLocaleString()}명</td></tr></table>`
-      : metro ? '<p class="hint">도시철도역 (노선별 이용객은 구간을 눌러 보세요)</p>'
-        : '<p class="hint">아직 운행하지 않는 역입니다.</p>';
-  }
   return `${header(n.name)}
     <p class="hint">${kindLabel}${n.isNew ? (state.names[id]?.auto ? ' · 자동 이름' : ' · 직접 지은 이름') : ' · 기존 시설 (OSM)'}</p>
-    ${riders}
+    ${n.kind === 'station' ? stationPanel(id, n) : ''}
+    <h4>이름</h4>
     <div class="name-row"><input type="text" id="node-name" value="${esc(n.name)}">
       <button class="small primary" id="node-save">이름 변경</button>
       <button class="small" id="node-auto" title="자동 이름">↻</button></div>`;
+}
+
+// ------------------------------------------------------------ 역 패널
+
+/** 역에 닿는 노선들: 이름별로 수단·종류와 역 앞뒤 구간의 최대 통과 인원, 노선도를 열 구간 */
+function linesAt(node) {
+  const out = new Map();
+  allLinks().forEach((_, i) => {
+    const l = linkAt(base, state, i);
+    if (l.mode === 0 || (l.a !== node && l.b !== node) || l.ext || l.open > state.year || state.replaced?.[i]) return;
+    if (i >= base.links.length && !l.built) return;
+    const key = l.name || CLASS_LABEL[l.cls];
+    const e = out.get(key) || { name: key, named: !!l.name, mode: l.mode, cls: l.cls, vol: 0, link: i };
+    e.vol = Math.max(e.vol, result?.links.vol[i] || 0);
+    out.set(key, e);
+  });
+  return [...out.values()];
+}
+
+/** 반경 km 안의 인구 (1km 인구 격자) */
+function popWithin(lon, lat, km) {
+  const kx = 111.32 * Math.cos((lat * Math.PI) / 180), ky = 110.57, r2 = km * km;
+  let s = 0;
+  for (let c = 0; c < grid.length; c += 4) {
+    const dx = (grid[c] - lon) * kx, dy = (grid[c + 1] - lat) * ky;
+    if (dx * dx + dy * dy <= r2) s += grid[c + 2];
+  }
+  return s;
+}
+
+function stationPanel(id, n) {
+  const c = nodeCoord(id);
+  const lines = linesAt(id);
+  const k = result ? result.stations.node.indexOf(id) : -1;
+  const riders = k >= 0 ? result.stations.riders[k] : null;
+  // 운행 계통: 서는 계통과 그냥 지나가는 계통
+  const stopping = [], passing = [];
+  for (const s of state.services || []) {
+    if (s.stops.includes(id)) { stopping.push(s); continue; }
+    const passes = s.segs.some((seg) => seg.via.some((i) => { const l = linkAt(base, state, i); return l.a === id || l.b === id; }));
+    if (passes) passing.push(s);
+  }
+  const svcTrains = stopping.filter((s) => s.built).reduce((a, s) => a + s.trains, 0);
+  // 도보 환승: 400m 안의 다른 역 (같은 노드의 다른 노선은 위 노선 목록에 있다)
+  const nn = nodeNames();
+  const near = [];
+  for (const [node, v] of nn) {
+    if (v.kind !== 'station' || node === id || typeof node !== 'number') continue;
+    const p = nodeCoord(node);
+    if (!p) continue;
+    const d = kmBetween(c[0], c[1], p[0], p[1]);
+    if (d <= 0.4) near.push({ node, name: v.name, d, lines: linesAt(node).filter((x) => x.named).map((x) => x.name) });
+  }
+  near.sort((a, b) => a.d - b.d);
+  // 이 역에 이미 있는 노선만 지나는 이웃(같은 노선의 다른 승강장 노드)과 겹치는 항목은 뺀다
+  const here = new Set(lines.filter((l) => l.named).map((l) => l.name));
+  const seen = new Set();
+  for (let i = near.length - 1; i >= 0; i--) {
+    const x = near[i];
+    if (x.lines.length && x.lines.every((l) => here.has(l))) near.splice(i, 1);
+  }
+  for (let i = 0; i < near.length; i++) {
+    const key = `${near[i].name}|${near[i].lines.join(',')}`;
+    if (seen.has(key)) near.splice(i--, 1); else seen.add(key);
+  }
+  const modeLabel = (l) => (l.mode === 2 ? '도시철도' : CLASS_LABEL[l.cls]);
+  const svcRow = (s, stop) => `<tr><td>${esc(s.name)} <span class="m">${SERVICE_KINDS[s.kind].label}${s.built ? '' : ' · 차량 제작 중'}</span></td>
+    <td>${stop ? `하루 ${s.trains}회 · 약 ${Math.round(1080 / Math.max(1, s.trains / 2))}분 간격` : '통과'}</td></tr>`;
+  return `
+    <h4>노선</h4>
+    <table class="kv">${lines.map((l) => `<tr><td>${esc(l.name)} <span class="m">${modeLabel(l)}</span>
+      ${l.named ? `<button class="small" data-st-diagram="${l.link}">노선도</button>` : ''}</td>
+      <td>${Math.round(l.vol).toLocaleString()}명/일 통과</td></tr>`).join('') || '<tr><td colspan="2">운행 중인 노선이 없습니다.</td></tr>'}</table>
+    <h4>승하차</h4>
+    <table class="kv">
+      ${riders != null ? `<tr><td>지역 간 승하차</td><td>${Math.round(riders).toLocaleString()}명/일</td></tr>` : ''}
+      <tr><td>역세권 인구 (반경 1km · 3km)</td><td>${fmtPop(popWithin(c[0], c[1], 1))} · ${fmtPop(popWithin(c[0], c[1], 3))}</td></tr>
+    </table>
+    ${riders == null ? `<p class="hint">${lines.some((l) => l.mode === 2) ? '도시철도역은 시군구 사이 통행만 셈해 역별 승하차는 따로 내지 않습니다. 노선 통과 인원을 보세요.' : '아직 운행하지 않는 역입니다.'}</p>` : ''}
+    <h4>운행 계통</h4>
+    ${stopping.length || passing.length ? `<table class="kv">${stopping.map((s) => svcRow(s, true)).join('')}${passing.map((s) => svcRow(s, false)).join('')}</table>
+      ${svcTrains ? `<p class="hint">이 역에 서는 계통 열차 하루 ${svcTrains}회 (계통 없는 기본 운행 열차는 모든 역에 섭니다)</p>` : ''}`
+      : '<p class="hint">따로 짠 운행 계통이 없습니다. 기본 운행 열차가 모든 역에 섭니다. 철도 구간을 눌러 특급·급행 계통을 짤 수 있습니다.</p>'}
+    <h4>환승</h4>
+    ${lines.filter((l) => l.named).length > 1 ? `<p class="hint">같은 역 환승: ${lines.filter((l) => l.named).map((l) => esc(l.name)).join(', ')}</p>` : ''}
+    ${near.length ? `<table class="kv">${near.map((x) => `<tr><td><a href="#" data-st-goto="${x.node}">${esc(x.name)}</a>
+      <span class="m">${x.lines.map(esc).join(', ') || '노선 정보 없음'}</span></td><td>도보 ${Math.round(x.d * 1000)}m</td></tr>`).join('')}</table>`
+      : lines.filter((l) => l.named).length > 1 ? '' : '<p class="hint">400m 안에 갈아탈 다른 역이 없습니다.</p>'}`;
+}
+
+function flyToNode(node) {
+  const c = nodeCoord(node);
+  if (c) map.easeTo({ center: c, zoom: Math.max(map.getZoom(), 11) });
 }
 
 function renameNode(id, name) {

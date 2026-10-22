@@ -163,7 +163,8 @@ select { font: inherit; padding: 4px; border-radius: 4px; border: 1px solid var(
 .ld-legend { color: var(--muted); font-size: 12px; }
 .ld-scroll { overflow: auto; }
 .ld-scroll svg { display: block; }
-.ld-st { font-size: 11px; fill: var(--ink); }
+.ld-st { font-size: 11px; fill: var(--ink); cursor: pointer; }
+.ld-st:hover { fill: var(--accent); text-decoration: underline; }
 .ld-row { font-size: 12px; font-weight: 700; fill: var(--ink); }
 .ld-sub { font-size: 10px; fill: var(--muted); }
 .ld-dot { fill: var(--panel); stroke: var(--ink); stroke-width: 1.5; }
