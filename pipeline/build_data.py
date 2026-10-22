@@ -5,8 +5,8 @@
   - WorldPop 2025 (R2025A) 1km constrained UN-adjusted 인구 격자: KOR, PRK (CC BY 4.0)
 
 출력 (data/)
-  - zones.geojson   시군구(남) / 시군·구역(북) 존 경계와 인구
-  - network.json    단순화한 도로·철도망, 역, IC/JCT, 존 접근 노드
+  - raw/zones.geojson  존 경계와 인구 (파이프라인 내부용, build_grid가 zones.json으로 정리)
+  - network.bin, network.meta.json  단순화한 도로·철도·도시철도망 (netpack.py 형식), 역, IC/JCT
   - places.json     신규 역·IC 이름 자동 생성용 지명
 
 실행: python pipeline/build_data.py
@@ -54,8 +54,9 @@ PROVINCES = {
     },
 }
 
-# 네트워크 단순화 격자 크기(도). 약 1km. 왕복 분리 차로·복선 선로를 한 링크로 합친다.
-GRID = 0.01
+# 네트워크 단순화 격자 크기(도). 약 500m. 왕복 분리 차로·복선 선로를 한 링크로 합치되
+# 교차로·분기점 위치는 500m 안쪽으로 맞춘다. 화면에는 실제 웨이 도형을 따로 그린다.
+GRID = 0.005
 
 ROAD_CLASSES = ["motorway", "trunk", "primary", "secondary"]
 ROAD_LINKS = {"motorway_link": "motorway", "trunk_link": "trunk"}
@@ -247,8 +248,18 @@ class NetHandler:
         self.metro_stations = []  # 도시철도·경전철 역
         self.junctions = []     # (name, lon, lat)
         self.places = []        # (name, kind, lon, lat)
+        self.metro_routes = {}  # 웨이 id → (노선 이름, 색)
 
     def run(self, pbf):
+        # 도시철도 노선(route relation)을 먼저 읽어 웨이마다 노선 이름·색을 붙인다
+        rf = osmium.filter.TagFilter(("route", "subway"), ("route", "light_rail"))
+        for r in osmium.FileProcessor(str(pbf), osmium.osm.RELATION).with_filter(rf):
+            name = r.tags.get("ref:ko") or r.tags.get("name:ko") or r.tags.get("name") or ""
+            name = _route_name(name)
+            colour = r.tags.get("colour") or ""
+            for m in r.members:
+                if m.type == "w" and m.ref not in self.metro_routes:
+                    self.metro_routes[m.ref] = (name, colour)
         fp = osmium.FileProcessor(str(pbf), osmium.osm.NODE | osmium.osm.WAY)             .with_locations().with_filter(osmium.filter.KeyFilter("highway", "railway", "place"))
         for obj in fp:
             if obj.is_node():
@@ -304,7 +315,9 @@ class NetHandler:
             }
         elif rw in ("subway", "light_rail") and t.get("service") is None:
             mode, cls = "metro", "metro"
-            attrs = {"tracks": 2, "oneway": False, "power": "AC", "name": ko_name(t), "maxspeed": None}
+            route, colour = self.metro_routes.get(w.id, (ko_name(t) or "", ""))
+            attrs = {"tracks": 2, "oneway": False, "power": "AC", "name": route or ko_name(t),
+                     "maxspeed": None, "route": route, "colour": colour}
         else:
             return
         if w.id in self.seen_ways:
@@ -315,13 +328,25 @@ class NetHandler:
         except osmium.InvalidLocationError:
             return
         prev = None
+        buf = []
         for lon, lat in pts:
             c = cell_of(lon, lat)
             cp = self.cellpts[c]
             cp[0] += lon; cp[1] += lat; cp[2] += 1
             if prev is not None and c != prev:
-                self.segs.append((mode, cls, prev, c, attrs))
+                # 세그먼트 도형: 앞 셀의 마지막 점부터 이번 점까지
+                self.segs.append((mode, cls, prev, c, attrs, buf + [(lon, lat)]))
+                buf = []
+            buf.append((lon, lat))
             prev = c
+
+
+def _route_name(name):
+    """'수도권 전철 2호선: 성수 → 신도림' 같은 방향 표기를 떼어 노선 이름만 남긴다"""
+    for sep in (":", "(", " - "):
+        if sep in name:
+            name = name.split(sep)[0]
+    return name.strip()
 
 
 def _int(v):
@@ -357,13 +382,16 @@ def build_network(zones):
             cp = cellpts[k]; cp[0] += v[0]; cp[1] += v[1]; cp[2] += v[2]
     edges = {}
     for c, h in handlers.items():
-        for mode, cls, a, b, at in h.segs:
-            key = (mode, min(a, b), max(a, b))
+        for mode, cls, a, b, at, pts in h.segs:
+            route = at.get("route", "") if mode == "metro" else ""
+            key = (mode, min(a, b), max(a, b), route)
             e = edges.get(key)
             if e is None:
                 e = edges[key] = {"mode": mode, "cls": cls, "lanes2": 0, "lanes1": 0, "tracks": 0,
                                   "ways": 0, "paved": True, "power": "none", "names": defaultdict(int),
-                                  "ramp_only": True, "maxspeed": 0, "src": c}
+                                  "ramp_only": True, "maxspeed": 0, "src": c, "route": route,
+                                  "colour": at.get("colour", ""),
+                                  "pts": pts if a == key[1] else pts[::-1]}
             if CLASS_RANK[cls] > CLASS_RANK[e["cls"]]:
                 e["cls"] = cls
             e["ways"] += 1
@@ -386,8 +414,10 @@ def build_network(zones):
     log("cell edges", len(edges))
 
     zone_country = _cell_country_lookup(zones, cellpts)
-    # 중국·러시아 쪽 도로·철도는 뺀다 (양 끝이 모두 존 밖인 엣지)
-    edges = {k: e for k, e in edges.items() if zone_country(k[1]) or zone_country(k[2])}
+    # 중국·러시아 쪽 도로·철도는 뺀다 (양 끝이 모두 외국 영토 안인 엣지).
+    # 존 밖이라는 기준을 쓰면 어느 행정구역에도 속하지 않는 비무장지대 구간(경의선·동해선)까지 잘린다.
+    foreign = _foreign_lookup(cellpts)
+    edges = {k: e for k, e in edges.items() if not (foreign(k[1]) and foreign(k[2]))}
     log("cell edges inside zones", len(edges))
 
     # 역·IC는 단순화 시 보존해야 하므로 먼저 셀에 붙인다.
@@ -429,11 +459,13 @@ def build_network(zones):
         country = zone_country(L["cells"][len(L["cells"]) // 2]) or zone_country(L["cells"][0])             or zone_country(L["cells"][-1]) or "KR"
         metro = e["mode"] == "metro"
         a, b = nid(L["cells"][0], metro), nid(L["cells"][-1], metro)
-        geom = []
-        for c in L["cells"]:
-            cp = cellpts[c]
-            geom += [round(cp[0] / cp[2], 4), round(cp[1] / cp[2], 4)]
-        length = _polyline_km(geom) * 1.05
+        # 화면용 도형: 실제 웨이를 약 20m로 단순화하고 양 끝은 노드 좌표에 맞춘다
+        raw = [c for xy in L["line"] for c in xy]
+        length = _polyline_km(raw)
+        ls = shapely.LineString(L["line"]).simplify(0.0002) if len(L["line"]) > 2 else shapely.LineString(L["line"])
+        coords = list(ls.coords)
+        coords[0] = tuple(nodes[a]); coords[-1] = tuple(nodes[b])
+        geom = [round(v, 5) for xy in coords for v in xy]
         name = max(e["names"], key=e["names"].get) if e["names"] else ""
         if e["mode"] == "road":
             dl, skr, skp = ROAD_DEFAULTS[e["cls"]]
@@ -448,7 +480,8 @@ def build_network(zones):
         elif metro:
             out_links.append({"mode": 2, "cls": "metro", "a": a, "b": b, "len": round(length, 2),
                               "tracks": 2, "speed": 35, "power": "AC",
-                              "name": name, "kp": int(country == "KP"), "geom": geom})
+                              "name": e.get("route") or name, "colour": e.get("colour", ""),
+                              "kp": int(country == "KP"), "geom": geom})
         else:
             if e["cls"] == "hsr":
                 speed = 230
@@ -494,6 +527,22 @@ def _dedupe_named(items):
     return out
 
 
+def _foreign_lookup(cellpts):
+    """셀이 중국·러시아·일본 영토 안(국경에서 300m 이상 안쪽)인지"""
+    import geopandas as gpd
+    ne = gpd.read_file(f"zip://{(RAW / 'ne_10m_admin_0_countries.zip').as_posix()}")
+    geom = unary_union(list(ne[ne["ADM0_A3"].isin(["CHN", "RUS", "JPN"])].geometry)).buffer(-0.003)
+    shapely.prepare(geom)
+    cache = {}
+
+    def f(cell):
+        if cell not in cache:
+            cp = cellpts[cell]
+            cache[cell] = geom.contains(shapely.Point(cp[0] / cp[2], cp[1] / cp[2]))
+        return cache[cell]
+    return f
+
+
 def _cell_country_lookup(zones, cellpts):
     tree = shapely.STRtree([z["geom"] for z in zones])
     countries = [z["country"] for z in zones]
@@ -508,9 +557,9 @@ def _cell_country_lookup(zones, cellpts):
         if len(hit):
             r = countries[hit[0]]
         else:
-            # 해안선 부근 오차는 허용하되 국경 밖은 None
-            near = tree.query(pt, predicate="dwithin", distance=0.02)
-            r = countries[near[0]] if len(near) else None
+            # 해안선·비무장지대처럼 존 밖이지만 가까운 곳은 가장 가까운 존의 국가로 본다
+            near = tree.query(pt, predicate="dwithin", distance=0.1)
+            r = countries[tree.nearest(pt)] if len(near) else None
         cache[cell] = r
         return r
     return f
@@ -542,16 +591,17 @@ def _nearest_cell(pt, cells):
 
 
 def _same_kind(e1, e2):
-    return e1["mode"] == e2["mode"] and e1["cls"] == e2["cls"]
+    return e1["mode"] == e2["mode"] and e1["cls"] == e2["cls"] and e1.get("route", "") == e2.get("route", "")
 
 
 def _contract(edges, keep):
-    """차수 2인 셀을 없애 같은 종류의 연속 엣지를 하나의 링크로 합친다."""
+    """차수 2인 셀을 없애 같은 종류(같은 노선)의 연속 엣지를 하나의 링크로 합친다.
+    링크마다 지나는 셀(chain)과 엣지 순서(seq: (key, 정방향 여부))를 함께 돌려준다."""
     adj = defaultdict(list)
     for key, e in edges.items():
         if e["mode"] == "road" and e["ramp_only"] and e["cls"] not in ("motorway", "trunk"):
             continue
-        mode, a, b = key
+        mode, a, b = key[0], key[1], key[2]
         adj[(mode, a)].append((b, key))
         adj[(mode, b)].append((a, key))
 
@@ -563,15 +613,13 @@ def _contract(edges, keep):
 
     used = set()
     links = []
-    for key, e in edges.items():
-        if key in used or (key[0], key[1]) not in adj:
-            continue
-        if not any(k == key for _, k in adj[(key[0], key[1])]):
+    for key in edges:
+        if key in used or not any(k == key for _, k in adj.get((key[0], key[1]), [])):
             continue
         mode = key[0]
         used.add(key)
         chain = [key[1], key[2]]
-        keys = [key]
+        seq = [(key, True)]
         for direction in (0, 1):
             while True:
                 end = chain[-1] if direction == 0 else chain[0]
@@ -582,15 +630,17 @@ def _contract(edges, keep):
                     break
                 c, k = nxt[0]
                 used.add(k)
-                keys.append(k)
                 if direction == 0:
                     chain.append(c)
+                    seq.append((k, k[1] == end))
                 else:
                     chain.insert(0, c)
+                    seq.insert(0, (k, k[2] == end))
                 if c == chain[0 if direction == 0 else -1]:
                     break
         if chain[0] == chain[-1]:
             continue
+        keys = [k for k, _ in seq]
         merged = dict(edges[keys[0]])
         names = defaultdict(int)
         for k in keys:
@@ -604,7 +654,12 @@ def _contract(edges, keep):
         merged["paved"] = sum(edges[k]["paved"] for k in keys) * 2 >= len(keys)
         powers = [edges[k]["power"] for k in keys if edges[k]["power"] != "none"]
         merged["power"] = max(set(powers), key=powers.count) if powers else "none"
-        links.append({"cells": chain, "attrs": merged})
+        # 실제 도형 이어 붙이기
+        line = []
+        for k, fwd in seq:
+            pts = edges[k]["pts"] if fwd else edges[k]["pts"][::-1]
+            line.extend(pts if not line else pts[1:])
+        links.append({"cells": chain, "attrs": merged, "line": line})
     return links
 
 
@@ -623,7 +678,7 @@ def _polyline_km(flat):
 def write_outputs(zones, net, places):
     feats = []
     for i, z in enumerate(zones):
-        g = z["geom"].simplify(0.003, preserve_topology=True)
+        g = z.get("geom_simple") or z["geom"].simplify(0.003, preserve_topology=True)
         g = shapely.set_precision(g, 0.0005)
         feats.append({
             "type": "Feature", "id": i,
@@ -634,14 +689,17 @@ def write_outputs(zones, net, places):
             },
             "geometry": mapping(g),
         })
-    (OUT / "zones.geojson").write_text(
+    # 존 도형은 파이프라인 안에서만 쓴다 (화면은 data/admin/sgg.geojson을 쓴다)
+    (RAW / "zones.geojson").write_text(
         json.dumps({"type": "FeatureCollection", "features": feats}, ensure_ascii=False,
                    separators=(",", ":")), encoding="utf-8")
-    (OUT / "network.json").write_text(json.dumps(net, ensure_ascii=False, separators=(",", ":")),
-                                      encoding="utf-8")
+    sys.path.insert(0, str(Path(__file__).parent))
+    import netpack
+    netpack.write(net, OUT / "network.bin", OUT / "network.meta.json")
+    (OUT / "network.json").unlink(missing_ok=True)
     (OUT / "places.json").write_text(json.dumps(places, ensure_ascii=False, separators=(",", ":")),
                                      encoding="utf-8")
-    for f in ("zones.geojson", "network.json", "places.json"):
+    for f in ("network.bin", "network.meta.json", "places.json"):
         log(f, round((OUT / f).stat().st_size / 1e6, 2), "MB")
 
 
@@ -650,8 +708,21 @@ def _area_km2(g):
     return g.area * WGS84_KM * WGS84_KM * math.cos(math.radians(lat))
 
 
+def master_zones():
+    """build_admin.py가 만든 기준 도형의 존 (남: SGIS 시군구, 북: OSM 시군)"""
+    path = RAW / "admin_master.pkl"
+    if not path.exists():
+        return None
+    import pickle
+    m = pickle.load(path.open("rb"))
+    zones = [{"name": z["name"], "province": z["province"], "country": z["country"],
+              "geom": wkb.loads(z["geom"]), "geom_simple": wkb.loads(z["geom_simple"])} for z in m["zones"]]
+    log("zones from admin_master", len(zones))
+    return zones
+
+
 def main():
-    zones = build_zones()
+    zones = master_zones() or build_zones()
     add_population(zones)
     log("population done")
     net, places = build_network(zones)

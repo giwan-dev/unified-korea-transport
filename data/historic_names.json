@@ -1,0 +1,16 @@
+{
+  "note": "북측에서 지도자 이름이나 선전 구호로 바뀐 지명과 바뀌기 전 이름. 게임의 '옛 이름 되찾기' 사업 대상이다. 개칭 연도·경위는 일반 문헌 기준이며 출처 확인이 필요하다.",
+  "entries": [
+    { "current": "김정숙군", "historic": "신파군", "province": "량강도", "level": "zone", "year": 1981, "reason": "김정숙(김일성의 처) 출생지라 하여 개칭" },
+    { "current": "김형직군", "historic": "후창군", "province": "량강도", "level": "zone", "year": 1988, "reason": "김형직(김일성의 부)의 이름을 따 개칭" },
+    { "current": "김형권군", "historic": "풍산군", "province": "량강도", "level": "zone", "year": 1990, "reason": "김형권(김일성의 숙부)의 이름을 따 개칭" },
+    { "current": "김책시", "historic": "성진시", "province": "함경북도", "level": "zone", "year": 1951, "reason": "김책(북측 군 지휘관)의 이름을 따 개칭" },
+    { "current": "금야군", "historic": "영흥군", "province": "함경남도", "level": "zone", "year": 1977, "reason": "체제 선전 지명('금빛 들판')으로 개칭" },
+    { "current": "김정숙읍", "historic": "신파읍", "level": "unit", "year": 1981, "reason": "군 개칭과 함께 읍 이름 변경" },
+    { "current": "김형직읍", "historic": "후창읍", "level": "unit", "year": 1988, "reason": "군 개칭과 함께 읍 이름 변경" },
+    { "current": "김형권읍", "historic": "풍산읍", "level": "unit", "year": 1990, "reason": "군 개칭과 함께 읍 이름 변경" },
+    { "current": "선봉군", "historic": "웅기군", "level": "zone", "year": 1981, "reason": "선전 구호('선봉')로 개칭. 지금은 라선시에 속함" },
+    { "current": "은덕군", "historic": "경흥군", "level": "zone", "year": 1977, "reason": "지도자의 '은덕'을 기리는 이름으로 개칭" },
+    { "current": "새별군", "historic": "경원군", "level": "zone", "year": 1977, "reason": "김일성의 별칭('새별')을 따 개칭" }
+  ]
+}

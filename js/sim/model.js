@@ -6,13 +6,17 @@ const KM_PER_DEG = 111.32;
 
 export class Model {
   /**
-   * @param {object[]} zones zones.geojson의 properties 배열 (subs: 소구역 [경도, 위도, 인구비중])
+   * @param {object[]} zones data/zones.json의 존 속성 배열 (subs: 소구역 [경도, 위도, 인구비중, 면적])
    * @param {Float32Array} grid 인구 격자 [경도, 위도, 인구, 소구역] 반복
    */
   constructor(zones, grid) {
     const Z = this.Z = zones.length;
     this.zones = zones;
     this.isKP = Uint8Array.from(zones, (z) => (z.country === 'KP' ? 1 : 0));
+    // 국외 거점(중국·러시아·일본): 인구·소득은 고정, 인구 이동·HDI 계산에서 뺀다
+    this.isExt = Uint8Array.from(zones, (z) => (z.ext ? 1 : 0));
+    this.extCountry = zones.map((z) => (z.ext ? z.country : ''));
+    this.extIncome = Float64Array.from(zones, (z) => z.income || 0);
     this.cx = Float64Array.from(zones, (z) => z.cx);
     this.cy = Float64Array.from(zones, (z) => z.cy);
     this.area = Float64Array.from(zones, (z) => Math.max(z.area, 1));
@@ -48,6 +52,38 @@ export class Model {
       const k = this.stationOf?.get(nd);
       if (k != null) this.stationWait[k] = w;
     }
+  }
+
+  /**
+   * 기준 연도 결과를 내보낸다. 처음 시작할 때 보정·배정을 다시 하지 않도록 data/baseline.*으로 저장한다.
+   * @returns {{json: object, bin: ArrayBuffer}}
+   */
+  exportBaseline(totals, meta) {
+    const L = this.volume.length, ZZ = this.ccomp.length, NS = this.boardings.length, AA = this.airOD.length;
+    const bin = new Float32Array(L + ZZ + NS + AA);
+    bin.set(this.volume, 0);
+    bin.set(this.ccomp, L);
+    bin.set(this.boardings, L + ZZ);
+    bin.set(this.airOD, L + ZZ + NS);
+    return { json: { meta, sizes: { L, ZZ, NS, AA }, totals, snapshot: this.snapshot() }, bin: bin.buffer };
+  }
+
+  /** exportBaseline 결과로 상태를 되살린다. 크기가 맞지 않으면 false */
+  importBaseline(json, buf, { volumesOnly = false } = {}) {
+    const { L, ZZ, NS, AA = 0 } = json.sizes;
+    if (L !== this.volume.length || ZZ !== this.ccomp.length || NS !== this.boardings.length || AA !== this.airOD.length) return false;
+    const bin = new Float32Array(buf);
+    this.volume.set(bin.subarray(0, L));
+    if (!volumesOnly) {
+      this.restore(json.snapshot);
+      this.ccomp.set(bin.subarray(L, L + ZZ));
+      this.boardings.set(bin.subarray(L + ZZ, L + ZZ + NS));
+      this.airOD.set(bin.subarray(L + ZZ + NS, L + ZZ + NS + AA));
+      this.airPaxFromOD();
+      this.computeAccess();
+    }
+    this.updateCosts();
+    return true;
   }
 
   snapshot() {
@@ -97,6 +133,7 @@ export class Model {
     this.cost = new Float64Array(L.length);
     this.buildAccess();
     this.buildTransit();
+    this.buildAir();
   }
 
   /**
@@ -225,6 +262,7 @@ export class Model {
     });
     this.stationNodeOld = Int32Array.from(stationNodes);
     this.stationHsr = Uint8Array.from(stationNodes, (nd) => (hsrNodes.has(nd) ? 1 : 0));
+    this.stationKP = Uint8Array.from(stationNodes, (nd) => this.isKPPoint(nodes[nd][0], nodes[nd][1]));
     // 소구역별 후보 역: 격자 단위 접근시간(도보 또는 연계교통)의 인구 가중 평균이 작은 역 최대 K개
     const stIdx = new SpatialIndex(nodes, new Set(stationNodes));
     const K = P.stationCandidates;
@@ -257,7 +295,8 @@ export class Model {
       const vc = this.capacity[i] > 0 ? this.volume[i] / this.capacity[i] : 0;
       if (L[i].mode === 0) {
         const r = Math.min(1 + P.bprAlpha * vc ** P.bprBeta, P.bprMaxRatio);
-        this.cost[i] = this.freeTime[i] * r;
+        // 운전자는 같은 시간이면 고속도로를 고른다 (신호·교차로·안전에 대한 체감 차이)
+        this.cost[i] = this.freeTime[i] * r * (P.roadPerceived[L[i].cls] ?? 1);
       } else {
         this.cost[i] = this.freeTime[i] * (1 + 0.5 * Math.max(0, vc - 1));
       }
@@ -273,13 +312,18 @@ export class Model {
   // ------------------------------------------------------------ 배정
 
   borderCost(i, j, integration) {
+    if (this.isExt[i] || this.isExt[j]) {
+      if (this.isExt[i] && this.isExt[j]) return Infinity;   // 국외끼리는 다루지 않는다
+      return P.intlBorderMin[this.extCountry[i] || this.extCountry[j]] ?? 150;
+    }
     return this.isKP[i] !== this.isKP[j] ? P.borderPenaltyMin * (1 - integration) : 0;
   }
 
   /** 운행 빈도는 이용객을 따라간다: 대기 ≈ c / √이용객 (분), 반복마다 MSA로 섞는다 */
   updateStationWaits(it) {
     for (let s = 0; s < this.stationWait.length; s++) {
-      const target = Math.min(Math.max(P.waitScale / Math.sqrt(this.boardings[s] + 1), P.waitMinMin), P.waitMaxMin);
+      const cap = this.stationKP[s] ? P.kpWaitMaxMin : P.waitMaxMin;
+      const target = Math.min(Math.max(P.waitScale / Math.sqrt(this.boardings[s] + 1), P.waitMinMin), cap);
       this.stationWait[s] += (target - this.stationWait[s]) / (it + 1);
     }
   }
@@ -356,6 +400,8 @@ export class Model {
     const offset = warm ? 1 : 0;   // 지난해 교통량을 첫 반복으로 친다
     const pick = [];
     const lam = P.logitLambda;
+    const A = this.airports.length;
+    const airOD = new Float64Array(A * A);
     let totals = null;
 
     for (let it = 1; it <= iters; it++) {
@@ -363,7 +409,8 @@ export class Model {
       aux.fill(0);
       stOD.fill(0);
       const D = this.stationMatrix();
-      totals = { trips: 0, rail: 0, road: 0, transit: 0, vhm: 0, kpkr: 0, krTrips: 0, krTransit: 0 };
+      totals = { trips: 0, rail: 0, road: 0, transit: 0, air: 0, intl: 0, vhm: 0, kpkr: 0, krTrips: 0, krTransit: 0 };
+      airOD.fill(0);
       for (let i = 0; i < Z; i++) {
         const o0 = this.zoneSub0[i], on = this.zoneSubN[i];
         // 승용차 비용
@@ -432,18 +479,25 @@ export class Model {
             if (this.stationHsr[pick[k]] && this.stationHsr[pick[k + 1]]) hsrShare += pick[k + 2];
           }
           const fare = P.railFarePerKm.conv + (P.railFarePerKm.hsr - P.railFarePerKm.conv) * hsrShare;
-          const gt = crail + (km * fare) / P.vot + this.railASC + bc;
+          const kpShare = (this.isKP[i] + this.isKP[j]) / 2;
+          const gt = crail + (km * fare) / P.vot + this.railASC * (1 - kpShare * (1 - P.kpRailASCFactor)) + bc;
           const tfare = P.transitBaseFare + Math.max(0, km - 10) * P.transitFarePerKm;
           const gu = ctr[j] + tfare / P.vot + this.transitASC + bc;
+          const air = this.airCost(i, j);
+          const afare = (P.airBaseFare + km * P.airFarePerKm) * (air.intl ? P.airIntlFareFactor : 1);
+          const ga = air.cost + afare / P.vot + P.airASC + bc;
           const eR = Math.exp(-lam * gr), eT = isFinite(gt) ? Math.exp(-lam * gt) : 0, eU = isFinite(gu) ? Math.exp(-lam * gu) : 0;
-          const sum = eR + eT + eU;
+          const eA = isFinite(ga) ? Math.exp(-lam * ga) : 0;
+          const sum = eR + eT + eU + eA;
           const comp = sum > 0 ? -Math.log(sum) / lam : gr;
           this.ccomp[i * Z + j] = i === j ? 15 : comp;
           if (i === j || !(sum > 0)) continue;
           const T = this.K * mass[i] * mass[j] / (comp + P.gravityOffsetMin) ** P.gravityPower;
-          const tRail = T * eT / sum, tTr = T * eU / sum, tRoad = T - tRail - tTr;
+          const tRail = T * eT / sum, tTr = T * eU / sum, tAir = T * eA / sum, tRoad = T - tRail - tTr - tAir;
+          if (tAir > 0) airOD[air.a * A + air.b] += tAir;
           if (it === iters) {
-            totals.trips += T; totals.rail += tRail; totals.road += tRoad; totals.transit += tTr;
+            totals.trips += T; totals.rail += tRail; totals.road += tRoad; totals.transit += tTr; totals.air += tAir;
+            if (this.isExt[i] || this.isExt[j]) totals.intl += T;
             totals.vhm += tRoad * croad[j];
             if (this.isKP[i] !== this.isKP[j]) totals.kpkr += T;
             if (!this.isKP[i] && !this.isKP[j]) { totals.krTrips += T; totals.krTransit += tTr; }
@@ -487,6 +541,8 @@ export class Model {
       }
       for (let l = 0; l < L.length; l++) this.volume[l] += (aux[l] - this.volume[l]) / (it + offset);
       this.updateStationWaits(it + offset);
+      for (let k = 0; k < airOD.length; k++) this.airOD[k] += (airOD[k] - this.airOD[k]) / (it + offset);
+      this.airPaxFromOD();
     }
     this.updateCosts();
     return totals;
@@ -496,7 +552,7 @@ export class Model {
     const m = new Float64Array(this.Z);
     for (let i = 0; i < this.Z; i++) {
       const rel = this.income[i] > 0 ? this.income[i] / this.frontier : 1;
-      m[i] = this.pop[i] / 1e4 * rel ** P.propensityIncomeElasticity;
+      m[i] = this.pop[i] / 1e4 * rel ** P.propensityIncomeElasticity * (this.isExt[i] ? P.extMassFactor : 1);
     }
     return m;
   }
@@ -583,11 +639,13 @@ export class Model {
     const { Z } = this;
     this.computeAccess();
     const kr = [], kp = [];
-    for (let i = 0; i < Z; i++) (this.isKP[i] ? kp : kr).push(this.access[i]);
+    for (let i = 0; i < Z; i++) if (!this.isExt[i]) (this.isKP[i] ? kp : kr).push(this.access[i]);
     this.accessRef = median(kr);
     const kpRef = median(kp);
     for (let i = 0; i < Z; i++) {
-      if (this.isKP[i]) {
+      if (this.isExt[i]) {
+        this.income[i] = this.extIncome[i];
+      } else if (this.isKP[i]) {
         const rel = Math.min(Math.max((this.access[i] / kpRef) ** P.accessIncomeElasticity, 0.6), 1.6);
         this.income[i] = P.incomeKP * rel;
       } else {
@@ -613,16 +671,20 @@ export class Model {
     const { Z, ccomp } = this;
     const U = new Float64Array(Z);
     let ubar = 0, ptot = 0;
-    for (let i = 0; i < Z; i++) { U[i] = this.utility(i); ubar += U[i] * this.pop[i]; ptot += this.pop[i]; }
+    for (let i = 0; i < Z; i++) {
+      U[i] = this.utility(i);
+      if (!this.isExt[i]) { ubar += U[i] * this.pop[i]; ptot += this.pop[i]; }
+    }
     ubar /= ptot;
     const attract = new Float64Array(Z);
-    for (let j = 0; j < Z; j++) attract[j] = this.pop[j] * Math.exp(U[j] - ubar);
+    for (let j = 0; j < Z; j++) attract[j] = this.isExt[j] ? 0 : this.pop[j] * Math.exp(U[j] - ubar);
     const net = new Float64Array(Z);
     const inflow = new Float64Array(Z);
     let kpToKr = 0, krToKp = 0;
     const policyFactor = P.migPolicyKPtoKR[policy] ?? 1;
     const w = new Float64Array(Z);
     for (let i = 0; i < Z; i++) {
+      if (this.isExt[i]) continue;
       const rate = Math.min(Math.max(P.baseOutMigration * Math.exp(-P.migUtilSensitivity * (U[i] - ubar)), 0.01), 0.15);
       const out = this.pop[i] * rate;
       let s = 0;
@@ -650,6 +712,7 @@ export class Model {
       const { net } = this.migrationFlows(integration, policy);
       let maxRel = 0;
       for (let i = 0; i < this.Z; i++) {
+        if (this.isExt[i]) continue;
         const rel = net[i] / this.pop[i];
         maxRel = Math.max(maxRel, Math.abs(rel));
         this.amenity[i] += -0.5 * rel / P.baseOutMigration;
@@ -664,6 +727,7 @@ export class Model {
     this.computeAccess();
     this.frontier *= 1 + P.frontierGrowth;
     for (let i = 0; i < Z; i++) {
+      if (this.isExt[i]) continue;
       const target = this.incomeTarget(i);
       const r = this.isKP[i]
         ? P.convergenceKPBase + P.convergenceKPIntegrated * integration
@@ -678,11 +742,12 @@ export class Model {
     const mig = this.migrationFlows(integration, policy);
     // 한 해 순이동이 어느 존에서도 maxNetMigration을 넘지 않도록 전체 흐름을 줄인다 (이사 수요의 물리적 한계)
     let peak = 0;
-    for (let i = 0; i < Z; i++) peak = Math.max(peak, Math.abs(mig.net[i]) / this.pop[i]);
+    for (let i = 0; i < Z; i++) if (!this.isExt[i]) peak = Math.max(peak, Math.abs(mig.net[i]) / this.pop[i]);
     const scale = Math.min(1, P.maxNetMigration / (peak || 1));
     for (const k of ['net']) for (let i = 0; i < Z; i++) mig[k][i] *= scale;
     mig.kpToKr *= scale; mig.krToKp *= scale;
     for (let i = 0; i < Z; i++) {
+      if (this.isExt[i]) continue;
       const g = this.isKP[i] ? P.naturalGrowth.KP : P.naturalGrowth.KR;
       this.pop[i] = Math.max(100, this.pop[i] * (1 + g) + mig.net[i]);
     }
@@ -782,6 +847,96 @@ export class Model {
     }
   }
 
+  // ------------------------------------------------------------ 항공
+
+  /**
+   * 운영 중인 공항과 존별 이용 공항(가까운 2곳)을 정한다.
+   * 공항 접근은 직선거리 ×1.3을 시속 50km로 가고, 수속·보안검색 시간을 더한다.
+   */
+  buildAir() {
+    const ap = (this.net.airports || []).filter((a) => a.active !== false);
+    this.airports = ap;
+    const A = ap.length;
+    this.airCap = Float64Array.from(ap, (a) => (a.cap * 1e6) / 365);   // 하루 여객 (출발+도착)
+    this.airPenalty = this.airPenalty?.length === A ? this.airPenalty : new Float64Array(A);
+    if (!this.airOD || this.airOD.length !== A * A) this.airOD = new Float64Array(A * A);
+    this.airPax = new Float64Array(A);
+    this.flight = new Float64Array(A * A).fill(Infinity);
+    for (let a = 0; a < A; a++) {
+      for (let b = 0; b < A; b++) {
+        if (a === b) continue;
+        const km = kmBetween(ap[a].lon, ap[a].lat, ap[b].lon, ap[b].lat);
+        const intl = ap[a].country !== ap[b].country && (ap[a].ext || ap[b].ext);
+        if (km < P.airMinKm || (ap[a].ext && ap[b].ext)) continue;
+        if (intl && !(ap[a].intl && ap[b].intl)) continue;
+        this.flight[a * A + b] = P.airTaxiMin + (km / P.airSpeedKmh) * 60;
+      }
+    }
+    const Z = this.Z;
+    this.zoneAir = new Int32Array(Z * 2).fill(-1);
+    this.zoneAirAcc = new Float64Array(Z * 2);
+    for (let z = 0; z < Z; z++) {
+      const near = ap.map((a, k) => [k, kmBetween(this.cx[z], this.cy[z], a.lon, a.lat)])
+        .filter(([k, d]) => d <= P.airAccessMaxKm && (!this.isExt[z] || ap[k].ext))
+        .sort((x, y) => x[1] - y[1]).slice(0, 2);
+      near.forEach(([k, d], n) => {
+        this.zoneAir[z * 2 + n] = k;
+        this.zoneAirAcc[z * 2 + n] = (d * P.accessDetour / P.airAccessSpeedKmh) * 60 + P.airTerminalMin;
+      });
+    }
+  }
+
+  /** 존 i→j 항공 일반화 시간 (분)과 이용 공항 */
+  airCost(i, j) {
+    const A = this.airports.length;
+    let best = Infinity, ba = -1, bb = -1;
+    for (let p = 0; p < 2; p++) {
+      const a = this.zoneAir[i * 2 + p];
+      if (a < 0) break;
+      for (let q = 0; q < 2; q++) {
+        const b = this.zoneAir[j * 2 + q];
+        if (b < 0) break;
+        const c = this.zoneAirAcc[i * 2 + p] + this.flight[a * A + b] + this.zoneAirAcc[j * 2 + q]
+          + this.airPenalty[a] + this.airPenalty[b];
+        if (c < best) { best = c; ba = a; bb = b; }
+      }
+    }
+    const intl = ba >= 0 && this.airports[ba].country !== this.airports[bb].country;
+    return { cost: best, a: ba, b: bb, intl };
+  }
+
+  /** 공항별 여객과 혼잡 지체 (용량을 넘으면 지체가 늘어난다) */
+  airPaxFromOD() {
+    const A = this.airports.length;
+    this.airPax.fill(0);
+    for (let a = 0; a < A; a++) {
+      for (let b = 0; b < A; b++) {
+        const v = this.airOD[a * A + b];
+        if (v > 0) { this.airPax[a] += v; this.airPax[b] += v; }
+      }
+    }
+    for (let a = 0; a < A; a++) {
+      const vc = this.airPax[a] / this.airCap[a];
+      this.airPenalty[a] = P.airCongestionMin * Math.max(0, vc - 1);
+    }
+  }
+
+  airResults() {
+    const A = this.airports.length;
+    const routes = [];
+    for (let a = 0; a < A; a++) {
+      for (let b = a + 1; b < A; b++) {
+        const v = this.airOD[a * A + b] + this.airOD[b * A + a];
+        if (v >= 300) routes.push([a, b, Math.round(v)]);
+      }
+    }
+    routes.sort((x, y) => y[2] - x[2]);
+    return {
+      ids: this.airports.map((a) => a.id), pax: Float64Array.from(this.airPax), cap: Float64Array.from(this.airCap),
+      routes: routes.slice(0, 120),
+    };
+  }
+
   /** 존의 가장 큰 소구역이 주로 쓰는 역 (노드 id, 없으면 -1) */
   primaryStations() {
     const out = new Int32Array(this.Z).fill(-1);
@@ -803,6 +958,7 @@ export class Model {
   summary() {
     const s = { KR: { pop: 0, hdi: 0, income: 0 }, KP: { pop: 0, hdi: 0, income: 0 } };
     for (let i = 0; i < this.Z; i++) {
+      if (this.isExt[i]) continue;
       const c = this.isKP[i] ? s.KP : s.KR;
       c.pop += this.pop[i];
       c.hdi += this.hdi[i] * this.pop[i];

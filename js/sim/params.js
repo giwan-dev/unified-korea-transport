@@ -3,7 +3,7 @@
 
 export const P = {
   // --- 교통망
-  roadCapPerLaneHour: { motorway: 2000, trunk: 1600, primary: 1100, secondary: 800 },
+  roadCapPerLaneHour: { motorway: 2000, trunk: 1600, primary: 1100, secondary: 800, ferry: 300 },
   dailyFactor: 10,            // 일교통량 / 첨두시 용량 환산 (K계수 약 10%)
   bprAlpha: 0.15,
   bprBeta: 4,
@@ -34,6 +34,9 @@ export const P = {
   railFarePerKm: { hsr: 150, conv: 90 },
   logitLambda: 0.03,          // 수단선택 민감도 (1/분)
   railASC: 10,                // 철도 고유 불편 (분)
+  kpRailASCFactor: 0.35,      // 북측 내부 통행은 철도가 주 수단이라 고유 불편을 덜 적용 (자동차·시외버스 부족)
+  kpWaitMaxMin: 45,           // 북측 역 대기시간 상한 (적어도 하루 몇 회는 다닌다)
+  roadPerceived: { motorway: 0.85, trunk: 1.0, primary: 1.15, secondary: 1.3, ferry: 1.0 }, // 경로 선택 체감 비용 (고속도로 선호)
   gravityPower: 2.0,
   gravityOffsetMin: 30,
   propensityIncomeElasticity: 0.3,
@@ -65,6 +68,23 @@ export const P = {
   targetKrTransitShare: 0.3,  // 기준 연도 보정 목표: 남측 지역 간 통행의 대중교통 분담률 (가정값)
   carlessPenaltyMin: 60,      // 자동차 보유가 적은 지역의 승용차 이용 불편 (소득에 따라 줄어듦)
   carOwnershipIncome: 20000,
+
+  // --- 항공
+  airMinKm: 120,              // 이보다 가까운 공항 사이에는 노선을 두지 않는다
+  airSpeedKmh: 700,
+  airTaxiMin: 25,             // 이착륙·지상 이동
+  airTerminalMin: 50,         // 수속·보안검색
+  airAccessSpeedKmh: 50,
+  airAccessMaxKm: 150,
+  airBaseFare: 45000,         // 원
+  airFarePerKm: 90,
+  airIntlFareFactor: 1.6,
+  airASC: 60,                 // 예약·탑승 절차 등 항공 고유 불편 (국내선은 제주처럼 다른 수단이 없을 때 주로 쓰인다)
+  airCongestionMin: 60,       // 공항 V/C가 1을 넘을 때 1당 추가 지체 (분)
+
+  // --- 국외 연결: 국경·출입국 비용 (분)
+  intlBorderMin: { CN: 300, RU: 300, JP: 240 },
+  extMassFactor: 0.25,        // 국외 도시의 통행 발생 비중 (언어·비자·생활권 차이로 국내 도시보다 적다)
 
   // --- 남북 통합
   borderPenaltyMin: 300,      // 통합도 0일 때 남북 간 추가 일반화비용(분)

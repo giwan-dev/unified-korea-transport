@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>기준 연도 계산</title>
+  <style>body { font: 14px system-ui, sans-serif; margin: 24px; } pre { background: #f4f4f4; padding: 12px; }</style>
+</head>
+<body>
+  <h1>기준 연도 사전 계산</h1>
+  <p>데이터를 다시 만든 뒤 <code>python tools/serve.py</code>로 띄우고 이 페이지를 열면,
+    기준 연도 보정·배정 결과를 <code>data/baseline.json</code>, <code>data/baseline.bin</code>으로 저장합니다.</p>
+  <pre id="log"></pre>
+  <script type="module">
+    import { effectiveNetwork, newGame } from '../js/game/state.js';
+    import { loadNetwork } from '../js/data/netpack.js';
+    import { extendWorld } from '../js/game/world.js';
+    const log = (s) => { document.querySelector('#log').textContent += s + '\n'; };
+    const [zones, net, meta, grid] = await Promise.all([
+      fetch('../data/zones.json').then((r) => r.json()),
+      loadNetwork('../data/'),
+      fetch('../data/meta.json').then((r) => r.json()),
+      fetch('../data/grid.bin').then((r) => r.arrayBuffer()),
+    ]);
+    extendWorld(net, zones, await fetch('../data/air_sea.json').then((r) => r.json()));
+    const state = newGame('normal');
+    const t0 = performance.now();
+    const worker = new Worker(new URL('../js/sim/worker.js', import.meta.url), { type: 'module' });
+    worker.onmessage = async (ev) => {
+      const m = ev.data;
+      if (m.type === 'progress') { document.title = `${m.label} ${Math.round(m.value * 100)}%`; return; }
+      if (m.type === 'error') { log('오류: ' + m.message); return; }
+      if (m.type !== 'baseline') return;
+      log(`계산 ${((performance.now() - t0) / 1000).toFixed(1)}초`);
+      const a = await fetch('../data/baseline.json', { method: 'PUT', body: JSON.stringify(m.json) });
+      const b = await fetch('../data/baseline.bin', { method: 'PUT', body: m.bin });
+      log(`저장 ${a.status} ${b.status} · 링크 ${m.json.sizes.L} · 데이터 ${meta.stamp}`);
+      document.title = '완료';
+    };
+    log('계산 중…');
+    worker.postMessage({
+      type: 'baseline', zones, grid,
+      net: effectiveNetwork(net, state), ctx: { integration: state.integration, policy: state.policy }, meta,
+    });
+  </script>
+</body>
+</html>

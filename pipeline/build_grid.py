@@ -1,13 +1,13 @@
 """1km 인구 격자와 존 내부 소구역을 만든다 (build_data.py 다음에 실행).
 
 - 대도시(특별시·광역시·평양, 인구 30만 이상 또는 인구밀도 2,000명/km² 이상인 시군구)는
-  OSM 읍면동(admin_level=8) 경계를 소구역으로 쓴다. 1km 격자 인구는 읍면동과 겹치는 면적 비율로 나눈다.
+  build_admin.py의 읍면동(남: 행정동, 북: 보로노이 구역)을 소구역으로 쓴다. 1km 격자 인구는 읍면동과 겹치는 면적 비율로 나눈다.
 - 그 밖의 존은 인구 격자를 가중 k-평균으로 묶어 소구역(최대 8개)을 만든다.
 
 게임은 소구역마다 역·정류장 접근시간을 따지고, 해마다 소구역 사이 인구 이동을 계산한다.
 
 출력
-  - data/zones.geojson     각 존에 subs: [[경도, 위도, 인구비중, 면적km²], ...], sub0 추가
+  - data/zones.json        존 속성 (subs: [[경도, 위도, 인구비중, 면적km²], ...], sub0 포함)
   - data/subzones.geojson  소구역 경계 (읍면동 또는 격자 묶음), 이름
   - data/grid.bin          Float32 [경도, 위도, 인구, 소구역 번호] 반복 (little endian)
 
@@ -53,6 +53,15 @@ def log(*a):
     print(*a, file=sys.stderr, flush=True)
 
 
+def load_master_units():
+    """build_admin.py의 읍면동(남: 행정동, 북: 보로노이 구역)을 존 번호별로 묶는다"""
+    m = pickle.load((RAW / "admin_master.pkl").open("rb"))
+    out = {}
+    for u in m["units"]:
+        out.setdefault(u["zone_id"], []).append((u["name"], wkb.loads(u["geom"])))
+    return out
+
+
 def load_admin8(country):
     """읍면동 경계. OSM 추출이 오래 걸리므로 data/raw에 캐시한다."""
     cache = RAW / f"admin8_{country}.pkl"
@@ -96,17 +105,15 @@ def is_metro(p):
 
 
 def main():
-    fc = json.loads((OUT / "zones.geojson").read_text(encoding="utf-8"))
+    fc = json.loads((RAW / "zones.geojson").read_text(encoding="utf-8"))
     places = json.loads((OUT / "places.json").read_text(encoding="utf-8"))
     feats = fc["features"]
     records = []          # (lon, lat, pop, sub)
     sub_feats = []
     sub_count = 0
     n_metro = 0
+    units_by_zone = load_master_units()
     for c in ("KR", "KP"):
-        admin8 = load_admin8(c)
-        a8_geoms = [g for _, g in admin8]
-        a8_tree = shapely.STRtree(a8_geoms)
         zs = [f for f in feats if f["properties"]["country"] == c]
         with rasterio.open(POP[c]) as src:
             arr = src.read(1).astype("float64")
@@ -139,9 +146,7 @@ def main():
             cx, cy, w = xs[m], ys[m], pops[m]
             dongs = []
             if is_metro(p):
-                cand = a8_tree.query(zgeom, predicate="intersects")
-                dongs = [(admin8[k][0], a8_geoms[k]) for k in cand
-                         if zgeom.contains(a8_geoms[k].representative_point())]
+                dongs = units_by_zone.get(p["id"], [])
                 cover = sum(area_km2(g) for _, g in dongs) / max(p["area"], 1e-6)
                 if len(dongs) < 2 or cover < METRO_MIN_COVERAGE:
                     dongs = []
@@ -164,13 +169,20 @@ def main():
 
     rec = np.array(records, dtype=np.float32)
     (OUT / "grid.bin").write_bytes(rec.astype("<f4").tobytes())
-    (OUT / "zones.geojson").write_text(
-        json.dumps(fc, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    # 게임은 존 속성만 받는다 (도형은 data/admin/sgg.geojson과 같은 순서)
+    (OUT / "zones.json").write_text(
+        json.dumps([f["properties"] for f in fc["features"]], ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     (OUT / "subzones.geojson").write_text(
         json.dumps({"type": "FeatureCollection", "features": sub_feats}, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8")
     log("metro zones", n_metro, "subzones", sub_count, "records", len(rec))
-    for f in ("grid.bin", "zones.geojson", "subzones.geojson"):
+    # 데이터 버전: 기준 연도 사전 계산(data/baseline.*)이 이 값과 맞아야 쓰인다
+    net = json.loads((OUT / "network.meta.json").read_text(encoding="utf-8"))
+    import datetime
+    meta = {"stamp": datetime.datetime.now().strftime("%Y%m%d%H%M%S"), "zones": len(feats),
+            "subzones": sub_count, "links": net["links"], "nodes": net["nodes"]}
+    (OUT / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    for f in ("grid.bin", "zones.json", "subzones.geojson"):
         log(f, round((OUT / f).stat().st_size / 1e6, 2), "MB")
 
 

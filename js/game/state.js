@@ -1,12 +1,12 @@
 // 게임 상태: 예산, 공사 중 사업, 혼잡 민원, 이름, 저장/불러오기.
-import { DIFFICULTY, UPGRADES, NEW_BUILDS, KP_COST_FACTOR, upgradeCost, resolve, formatWon } from './catalog.js';
+import { DIFFICULTY, UPGRADES, NEW_BUILDS, KP_COST_FACTOR, AIRPORT, upgradeCost, resolve, formatWon } from './catalog.js';
 import { P } from '../sim/params.js';
-import { kmBetween } from '../sim/model.js';
+import { smoothSegments, polylineKm } from './curve.js';
 
 const SAVE_KEY = 'ukt-save-v1';
 const START_YEAR = 2026;
 export const CONGESTION_VC = 1.0;
-export const CONGESTION_YEARS = 2;
+export const CONGESTION_YEARS = 1;
 
 export function newGame(difficulty = 'normal') {
   const d = DIFFICULTY[difficulty];
@@ -23,6 +23,8 @@ export function newGame(difficulty = 'normal') {
     newNodes: [],       // [lon, lat]
     newLinks: [],       // 신설 링크 (id = 기본 링크 수 + 인덱스)
     newStations: [],    // 역이 된 노드 id
+    newAirports: [],    // 신설 공항 {id, name, lon, lat, cap, kp, built}
+    airportCap: {},     // 공항 id → 확장 뒤 용량
     names: {},          // 노드 id → {name, kind, auto}
     projects: [],
     congestion: {},     // 링크 id → 연속 혼잡 연수
@@ -30,6 +32,8 @@ export function newGame(difficulty = 'normal') {
     history: [],
     log: [`${START_YEAR}년, 남북이 통일되었습니다. 첫 해 SOC 예산 ${formatWon(d.annualBudget)}이 배정되었습니다.`],
     snapshot: null,
+    placeNames: {},     // 'z:존' / 'u:읍면동' → 바뀐 이름
+    happyBonus: {},     // 존 → 행복도 가산점 (사업 효과, 해마다 줄어듦)
   };
 }
 
@@ -70,7 +74,9 @@ export function effectiveNetwork(base, state) {
   }
   const stations = base.stations.map((s) => s[1])
     .concat((base.metro_stations || []).map((s) => s[1]), state.newStations);
-  return { nodes, links, stations: [...new Set(stations)] };
+  const airports = (base.airports || []).map((a) => ({ ...a, cap: state.airportCap?.[a.id] ?? a.cap }))
+    .concat((state.newAirports || []).filter((a) => a.built).map((a) => ({ ...a, cap: state.airportCap?.[a.id] ?? a.cap, intl: true })));
+  return { nodes, links, stations: [...new Set(stations)], airports };
 }
 
 export function linkAt(base, state, id) {
@@ -146,15 +152,16 @@ export function startNewBuild(base, state, plan) {
   });
   let total = 0, kmTotal = 0;
   const links = [];
+  const segs = smoothSegments(plan.points);   // 찍은 점들을 지나는 곡선. 연장도 곡선 길이로 잡는다
   for (let i = 0; i + 1 < nodeIds.length; i++) {
     const a = plan.points[i], b = plan.points[i + 1];
-    const len = kmBetween(a.lon, a.lat, b.lon, b.lat) * 1.1;
+    const len = polylineKm(segs[i]) * 1.02;
     const kp = isKP(a.lat, a.lon) && isKP(b.lat, b.lon) ? 1 : 0;
     const cost = Math.round(spec.perKm * len * (kp ? KP_COST_FACTOR : 1));
     total += cost; kmTotal += len;
     links.push({
       id: firstId + i, a: nodeIds[i], b: nodeIds[i + 1], mode: spec.mode, len: Math.round(len * 100) / 100,
-      kp, name: '', built: false, geom: [a.lon, a.lat, b.lon, b.lat], ...spec.attrs,
+      kp, name: '', built: false, geom: segs[i].flat().map((v) => Math.round(v * 1e5) / 1e5), ...spec.attrs,
     });
   }
   if (!canAfford(state, total, spec.years)) {
@@ -172,6 +179,67 @@ export function startNewBuild(base, state, plan) {
     id: crypto.randomUUID(), kind: 'new', type: plan.type, links: links.map((l) => l.id),
     stations: spec.mode >= 1 ? nodeIds.filter((_, i) => plan.names[i]?.kind === 'station') : [],
     cost: total, years: spec.years, label,
+  });
+  return { ok: true };
+}
+
+// ------------------------------------------------------------ 공항
+
+export function startAirport(state, { lon, lat, name }) {
+  const kp = isKP(lat, lon);
+  const cost = Math.round(AIRPORT.build.cost * (kp ? KP_COST_FACTOR : 1));
+  if (!canAfford(state, cost, AIRPORT.build.years)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
+  const id = `NEW${(state.newAirports || []).length + 1}`;
+  state.newAirports ||= [];
+  state.newAirports.push({ id, name, lon, lat, cap: AIRPORT.build.cap, country: kp ? 'KP' : 'KR', built: false });
+  startProject(state, { id: crypto.randomUUID(), kind: 'airport', airport: id, links: [], cost, years: AIRPORT.build.years, label: `${name} 신설` });
+  return { ok: true };
+}
+
+export function startAirportExpand(state, airport) {
+  if (state.projects.some((p) => p.status === 'building' && p.airport === airport.id)) return { ok: false, reason: '이미 공사 중인 공항입니다.' };
+  const cost = Math.round(AIRPORT.expand.cost * (airport.country === 'KP' ? KP_COST_FACTOR : 1));
+  if (!canAfford(state, cost, AIRPORT.expand.years)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
+  startProject(state, {
+    id: crypto.randomUUID(), kind: 'airportExpand', airport: airport.id, newCap: airport.cap + AIRPORT.expand.cap, links: [],
+    cost, years: AIRPORT.expand.years, label: `${airport.name} 확장 (연 ${airport.cap}→${airport.cap + AIRPORT.expand.cap}백만 명)`,
+  });
+  return { ok: true };
+}
+
+// ------------------------------------------------------------ 지명
+
+/** 옛 이름 되찾기 사업비(억원)와 완공 뒤 행복도 효과 */
+export const RENAME = {
+  zone: { cost: 300, years: 1, bonus: 6 },
+  unit: { cost: 30, years: 1, bonus: 2 },
+};
+
+export function placeKey(level, id) { return `${level === 'zone' ? 'z' : 'u'}:${id}`; }
+
+/** 플레이어가 바꾼 이름이 있으면 그것, 없으면 원래 이름 */
+export function placeName(state, level, id, original) {
+  return state.placeNames?.[placeKey(level, id)] || original;
+}
+
+/** 직접 이름 바꾸기: 비용 없이 표시만 바뀐다 */
+export function setPlaceName(state, level, id, name) {
+  state.placeNames ||= {};
+  state.placeNames[placeKey(level, id)] = name;
+  state.log.unshift(`${state.year}년 지명 변경: ${name}`);
+}
+
+/** 옛 이름 되찾기 사업 (표지판·행정 문서·지도 교체). 완공되면 이름이 바뀌고 주민 행복도가 오른다 */
+export function startRestoreName(state, target) {
+  const r = RENAME[target.level];
+  if (state.projects.some((p) => p.kind === 'rename' && p.key === placeKey(target.level, target.id))) {
+    return { ok: false, reason: '이미 진행 중이거나 끝난 사업입니다.' };
+  }
+  if (!canAfford(state, r.cost, r.years)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
+  startProject(state, {
+    id: crypto.randomUUID(), kind: 'rename', key: placeKey(target.level, target.id), links: [],
+    zone: target.zone, newName: target.historic, bonus: r.bonus, cost: r.cost, years: r.years,
+    label: `옛 이름 되찾기: ${target.current} → ${target.historic}`,
   });
   return { ok: true };
 }
@@ -217,11 +285,32 @@ export function advanceBudgetYear(base, state) {
     state.debt -= r; state.budget -= r;
   }
   state.integration = Math.min(1, state.integration + P.integrationPerYear);
+  for (const k of Object.keys(state.happyBonus || {})) {
+    state.happyBonus[k] *= 0.9;
+    if (state.happyBonus[k] < 0.2) delete state.happyBonus[k];
+  }
   for (const p of done) state.log.unshift(`${state.year}년 완공: ${p.label}`);
   return done;
 }
 
 function completeProject(base, state, p) {
+  if (p.kind === 'airport') {
+    const a = state.newAirports.find((x) => x.id === p.airport);
+    if (a) a.built = true;
+    return;
+  }
+  if (p.kind === 'airportExpand') {
+    state.airportCap ||= {};
+    state.airportCap[p.airport] = p.newCap;
+    return;
+  }
+  if (p.kind === 'rename') {
+    state.placeNames ||= {};
+    state.happyBonus ||= {};
+    state.placeNames[p.key] = p.newName;
+    state.happyBonus[p.zone] = (state.happyBonus[p.zone] || 0) + p.bonus;
+    return;
+  }
   if (p.kind === 'upgrade') {
     const u = UPGRADES.find((x) => x.id === p.upgrade);
     for (const id of p.links) {
@@ -236,6 +325,7 @@ function completeProject(base, state, p) {
 
 /** 민원 대상: 남은 고속도로·간선국도와 철도, 북은 모든 도로·철도 */
 function requestable(l) {
+  if (l.ext || l.cls === 'ferry') return false; // 국경 연결·여객선 항로는 민원 대상이 아니다
   if (l.mode === 2) return false; // 도시철도는 아직 개량 메뉴가 없다
   return l.len > 1 && (l.mode === 1 || l.kp || l.cls === 'motorway' || l.cls === 'trunk');
 }
@@ -267,7 +357,8 @@ export function updateCongestion(base, state, vc, increment = true) {
     g.vc = Math.max(g.vc, vc[id]);
     g.years = Math.max(g.years, years);
   }
-  return [...groups.values()].sort((a, b) => b.km * (b.vc - 1) - a.km * (a.vc - 1));
+  // V/C가 높은 노선부터
+  return [...groups.values()].sort((a, b) => b.vc - a.vc);
 }
 
 /** 민원 대응에 맞는 기본 개량 (도로: 차로 확장, 철도: 복선화 또는 2복선화) */

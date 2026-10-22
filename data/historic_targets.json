@@ -1,0 +1,56 @@
+[
+ {
+  "level": "zone",
+  "id": 259,
+  "zone": 259,
+  "current": "김정숙군",
+  "historic": "신파군",
+  "year": 1981,
+  "reason": "김정숙(김일성의 처) 출생지라 하여 개칭"
+ },
+ {
+  "level": "zone",
+  "id": 261,
+  "zone": 261,
+  "current": "김형직군",
+  "historic": "후창군",
+  "year": 1988,
+  "reason": "김형직(김일성의 부)의 이름을 따 개칭"
+ },
+ {
+  "level": "zone",
+  "id": 260,
+  "zone": 260,
+  "current": "김형권군",
+  "historic": "풍산군",
+  "year": 1990,
+  "reason": "김형권(김일성의 숙부)의 이름을 따 개칭"
+ },
+ {
+  "level": "zone",
+  "id": 373,
+  "zone": 373,
+  "current": "김책시",
+  "historic": "성진시",
+  "year": 1951,
+  "reason": "김책(북측 군 지휘관)의 이름을 따 개칭"
+ },
+ {
+  "level": "zone",
+  "id": 351,
+  "zone": 351,
+  "current": "금야군",
+  "historic": "영흥군",
+  "year": 1977,
+  "reason": "체제 선전 지명('금빛 들판')으로 개칭"
+ },
+ {
+  "level": "unit",
+  "id": 3805,
+  "zone": 260,
+  "current": "김형권읍",
+  "historic": "풍산읍",
+  "year": 1990,
+  "reason": "군 개칭과 함께 읍 이름 변경"
+ }
+]

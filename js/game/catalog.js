@@ -68,6 +68,14 @@ export const NEW_BUILDS = {
   hsr: { mode: 1, label: '고속철도 신설', perKm: 850, years: 6, attrs: { cls: 'hsr', tracks: 2, speed: 250, power: 'AC' } },
   rail: { mode: 1, label: '일반철도 신설 (복선전철)', perKm: 400, years: 5, attrs: { cls: 'conv', tracks: 2, speed: 150, power: 'AC' } },
   metro: { mode: 2, label: '도시철도 신설 (지하)', perKm: 1300, years: 6, attrs: { cls: 'metro', tracks: 2, speed: 35, power: 'AC' } },
+  tunnelRail: { mode: 1, label: '해저터널 (고속철도)', perKm: 3500, years: 10, attrs: { cls: 'hsr', tracks: 2, speed: 250, power: 'AC' } },
+  tunnelRoad: { mode: 0, label: '해저터널 (고속도로)', perKm: 2500, years: 10, attrs: { cls: 'motorway', lanes: 4, speed: 90, paved: 1 } },
+};
+
+/** 공항 사업 (사업비 억원, 용량 연간 백만 명) */
+export const AIRPORT = {
+  build: { label: '공항 신설', cost: 20000, years: 6, cap: 10 },
+  expand: { label: '공항 확장 (+1천만 명)', cost: 8000, years: 4, cap: 10 },
 };
 
 export function roadMaxSpeed(cls) {

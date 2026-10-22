@@ -1,11 +1,97 @@
-// MapLibre 지도와 레이어. 존 단계구분도, 도로(혼잡도), 철도(교통량), 역·IC 라벨, 그리기 미리보기.
+// MapLibre 지도와 레이어. 자체 벡터 배경지도(외부 타일 없음), 존 단계구분도, 도로(혼잡도), 철도(교통량), 역·IC 라벨, 그리기 미리보기.
 
-const BASE_STYLE = 'https://tiles.openfreemap.org/styles/positron';
-const FALLBACK_STYLE = {
-  version: 8,
-  sources: {},
-  layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#eef0ec' } }],
+// 라벨 글꼴: 한글은 브라우저 글꼴로 그리고(localIdeographFontFamily), 숫자·영문 글리프만 받는다
+const GLYPHS = 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf';
+const FONT = ['Noto Sans Regular'];
+
+const PALETTE = {
+  light: { water: '#cddbe4', world: '#e8e5de', land: '#f5f3ee', sido: '#8f8a80', sgg: '#c8c3b8', unit: '#d9d5cb', mdl: '#c23b32', river: '#a9c2d2', label: '#3a3f45', halo: '#ffffff', foreign: '#7a7f86' },
+  dark: { water: '#0e1820', world: '#191d21', land: '#22272d', sido: '#5d646c', sgg: '#3a4048', unit: '#30353c', mdl: '#e0645a', river: '#27404f', label: '#d6dadf', halo: '#14181c', foreign: '#8a9097' },
 };
+
+function baseStyle() {
+  const dark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+  const c = dark ? PALETTE.dark : PALETTE.light;
+  return {
+    version: 8,
+    glyphs: GLYPHS,
+    sources: {
+      world: { type: 'geojson', data: 'data/base/world.geojson' },
+      sido: { type: 'geojson', data: 'data/admin/sido.geojson' },
+      water: { type: 'geojson', data: 'data/base/water.geojson' },
+      lines: { type: 'geojson', data: 'data/base/lines.geojson' },
+      labels: { type: 'geojson', data: 'data/base/labels.geojson' },
+      units: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
+    },
+    layers: [
+      { id: 'bg-water', type: 'background', paint: { 'background-color': c.water } },
+      { id: 'bg-world', type: 'fill', source: 'world', paint: { 'fill-color': c.world } },
+      { id: 'bg-land', type: 'fill', source: 'sido', paint: { 'fill-color': c.land } },
+      { id: 'bg-lake', type: 'fill', source: 'water', filter: ['==', ['get', 'kind'], 'lake'], paint: { 'fill-color': c.water } },
+      { id: 'bg-river', type: 'line', source: 'water', filter: ['==', ['get', 'kind'], 'river'],
+        paint: { 'line-color': c.river, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.6, 10, 2] } },
+      { id: 'bg-unit', type: 'line', source: 'units', minzoom: 9, paint: { 'line-color': c.unit, 'line-width': 0.6 } },
+      { id: 'bg-sido', type: 'line', source: 'sido', paint: { 'line-color': c.sido, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.8, 10, 1.6] } },
+      { id: 'bg-mdl', type: 'line', source: 'lines', paint: { 'line-color': c.mdl, 'line-width': 1.6, 'line-dasharray': [3, 2] } },
+      { id: 'lb-unit', type: 'symbol', source: 'units', minzoom: 11,
+        layout: { 'symbol-placement': 'point', 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 10 },
+        paint: { 'text-color': c.foreign, 'text-halo-color': c.halo, 'text-halo-width': 1 } },
+      { id: 'lb-sgg', type: 'symbol', source: 'labels', minzoom: 7, filter: ['==', ['get', 'rank'], 2],
+        layout: { 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 11 },
+        paint: { 'text-color': ['case', ['has', 'foreign'], c.foreign, c.label], 'text-halo-color': c.halo, 'text-halo-width': 1.2 } },
+      { id: 'lb-sido', type: 'symbol', source: 'labels', maxzoom: 9, filter: ['==', ['get', 'rank'], 1],
+        layout: { 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 13, 'text-letter-spacing': 0.05 },
+        paint: { 'text-color': ['case', ['has', 'foreign'], c.foreign, c.label], 'text-halo-color': c.halo, 'text-halo-width': 1.5 } },
+    ],
+  };
+}
+
+// 지명 바꾸기: 게임이 바꾼 이름을 라벨에 반영한다
+let nameResolver = (_level, _id, original) => original;
+let labelData = null;
+const unitFiles = new Map();
+
+export function setNameResolver(fn) { nameResolver = fn; }
+
+function renamed(features, level, idKey) {
+  return features.map((f) => {
+    const id = f.properties[idKey];
+    if (id == null) return f;
+    const name = nameResolver(level, id, f.properties.name);
+    return name === f.properties.name ? f : { ...f, properties: { ...f.properties, name } };
+  });
+}
+
+/** 시군구 라벨과 읍면동 경계 라벨을 다시 그린다 */
+export async function refreshNames(map) {
+  if (!labelData) labelData = await fetch('data/base/labels.geojson').then((r) => r.json());
+  map.getSource('labels').setData({ type: 'FeatureCollection', features: renamed(labelData.features, 'zone', 'zone') });
+  setUnits(map);
+}
+
+function setUnits(map) {
+  map.getSource('units').setData({ type: 'FeatureCollection', features: renamed([...unitFiles.values()].flat(), 'unit', 'id') });
+}
+
+/** 9배 이상 확대하면 화면에 들어온 시도의 읍면동 경계 파일만 받아 그린다 */
+function enableUnits(map) {
+  let index = null;
+  const loaded = unitFiles;
+  const update = async () => {
+    if (map.getZoom() < 8.5) return;
+    if (!index) index = await fetch('data/admin/units/index.json').then((r) => r.json());
+    const b = map.getBounds();
+    const need = index.filter(({ bbox: [x0, y0, x1, y1] }) => x1 >= b.getWest() && x0 <= b.getEast() && y1 >= b.getSouth() && y0 <= b.getNorth())
+      .filter((e) => !loaded.has(e.file));
+    if (!need.length) return;
+    await Promise.all(need.map(async (e) => {
+      loaded.set(e.file, []);
+      loaded.set(e.file, (await fetch(`data/admin/units/${e.file}`).then((r) => r.json())).features);
+    }));
+    setUnits(map);
+  };
+  map.on('moveend', update);
+}
 
 export const METRICS = {
   none: { label: '표시 안 함' },
@@ -17,21 +103,22 @@ export const METRICS = {
   popChange: { label: '인구 변화 (시작 대비)', ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-0.3, -0.1, 0, 0.1, 0.3], fmt: (v) => `${(v * 100).toFixed(0)}%` },
   hdi: { label: '인간개발지수 (HDI)', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [0.55, 0.65, 0.75, 0.85, 0.95], fmt: (v) => v.toFixed(2) },
   income: { label: '1인당 소득 (PPP $)', ramp: ['#f7f4ea', '#c7d9ee', '#5b8fd1', '#1d3f8f'], stops: [2000, 10000, 30000, 60000], fmt: (v) => `$${Math.round(v / 1000)}k` },
+  happiness: { label: '주민 행복도', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [40, 50, 60, 70, 80], fmt: (v) => v.toFixed(0) },
   access: { label: '접근성 (상대)', ramp: ['#f7f4ea', '#c8e0b4', '#5aa36b', '#1d5c3a'], stops: [0.2, 0.6, 1.2, 2.5], fmt: (v) => v.toFixed(1) },
 };
 
 export async function createMap(container) {
-  let style = BASE_STYLE;
-  try {
-    const r = await fetch(BASE_STYLE, { method: 'GET' });
-    if (!r.ok) style = FALLBACK_STYLE;
-  } catch { style = FALLBACK_STYLE; }
   const map = new maplibregl.Map({
-    container, style, center: [127.4, 38.6], zoom: 5.6, minZoom: 4, maxZoom: 14,
-    attributionControl: { compact: true, customAttribution: '데이터 © OpenStreetMap 기여자 (ODbL), WorldPop (CC BY 4.0)' },
+    container, style: baseStyle(), center: [127.4, 38.6], zoom: 5.6, minZoom: 4, maxZoom: 14,
+    localIdeographFontFamily: '"Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif',
+    attributionControl: {
+      compact: true,
+      customAttribution: '행정동 경계 © 통계청 SGIS(공공누리 1유형)·vuski/admdongkor (CC BY 4.0) · 도로·철도·북측 경계 © OpenStreetMap 기여자 (ODbL) · WorldPop (CC BY 4.0) · Natural Earth',
+    },
   });
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
   await new Promise((res) => map.on('load', res));
+  enableUnits(map);
   return map;
 }
 
@@ -88,7 +175,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   const vcColor = ['interpolate', ['linear'], ['coalesce', ['feature-state', 'vc'], 0],
     0, '#3f9e63', 0.6, '#c5c23a', 0.85, '#e8962c', 1.0, '#d9452f', 1.3, '#7d1d16'];
   map.addLayer({
-    id: 'roads', type: 'line', source: 'links', filter: ['all', ['==', ['get', 'mode'], 0], ['==', ['get', 'building'], 0]],
+    id: 'roads', type: 'line', source: 'links', filter: ['all', ['==', ['get', 'mode'], 0], ['==', ['get', 'building'], 0], ['!=', ['get', 'cls'], 'ferry'], ['!=', ['get', 'ext'], 1]],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': vcColor,
@@ -98,7 +185,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     },
   });
   map.addLayer({
-    id: 'rails', type: 'line', source: 'links', filter: ['all', ['==', ['get', 'mode'], 1], ['==', ['get', 'building'], 0]],
+    id: 'rails', type: 'line', source: 'links', filter: ['all', ['==', ['get', 'mode'], 1], ['==', ['get', 'building'], 0], ['!=', ['get', 'ext'], 1]],
     paint: {
       'line-color': ['case', ['==', ['get', 'cls'], 'hsr'], '#2453c9', '#6c3fa0'],
       'line-width': ['interpolate', ['linear'], ['coalesce', ['feature-state', 'vol'], 0], 0, 1, 20000, 1.8, 100000, 3.5, 400000, 7],
@@ -107,10 +194,20 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addLayer({
     id: 'metro', type: 'line', source: 'links', filter: ['all', ['==', ['get', 'mode'], 2], ['==', ['get', 'building'], 0]],
     paint: {
-      'line-color': '#1a9a6c',
-      'line-width': ['interpolate', ['linear'], ['coalesce', ['feature-state', 'vol'], 0], 0, 1, 50000, 2, 300000, 5],
+      // 노선 고유색 (OSM colour 태그), 없으면 기본 초록
+      'line-color': ['case', ['==', ['get', 'colour'], ''], '#1a9a6c', ['get', 'colour']],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1, 11, ['interpolate', ['linear'], ['coalesce', ['feature-state', 'vol'], 0], 0, 2, 300000, 6]],
       'line-opacity': ['interpolate', ['linear'], ['zoom'], 6, 0.4, 9, 0.9],
     },
+  });
+  // 여객선 항로와 국경 연결(가상 링크)은 점선
+  map.addLayer({
+    id: 'ferries', type: 'line', source: 'links', filter: ['==', ['get', 'cls'], 'ferry'],
+    paint: { 'line-color': '#2b7bb9', 'line-width': 1.6, 'line-dasharray': [2, 2] },
+  });
+  map.addLayer({
+    id: 'ext-links', type: 'line', source: 'links', filter: ['all', ['==', ['get', 'ext'], 1], ['!=', ['get', 'cls'], 'ferry']],
+    paint: { 'line-color': ['case', ['==', ['get', 'mode'], 1], '#6c3fa0', '#7a7f86'], 'line-width': 1.6, 'line-dasharray': [1, 1.5] },
   });
   // 공사 중인 신설 노선은 회색 점선
   map.addLayer({
@@ -138,9 +235,33 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     filter: ['any', ['==', ['get', 'isNew'], 1], ['>=', ['zoom'], ['case', ['==', ['get', 'metro'], 1], 11, ['==', ['get', 'kind'], 'station'], 8, 10]]],
     layout: {
       'text-field': ['get', 'name'], 'text-size': ['case', ['==', ['get', 'isNew'], 1], 13, 11],
-      'text-offset': [0, 1.0], 'text-anchor': 'top', 'text-font': ['Noto Sans Regular'],
+      'text-offset': [0, 1.0], 'text-anchor': 'top', 'text-font': FONT,
     },
     paint: { 'text-color': '#1d232b', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 },
+  });
+
+  // 항공: 노선(호)과 공항(원 크기 = 하루 여객)
+  map.addSource('airroutes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({
+    id: 'airroutes', type: 'line', source: 'airroutes',
+    paint: {
+      'line-color': '#b04a9c', 'line-opacity': 0.45,
+      'line-width': ['interpolate', ['linear'], ['get', 'pax'], 300, 0.6, 20000, 2.5, 100000, 6],
+    },
+  });
+  map.addSource('airports', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({
+    id: 'airports', type: 'circle', source: 'airports',
+    paint: {
+      'circle-radius': ['interpolate', ['linear'], ['get', 'pax'], 0, 3, 50000, 7, 200000, 12],
+      'circle-color': ['case', ['>', ['get', 'vc'], 1], '#d9452f', '#b04a9c'],
+      'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1.5,
+    },
+  });
+  map.addLayer({
+    id: 'airport-labels', type: 'symbol', source: 'airports', minzoom: 6.5,
+    layout: { 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 11, 'text-offset': [0, 1.1], 'text-anchor': 'top' },
+    paint: { 'text-color': '#7a3d70', 'text-halo-color': '#ffffff', 'text-halo-width': 1.2 },
   });
 
   map.addSource('draft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -182,5 +303,6 @@ export function legendHTML(metric) {
     <div style="margin-top:6px">도로 혼잡도 (V/C)</div>
     <div class="ramp" style="background:linear-gradient(to right,#3f9e63,#c5c23a,#e8962c,#d9452f,#7d1d16)"></div>
     <div class="ends"><span>여유</span><span>1.0</span><span>정체</span></div>
-    <div style="margin-top:6px"><span style="color:#2453c9">━</span> 고속철 <span style="color:#6c3fa0">━</span> 일반철도 <span style="color:#1a9a6c">━</span> 도시철도<br>(굵기 = 이용객)</div>`;
+    <div style="margin-top:6px"><span style="color:#2453c9">━</span> 고속철 <span style="color:#6c3fa0">━</span> 일반철도 <span style="color:#1a9a6c">━</span> 도시철도 (노선색)<br>
+      <span style="color:#b04a9c">●</span> 공항·항공 노선 <span style="color:#2b7bb9">┅</span> 여객선 <span style="color:#7a7f86">┅</span> 국경 연결<br>(굵기·크기 = 이용객)</div>`;
 }

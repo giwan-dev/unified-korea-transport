@@ -4,9 +4,15 @@ import { Namer } from './game/naming.js';
 import {
   newGame, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
   updateCongestion, defaultFix, updateApproval, canAfford, isKP, linksUnderWork, UPGRADES, NEW_BUILDS, upgradeCost,
+  placeName, setPlaceName, startRestoreName, RENAME, startAirport, startAirportExpand,
 } from './game/state.js';
+import { AIRPORT } from './game/catalog.js';
+import { setNameResolver, refreshNames } from './ui/map.js';
 import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.js';
 import { kmBetween } from './sim/model.js';
+import { decodeNetwork } from './data/netpack.js';
+import { smoothSegments, polylineKm } from './game/curve.js';
+import { extendWorld } from './game/world.js';
 
 const $ = (s) => document.querySelector(s);
 const CLASS_LABEL = { motorway: '고속도로', trunk: '간선국도', primary: '주요 도로', secondary: '지방 도로', hsr: '고속철도', conv: '일반철도', metro: '도시철도' };
@@ -18,25 +24,41 @@ let metric = 'pop';
 let selection = null;      // {type:'link'|'zone'|'node', id}
 let draft = null;          // 그리기 중인 신설 사업
 let busy = false;
+let historic = [];         // 옛 이름 되찾기 대상 (data/historic_targets.json)
+let happiness = null;      // 존별 주민 행복도 (0~100)
+let lastIncome = null;
 let wholeRoute = false;    // 개량을 같은 이름 노선 전체에 적용
 
-init().catch((e) => { console.error(e); alert('불러오기 실패: ' + e.message); });
 
 async function init() {
-  const [z, n, p, g] = await Promise.all([
-    fetch('data/zones.geojson').then((r) => r.json()),
-    fetch('data/network.json').then((r) => r.json()),
-    fetch('data/places.json').then((r) => r.json()),
-    fetch('data/grid.bin').then((r) => r.arrayBuffer()),
+  // 1) 데이터 내려받기 (큰 파일은 진행률을 보인다)
+  loading.stage('data');
+  const dl = new Progress((v) => loading.progress('data', v));
+  const [z, nmeta, nbin, g, meta, world] = await Promise.all([
+    dl.fetch('data/zones.json', 'json'),
+    dl.fetch('data/network.meta.json', 'json'),
+    dl.fetch('data/network.bin', 'buffer'),
+    dl.fetch('data/grid.bin', 'buffer'),
+    fetch('data/meta.json').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    dl.fetch('data/air_sea.json', 'json'),
   ]);
-  zonesFC = z; base = n; places = p; grid = new Float32Array(g);
-  zoneProps = zonesFC.features.map((f) => f.properties);
-  // 읍면동 경계는 지도에만 쓰므로 기다리지 않는다
-  const subsReady = fetch('data/subzones.geojson').then((r) => r.json()).then((fc) => { subsFC = fc; });
+  zoneProps = z; base = decodeNetwork(nmeta, nbin); grid = new Float32Array(g);
+  // 국외 거점·국경 연결·여객선 항로·공항
+  extendWorld(base, zoneProps, world);
+  // 존 경계는 배경지도와 같은 시군구 도형을 쓴다
+  zonesFC = await dl.fetch('data/admin/sgg.geojson', 'json');
+  // 지명은 새 역·IC 이름을 지을 때만 필요하므로 첫 화면 뒤에 받는다
+  const placesReady = fetch('data/places.json').then((r) => r.json()).then((p) => { places = p; });
+  fetch('data/historic_targets.json').then((r) => (r.ok ? r.json() : [])).then((h) => { historic = h; }).catch(() => {});
   subPop0 = zoneProps.flatMap((zp) => zp.subs.map((s) => s[2] * zp.pop));
   state = load() || newGame('normal');
+  const baseline = await loadBaseline(meta);
+  loading.done('data');
+  // 읍면동 경계는 지도에만 쓰므로 기다리지 않는다
+  const subsReady = fetch('data/subzones.geojson').then((r) => r.json()).then((fc) => { subsFC = fc; });
 
-  // 지도가 뜨는 동안 기준 연도 계산을 먼저 시작한다
+  // 2) 시뮬레이션: 지도가 뜨는 동안 먼저 시작한다
+  loading.stage('sim');
   worker = new Worker(new URL('./sim/worker.js', import.meta.url), { type: 'module' });
   worker.onmessage = (ev) => {
     if (ev.data.type === 'result') mapReady.then(() => onWorker(ev));
@@ -44,24 +66,102 @@ async function init() {
   };
   worker.postMessage({
     type: 'init', zones: zoneProps, grid: grid.buffer.slice(0), net: effectiveNetwork(base, state),
-    ctx: ctx(), snapshot: state.snapshot,
-  });
-  setBusy(true, '데이터 준비 중', 0);
+    ctx: ctx(), snapshot: state.snapshot, baseline,
+  }, baseline ? [baseline.bin] : []);
 
+  // 3) 지도
+  loading.stage('map');
   const mapReady = createMap('map').then((m) => {
+    window.__map = m;
     map = m;
     addLayers(map, zonesFC, linksFC(), { type: 'FeatureCollection', features: [] });
+    setNameResolver((level, id, original) => placeName(state, level, id, original));
+    refreshNames(map);
     subsReady.then(() => map.getSource('subs').setData(subsFC));
     refreshPoints();
-    resetNamer();
+    placesReady.then(resetNamer);
     bindMap();
     bindUI();
     renderAll();
+    loading.done('map');
   });
   await mapReady;
   // 콘솔 디버깅용
   window.ukt = { map, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
+
+/** 미리 계산한 기준 연도 (데이터 버전이 맞을 때만) */
+async function loadBaseline(meta) {
+  if (!meta) return null;
+  try {
+    const json = await fetch('data/baseline.json').then((r) => (r.ok ? r.json() : null));
+    if (!json || json.meta?.stamp !== meta.stamp) return null;
+    const bin = await fetch('data/baseline.bin').then((r) => r.arrayBuffer());
+    return { json, bin };
+  } catch { return null; }
+}
+
+/** 여러 파일을 받으며 전체 진행률을 알린다 */
+class Progress {
+  constructor(onChange) { this.onChange = onChange; this.files = new Map(); }
+
+  update() {
+    let got = 0, total = 0;
+    for (const f of this.files.values()) { got += f.got; total += f.total; }
+    this.onChange(total ? got / total : 0);
+  }
+
+  async fetch(url, as) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`${url} ${r.status}`);
+    // 압축 전송이면 Content-Length가 실제 길이보다 작을 수 있어 받은 만큼 늘려 잡는다
+    const rec = { got: 0, total: +r.headers.get('Content-Length') || 0 };
+    this.files.set(url, rec);
+    const reader = r.body.getReader();
+    const chunks = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      rec.got += value.length;
+      if (rec.got > rec.total) rec.total = rec.got;
+      this.update();
+    }
+    rec.total = rec.got;
+    this.update();
+    const buf = new Uint8Array(rec.got);
+    let o = 0;
+    for (const c of chunks) { buf.set(c, o); o += c.length; }
+    return as === 'json' ? JSON.parse(new TextDecoder().decode(buf)) : buf.buffer;
+  }
+}
+
+/** 처음 불러오는 동안 보이는 화면. 단계: data → sim → map (sim과 map은 함께 진행) */
+const loading = {
+  item(id) { return document.querySelector(`#loading [data-stage=${id}]`); },
+  stage(id) { this.item(id)?.classList.add('now'); },
+  progress(id, v) {
+    this.stage(id);
+    const bar = this.item(id)?.querySelector('.p');
+    if (bar) bar.style.width = `${Math.round(v * 100)}%`;
+  },
+  label(id, text) {
+    const t = this.item(id)?.querySelector('.s');
+    if (t) t.textContent = text;
+  },
+  done(id) {
+    const li = this.item(id);
+    if (!li) return;
+    li.classList.remove('now');
+    li.classList.add('ok');
+    const all = [...document.querySelectorAll('#loading [data-stage]')];
+    if (all.every((x) => x.classList.contains('ok'))) {
+      const el = document.querySelector('#loading');
+      el.classList.add('gone');
+      setTimeout(() => el.remove(), 400);
+    }
+  },
+};
 
 function ctx() {
   return { integration: state.integration, policy: state.policy };
@@ -81,12 +181,16 @@ function resetNamer() {
 
 function onWorker(ev) {
   const m = ev.data;
-  if (m.type === 'progress') setBusy(true, m.label, m.value);
+  if (m.type === 'progress') {
+    setBusy(true, m.label, m.value);
+    if (!result) { loading.progress('sim', m.value); loading.label('sim', m.label); }
+  }
   else if (m.type === 'error') { setBusy(false); console.error(m.message); alert('시뮬레이션 오류\n' + m.message); }
   else if (m.type === 'result') applyResult(m);
 }
 
 function applyResult(res) {
+  loading.done('sim');
   const stepped = result !== null && pendingStep;
   pendingStep = false;
   result = res;
@@ -97,11 +201,16 @@ function applyResult(res) {
     map.setFeatureState({ source: 'links', id: i }, { vc: vc[i], vol: vol[i] });
   }
   paintZones();
+  paintAir(res.air);
 
   requests = updateCongestion(base, state, vc, stepped || !state.history.length);
+  const prevHappy = happiness ? avgHappiness() : null;
+  happiness = computeHappiness(res);
   if (stepped) {
     if (DIFFICULTY[state.difficulty].autoApprove) autoApprove();
     updateApproval(state, requests, res.summary, prevSummary);
+    // 주민 행복도가 오르면 지지율도 오른다
+    if (prevHappy) state.approval = Math.max(0, Math.min(100, state.approval + 0.5 * (avgHappiness().all - prevHappy.all)));
   }
   prevSummary = res.summary;
   const congestedKm = roadCongestedKm(vc);
@@ -125,6 +234,7 @@ function nextYear() {
   if (busy || !result) return;
   cancelDraft();
   const done = advanceBudgetYear(base, state);
+  if (done.some((p) => p.kind === 'rename')) refreshNames(map);
   if (done.length) { refreshLinks(); refreshPoints(); }
   else refreshLinks();
   pendingStep = true;
@@ -142,6 +252,73 @@ function autoApprove() {
   }
   const work = linksUnderWork(state);
   requests = requests.filter((r) => !r.links.every((id) => work.has(id)));
+}
+
+/**
+ * 존별 주민 행복도 (0~100): HDI, 접근성, 대중교통 접근, 소득 증가, 사업 효과(옛 이름 되찾기 등)
+ */
+function computeHappiness(res) {
+  const z = res.zones, s = res.subs, Z = zoneProps.length;
+  const accRef = median(Array.from(z.access));
+  const transit = new Float64Array(Z), wsum = new Float64Array(Z);
+  zoneProps.forEach((zp, i) => zp.subs.forEach((_, k) => {
+    const sid = zp.sub0 + k;
+    if (!(s.pop[sid] > 0)) return;
+    transit[i] += Math.min(s.transit[sid], 120) * s.pop[sid];
+    wsum[i] += s.pop[sid];
+  }));
+  const h = new Float64Array(Z);
+  for (let i = 0; i < Z; i++) {
+    const tr = wsum[i] ? transit[i] / wsum[i] : 60;
+    const growth = lastIncome ? Math.min(1, Math.max(0, 0.5 + (z.income[i] / lastIncome[i] - 1) * 5)) : 0.5;
+    h[i] = 100 * (0.55 * z.hdi[i] + 0.15 * Math.min(1, z.access[i] / accRef) + 0.15 * Math.exp(-tr / 25) + 0.15 * growth)
+      + (state.happyBonus?.[i] || 0);
+  }
+  lastIncome = Float64Array.from(z.income);
+  return h;
+}
+
+function avgHappiness() {
+  const p = result.zones.pop;
+  const out = { KR: [0, 0], KP: [0, 0], all: 0 };
+  zoneProps.forEach((zp, i) => { if (zp.ext) return; const c = out[zp.country]; c[0] += happiness[i] * p[i]; c[1] += p[i]; });
+  const tot = out.KR[1] + out.KP[1];
+  out.all = (out.KR[0] + out.KP[0]) / tot;
+  out.KR = out.KR[0] / out.KR[1];
+  out.KP = out.KP[0] / out.KP[1];
+  return out;
+}
+
+function zoneName(i) { return placeName(state, 'zone', i, zoneProps[i].name); }
+
+/** 공항(원 크기 = 여객)과 주요 항공 노선 */
+function paintAir(air) {
+  const aps = effectiveNetwork(base, state).airports;
+  const byId = new Map(aps.map((a) => [a.id, a]));
+  const pts = aps.map((a) => {
+    const k = air.ids.indexOf(a.id);
+    const pax = k >= 0 ? air.pax[k] : 0;
+    return { type: 'Feature', properties: { id: a.id, name: a.name, pax, vc: pax / ((a.cap * 1e6) / 365), ext: a.ext ? 1 : 0 },
+      geometry: { type: 'Point', coordinates: [a.lon, a.lat] } };
+  });
+  const lines = air.routes.map(([a, b, v]) => {
+    const A = byId.get(air.ids[a]), B = byId.get(air.ids[b]);
+    return { type: 'Feature', properties: { pax: v }, geometry: { type: 'LineString', coordinates: arc(A, B) } };
+  });
+  map.getSource('airports').setData({ type: 'FeatureCollection', features: pts });
+  map.getSource('airroutes').setData({ type: 'FeatureCollection', features: lines });
+}
+
+// 항공 노선은 살짝 휜 호로 그린다
+function arc(a, b) {
+  const mx = (a.lon + b.lon) / 2, my = (a.lat + b.lat) / 2;
+  const dx = b.lon - a.lon, dy = b.lat - a.lat;
+  const cx = mx - dy * 0.15, cy = my + dx * 0.15;
+  const out = [];
+  for (let t = 0; t <= 1.0001; t += 0.1) {
+    out.push([(1 - t) ** 2 * a.lon + 2 * (1 - t) * t * cx + t * t * b.lon, (1 - t) ** 2 * a.lat + 2 * (1 - t) * t * cy + t * t * b.lat]);
+  }
+  return out;
 }
 
 function roadCongestedKm(vc) {
@@ -171,7 +348,7 @@ function linksFC() {
     for (let k = 0; k < g.length; k += 2) coords.push([g[k], g[k + 1]]);
     return {
       type: 'Feature', id: i,
-      properties: { id: i, mode: eff.mode, cls: eff.cls, building: building.has(i) ? 1 : 0 },
+      properties: { id: i, mode: eff.mode, cls: eff.cls, building: building.has(i) ? 1 : 0, colour: eff.colour || '', ext: eff.ext ? 1 : 0 },
       geometry: { type: 'LineString', coordinates: coords },
     };
   });
@@ -250,6 +427,7 @@ function paintZones() {
     else if (metric === 'hdi') v = z.hdi[i];
     else if (metric === 'income') v = z.income[i];
     else if (metric === 'access') v = z.access[i] / accRef;
+    else if (metric === 'happiness') v = happiness?.[i];
     map.setFeatureState({ source: 'zones', id: i }, { color: sub ? null : colorFor(metric, v) });
   }
 }
@@ -273,11 +451,14 @@ function subArea(i) {
 
 function bindMap() {
   map.on('click', (e) => {
+    if (draft?.type === 'airport') { placeAirport(e.lngLat); return; }
     if (draft) { addDraftPoint(e.lngLat); return; }
     const box = [[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]];
+    const ap = map.queryRenderedFeatures(box, { layers: ['airports'] })[0];
+    if (ap) return select({ type: 'airport', id: ap.properties.id });
     const pt = map.queryRenderedFeatures(box, { layers: ['points'] })[0];
     if (pt) return select({ type: 'node', id: pt.properties.node });
-    const ln = map.queryRenderedFeatures(box, { layers: ['rails', 'metro', 'roads', 'links-building'] })[0];
+    const ln = map.queryRenderedFeatures(box, { layers: ['rails', 'metro', 'roads', 'ferries', 'ext-links', 'links-building'] })[0];
     if (ln) return select({ type: 'link', id: ln.properties.id });
     if (METRICS[metric]?.sub) {
       const sb = map.queryRenderedFeatures(e.point, { layers: ['subs-fill'] })[0];
@@ -308,6 +489,7 @@ function select(sel) {
 // ------------------------------------------------------------ 신설 그리기
 
 function startDraft(type) {
+  if (!namer) { alert('지명 데이터를 아직 불러오는 중입니다. 잠시 후 다시 눌러 주세요.'); return; }
   cancelDraft();
   select(null);
   draft = { type, points: [] };
@@ -354,6 +536,17 @@ function nearestNode(lngLat, mode, maxPx, maxKm) {
   return best;
 }
 
+/** 공항 신설: 한 번 누른 곳에 공항을 놓는다 */
+function placeAirport(lngLat) {
+  const p = namer.nearbyPlaces(lngLat.lng, lngLat.lat)[0];
+  const name = `${p ? p[0].replace(/(특별시|광역시|직할시|시|군|구|읍|면|동|리)$/, '') : '신'}공항`;
+  if (!confirm(`${name}을(를) 신설할까요? ${formatWon(AIRPORT.build.cost)} · ${AIRPORT.build.years}년`)) return;
+  const r = startAirport(state, { lon: lngLat.lng, lat: lngLat.lat, name });
+  if (!r.ok) { alert(r.reason); return; }
+  cancelDraft();
+  save(state); renderAll(); switchTab('projects');
+}
+
 function addDraftPoint(lngLat) {
   const spec = NEW_BUILDS[draft.type];
   let node = nearestNode(lngLat, spec.mode, 14);
@@ -389,7 +582,8 @@ function nameDraftPoint(pt) {
 function drawDraft() {
   const f = draft.points.map((p) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [p.lon, p.lat] } }));
   if (draft.points.length > 1) {
-    f.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: draft.points.map((p) => [p.lon, p.lat]) } });
+    const line = smoothSegments(draft.points).flatMap((seg, i) => (i ? seg.slice(1) : seg));
+    f.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } });
   }
   map.getSource('draft').setData({ type: 'FeatureCollection', features: f });
 }
@@ -397,9 +591,10 @@ function drawDraft() {
 function draftCost() {
   const spec = NEW_BUILDS[draft.type];
   let km = 0, cost = 0;
+  const segs = smoothSegments(draft.points);
   for (let i = 0; i + 1 < draft.points.length; i++) {
     const a = draft.points[i], b = draft.points[i + 1];
-    const len = kmBetween(a.lon, a.lat, b.lon, b.lat) * 1.1;
+    const len = polylineKm(segs[i]) * 1.02;
     const kp = isKP(a.lat, a.lon) && isKP(b.lat, b.lon);
     km += len; cost += spec.perKm * len * (kp ? KP_COST_FACTOR : 1);
   }
@@ -501,12 +696,14 @@ function renderStatus() {
       <tr><td>인구</td><td>${fmtPop(s.KR.pop)}</td><td>${fmtPop(s.KP.pop)}</td><td>${fmtPop(tot)}</td></tr>
       <tr><td>HDI</td><td>${s.KR.hdi.toFixed(3)}</td><td>${s.KP.hdi.toFixed(3)}</td><td>${((s.KR.hdi * s.KR.pop + s.KP.hdi * s.KP.pop) / tot).toFixed(3)}</td></tr>
       <tr><td>1인당 소득</td><td>$${Math.round(s.KR.income).toLocaleString()}</td><td>$${Math.round(s.KP.income).toLocaleString()}</td><td>${(s.KR.income / s.KP.income).toFixed(1)}배 격차</td></tr>
+      ${happiness ? (() => { const a = avgHappiness(); return `<tr><td>주민 행복도</td><td>${a.KR.toFixed(1)}</td><td>${a.KP.toFixed(1)}</td><td>${a.all.toFixed(1)}</td></tr>`; })() : ''}
     </table>
     <h4>교통</h4>
     <table class="kv">
       <tr><td>지역 간 통행 (일)</td><td>${fmtPop(t.trips)} 통행</td></tr>
       <tr><td>수단 분담 (승용차·철도·대중교통)</td><td>${pct(t.road / t.trips, 0)} · ${pct(t.rail / t.trips, 0)} · ${pct(t.transit / t.trips, 0)}</td></tr>
       <tr><td>남북 간 통행 (일)</td><td>${fmtPop(t.kpkr)} 통행</td></tr>
+      <tr><td>항공 · 국제 통행 (일)</td><td>${fmtPop(t.air || 0)} · ${fmtPop(t.intl || 0)}</td></tr>
       <tr><td>정체 도로 (V/C&gt;1)</td><td>${Math.round(cong).toLocaleString()} km</td></tr>
     </table>
     <h4>인구 이동 (지난 1년)</h4>
@@ -526,9 +723,16 @@ function renderStatus() {
 function renderBuild() {
   const el = $('[data-panel=build]');
   const tools = Object.entries(NEW_BUILDS).map(([k, v]) =>
-    `<button data-build="${k}" class="${draft?.type === k ? 'on' : ''}">${v.label}<span class="c">${formatWon(v.perKm)}/km · ${v.years}년</span></button>`).join('');
+    `<button data-build="${k}" class="${draft?.type === k ? 'on' : ''}">${v.label}<span class="c">${formatWon(v.perKm)}/km · ${v.years}년</span></button>`).join('')
+    + `<button data-build="airport" class="${draft?.type === 'airport' ? 'on' : ''}">${AIRPORT.build.label}<span class="c">${formatWon(AIRPORT.build.cost)} · ${AIRPORT.build.years}년</span></button>`;
   let body = `<p class="hint">기존 도로·철도를 개량하려면 지도에서 구간을 누르세요. 새 노선을 놓으려면 아래에서 종류를 고른 뒤 지도를 차례로 누르세요.</p>`;
   if (draft) {
+    if (draft.type === 'airport') {
+      el.innerHTML = `<h4>${AIRPORT.build.label}</h4><p class="hint">공항을 놓을 곳을 지도에서 한 번 누르세요. ${formatWon(AIRPORT.build.cost)} · ${AIRPORT.build.years}년 · 연 ${AIRPORT.build.cap}백만 명. Esc: 취소</p>
+        <button id="draft-cancel">취소</button>`;
+      $('#draft-cancel').onclick = cancelDraft;
+      return;
+    }
     const spec = NEW_BUILDS[draft.type];
     const { km, cost, years } = draftCost();
     const affordable = canAfford(state, cost, years);
@@ -547,7 +751,11 @@ function renderBuild() {
         <button id="draft-cancel">취소</button>
       </div>`;
   }
-  el.innerHTML = `<div class="tools">${tools}</div>${body}`;
+  const restore = historic.length ? `<h4>옛 이름 되찾기</h4>
+    <p class="hint">북측에서 지도자 이름이나 선전 구호로 바뀐 지명을 바뀌기 전 이름으로 돌립니다. 표지판·행정 문서·지도를 바꾸는 데 예산이 들고, 완공되면 그 지역 주민 행복도가 오릅니다.</p>
+    <div class="list">${historic.map((t) => restoreRow(t)).join('')}</div>` : '';
+  el.innerHTML = `<div class="tools">${tools}</div>${body}${draft ? '' : restore}`;
+  bindRestore(el);
   el.querySelectorAll('[data-build]').forEach((b) => { b.onclick = () => startDraft(b.dataset.build); });
   if (draft) {
     $('#draft-ok').onclick = commitDraft;
@@ -622,7 +830,7 @@ function renderRequests() {
   c.textContent = requests.length;
   el.innerHTML = `<h3>확장 요구</h3>
     <p class="hint">혼잡도(V/C)가 1.0을 넘는 상태가 2년 이상 이어진 노선입니다(남은 고속도로·간선국도, 북은 모든 도로, 그리고 철도). 방치하면 지지율이 떨어집니다. 넓혀도 통행비용이 줄면 수요가 다시 늘 수 있습니다.</p>
-    <div class="list">${requests.slice(0, 40).map((r, i) => {
+    <div class="list">${requests.map((r, i) => {
       const l = linkAt(base, state, r.links[0]);
       const fix = defaultFix(l);
       const cost = fix ? r.links.reduce((sum, id) => sum + upgradeCost(fix, linkAt(base, state, id)), 0) : 0;
@@ -697,6 +905,7 @@ function renderSelection() {
   if (selection.type === 'link') el.innerHTML = linkPanel(selection.id);
   else if (selection.type === 'zone') el.innerHTML = zonePanel(selection.id);
   else if (selection.type === 'sub') el.innerHTML = subPanel(selection.id);
+  else if (selection.type === 'airport') el.innerHTML = airportPanel(selection.id);
   else el.innerHTML = nodePanel(selection.id);
   el.querySelector('.close')?.addEventListener('click', () => select(null));
   el.querySelectorAll('[data-up]').forEach((b) => {
@@ -709,11 +918,39 @@ function renderSelection() {
   });
   const wr = el.querySelector('#whole-route');
   if (wr) wr.onchange = () => { wholeRoute = wr.checked; renderSelection(); };
+  bindRestore(el);
+  el.querySelector('#ap-expand')?.addEventListener('click', () => {
+    const ap = effectiveNetwork(base, state).airports.find((a) => a.id === selection.id);
+    const r = startAirportExpand(state, ap);
+    if (!r.ok) return alert(r.reason);
+    save(state); renderAll();
+  });
+  const zn = el.querySelector('#zone-name');
+  if (zn) {
+    el.querySelector('#zone-rename').onclick = () => {
+      const v = zn.value.trim();
+      if (!v) return;
+      setPlaceName(state, 'zone', selection.id, v);
+      save(state); refreshNames(map); renderAll();
+    };
+  }
   const inp = el.querySelector('#node-name');
   if (inp) {
     el.querySelector('#node-save').onclick = () => renameNode(selection.id, inp.value.trim());
     el.querySelector('#node-auto').onclick = () => autoRenameNode(selection.id);
   }
+}
+
+function bindRestore(el) {
+  el.querySelectorAll('[data-restore]').forEach((b) => {
+    b.onclick = () => {
+      const [level, id] = b.dataset.restore.split(':');
+      const t = historic.find((x) => x.level === level && x.id === +id);
+      const r = startRestoreName(state, t);
+      if (!r.ok) return alert(r.reason);
+      save(state); renderAll();
+    };
+  });
 }
 
 function header(title) {
@@ -726,7 +963,7 @@ function linkPanel(id) {
   const speed = result ? result.links.speed[id] : 0;
   const busyProj = state.projects.find((p) => p.status === 'building' && p.links.includes(id));
   const isRoad = l.mode === 0;
-  const ups = UPGRADES.filter((u) => u.mode === l.mode && u.applies(l));
+  const ups = l.ext || l.cls === 'ferry' ? [] : UPGRADES.filter((u) => u.mode === l.mode && u.applies(l));
   const route = sameRoute(id);
   const routeKm = route.reduce((sum, x) => sum + linkAt(base, state, x).len, 0);
   const rows = l.mode === 2
@@ -774,15 +1011,18 @@ function sameRoute(id) {
 
 function zonePanel(id) {
   const z = zoneProps[id];
-  if (!result) return header(z.name);
+  const name = zoneName(id);
+  if (!result) return header(name);
   const r = result.zones;
   const st = r.station[id];
   const stName = st >= 0 ? nodeNames().get(st)?.name : null;
   const change = r.pop[id] / Math.max(z.pop, 1) - 1;
   const accRef = median(Array.from(r.access));
-  return `${header(z.name)}
+  const targets = historic.filter((t) => t.zone === id);
+  return `${header(name)}
     <table class="kv">
-      <tr><td>소속</td><td>${esc(z.province)} (${z.country === 'KP' ? '북' : '남'})</td></tr>
+      <tr><td>소속</td><td>${esc(z.province)} (${z.country === 'KP' ? '북' : '남'})${name !== z.name ? ` · 원래 이름 ${esc(z.name)}` : ''}</td></tr>
+      ${happiness ? `<tr><td>주민 행복도</td><td>${happiness[id].toFixed(1)}</td></tr>` : ''}
       <tr><td>인구</td><td>${fmtPop(r.pop[id])} <span class="${change >= 0 ? 'pos' : 'neg'}">(${change >= 0 ? '+' : ''}${pct(change)})</span></td></tr>
       <tr><td>지난해 순이동</td><td>${Math.round(r.netMig[id]).toLocaleString()}명</td></tr>
       <tr><td>HDI</td><td>${r.hdi[id].toFixed(3)}</td></tr>
@@ -790,7 +1030,23 @@ function zonePanel(id) {
       <tr><td>1인당 소득</td><td>$${Math.round(r.income[id]).toLocaleString()}</td></tr>
       <tr><td>접근성 (중앙값=1)</td><td>${(r.access[id] / accRef).toFixed(2)}</td></tr>
       <tr><td>이용 철도역</td><td>${stName ? esc(stName) : '없음 (25km 밖)'}</td></tr>
-    </table>`;
+    </table>
+    ${targets.map((t) => restoreRow(t)).join('')}
+    <h4>이름 바꾸기</h4>
+    <div class="name-row"><input type="text" id="zone-name" value="${esc(name)}">
+      <button class="small" id="zone-rename">바꾸기</button></div>
+    <p class="hint">직접 바꾸는 이름은 비용이 들지 않지만 주민 행복도에는 영향이 없습니다.</p>`;
+}
+
+/** 옛 이름 되찾기 사업 한 줄 (지역 패널·건설 탭에서 함께 쓴다) */
+function restoreRow(t) {
+  const r = RENAME[t.level];
+  const proj = state.projects.find((p) => p.kind === 'rename' && p.key === `${t.level === 'zone' ? 'z' : 'u'}:${t.id}`);
+  const status = proj ? (proj.status === 'done' ? '완료' : `${proj.doneYear}년 완료 예정`) : '';
+  return `<div class="item"><div class="t">${esc(t.current)} → ${esc(t.historic)}</div>
+    <div class="m">${t.year}년 개칭 · ${esc(t.reason)}</div>
+    <div class="row">${status ? `<span class="m">${status}</span>`
+      : `<button class="small primary" data-restore="${t.level}:${t.id}">옛 이름 되찾기 ${formatWon(r.cost)} · ${r.years}년 · 행복도 +${r.bonus}</button>`}</div></div>`;
 }
 
 function subPanel(i) {
@@ -809,6 +1065,24 @@ function subPanel(i) {
       <tr><td>지역 간 철도역 접근 (대기 포함)</td><td>${s.rail[i] >= 120 ? '역 없음' : Math.round(s.rail[i]) + '분'}</td></tr>
     </table>
     <p class="hint">해마다 주민 일부가 같은 시군구 안에서 대중교통·철도 접근이 좋고 덜 붐비는 곳으로 옮겨 갑니다. 새 역을 놓으면 주변 인구가 늘어납니다.</p>`;
+}
+
+function airportPanel(id) {
+  const ap = effectiveNetwork(base, state).airports.find((a) => a.id === id);
+  if (!ap) return header('공항');
+  const k = result?.air.ids.indexOf(id) ?? -1;
+  const pax = k >= 0 ? result.air.pax[k] : 0, cap = (ap.cap * 1e6) / 365;
+  const busyProj = state.projects.find((p) => p.status === 'building' && p.airport === id);
+  const cost = Math.round(AIRPORT.expand.cost * (ap.country === 'KP' ? KP_COST_FACTOR : 1));
+  return `${header(ap.name)}
+    <table class="kv">
+      <tr><td>구분</td><td>${ap.ext ? '국외 공항' : ap.intl ? '국제공항' : '국내공항'}</td></tr>
+      <tr><td>일 여객 (출발+도착)</td><td>${Math.round(pax).toLocaleString()}명</td></tr>
+      <tr><td>용량</td><td>연 ${ap.cap}백만 명 (일 ${Math.round(cap).toLocaleString()}명)</td></tr>
+      <tr><td>혼잡도 (V/C)</td><td class="${pax > cap ? 'neg' : ''}">${(pax / cap).toFixed(2)}</td></tr>
+    </table>
+    ${ap.ext ? '' : busyProj ? `<p class="hint">공사 중: ${esc(busyProj.label)} (${busyProj.doneYear}년 완공)</p>`
+      : `<div class="row" style="margin-top:8px"><button class="small primary" id="ap-expand">${AIRPORT.expand.label} ${formatWon(cost)} · ${AIRPORT.expand.years}년</button></div>`}`;
 }
 
 function nodePanel(id) {
@@ -859,3 +1133,10 @@ function median(a) {
   const s = [...a].sort((x, y) => x - y);
   return s[Math.floor(s.length / 2)] || 1;
 }
+
+// 모듈의 모든 선언이 끝난 뒤 시작한다
+init().catch((e) => {
+  console.error(e);
+  const tip = document.querySelector('#loading .ld-tip');
+  if (tip) { tip.textContent = `불러오기 실패: ${e.message}`; tip.style.color = 'var(--bad)'; }
+});
