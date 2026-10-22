@@ -33,6 +33,7 @@ export function extendWorld(base, zoneProps, world) {
     });
     sub0 += 1;
     cityNode[f.id] = base.nodes.length;
+    (base.foreignNodes ||= []).push({ name: f.name, node: base.nodes.length, country: f.country });
     base.nodes.push([f.lon, f.lat]);
     base.stations.push([f.name, cityNode[f.id]]);
   }

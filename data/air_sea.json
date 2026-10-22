@@ -1,55 +1,699 @@
 {
-  "note": "공항·국외 거점·국경 통과점·여객선 항로. 좌표는 공개된 위치를 바탕으로 한 대략값이고, 용량(연간 여객 백만 명)과 국외 도시 인구·소득은 게임용 가정값이다.",
-  "airports": [
-    { "id": "ICN", "name": "인천국제공항", "lon": 126.4407, "lat": 37.4602, "cap": 77, "intl": true },
-    { "id": "GMP", "name": "김포국제공항", "lon": 126.7906, "lat": 37.5583, "cap": 37, "intl": true },
-    { "id": "PUS", "name": "김해국제공항", "lon": 128.9382, "lat": 35.1795, "cap": 23, "intl": true },
-    { "id": "CJU", "name": "제주국제공항", "lon": 126.4930, "lat": 33.5113, "cap": 32, "intl": true },
-    { "id": "TAE", "name": "대구국제공항", "lon": 128.6589, "lat": 35.8941, "cap": 4, "intl": true },
-    { "id": "CJJ", "name": "청주국제공항", "lon": 127.4991, "lat": 36.7166, "cap": 4, "intl": true },
-    { "id": "KWJ", "name": "광주공항", "lon": 126.8089, "lat": 35.1264, "cap": 3 },
-    { "id": "MWX", "name": "무안국제공항", "lon": 126.3828, "lat": 34.9914, "cap": 5, "intl": true },
-    { "id": "RSU", "name": "여수공항", "lon": 127.6169, "lat": 34.8423, "cap": 2 },
-    { "id": "USN", "name": "울산공항", "lon": 129.3518, "lat": 35.5935, "cap": 2 },
-    { "id": "KPO", "name": "포항경주공항", "lon": 129.4204, "lat": 35.9879, "cap": 1 },
-    { "id": "HIN", "name": "사천공항", "lon": 128.0703, "lat": 35.0886, "cap": 1 },
-    { "id": "YNY", "name": "양양국제공항", "lon": 128.6692, "lat": 38.0613, "cap": 3, "intl": true },
-    { "id": "WJU", "name": "원주공항", "lon": 127.9604, "lat": 37.4381, "cap": 1 },
-    { "id": "KUV", "name": "군산공항", "lon": 126.6158, "lat": 35.9038, "cap": 1 },
-    { "id": "FNJ", "kp": true, "name": "평양순안국제공항", "lon": 125.6700, "lat": 39.2241, "cap": 2, "intl": true },
-    { "id": "WOS", "kp": true, "name": "원산갈마국제공항", "lon": 127.4860, "lat": 39.1668, "cap": 1, "intl": true },
-    { "id": "RGO", "kp": true, "name": "청진어랑비행장", "lon": 129.6475, "lat": 41.4280, "cap": 0.3 },
-    { "id": "DSO", "kp": true, "name": "함흥선덕비행장", "lon": 127.4730, "lat": 39.7450, "cap": 0.3 },
-    { "id": "YJS", "kp": true, "name": "삼지연비행장", "lon": 128.4098, "lat": 41.9071, "cap": 0.3 }
+ "note": "공항·국외 거점·국경 통과점·여객선 항로. 좌표는 공개된 위치를 바탕으로 한 대략값이고, 용량(연간 여객 백만 명)과 국외 도시 인구·소득은 게임용 가정값이다. routes는 [출발, 도착, 하루 왕복 운항 횟수]로, 실제 주요 노선을 바탕으로 한 대략값이다.",
+ "airports": [
+  {
+   "id": "ICN",
+   "name": "인천국제공항",
+   "lon": 126.4407,
+   "lat": 37.4602,
+   "cap": 77,
+   "intl": true
+  },
+  {
+   "id": "GMP",
+   "name": "김포국제공항",
+   "lon": 126.7906,
+   "lat": 37.5583,
+   "cap": 37,
+   "intl": true
+  },
+  {
+   "id": "PUS",
+   "name": "김해국제공항",
+   "lon": 128.9382,
+   "lat": 35.1795,
+   "cap": 23,
+   "intl": true
+  },
+  {
+   "id": "CJU",
+   "name": "제주국제공항",
+   "lon": 126.493,
+   "lat": 33.5113,
+   "cap": 32,
+   "intl": true
+  },
+  {
+   "id": "TAE",
+   "name": "대구국제공항",
+   "lon": 128.6589,
+   "lat": 35.8941,
+   "cap": 4,
+   "intl": true
+  },
+  {
+   "id": "CJJ",
+   "name": "청주국제공항",
+   "lon": 127.4991,
+   "lat": 36.7166,
+   "cap": 4,
+   "intl": true
+  },
+  {
+   "id": "KWJ",
+   "name": "광주공항",
+   "lon": 126.8089,
+   "lat": 35.1264,
+   "cap": 3
+  },
+  {
+   "id": "MWX",
+   "name": "무안국제공항",
+   "lon": 126.3828,
+   "lat": 34.9914,
+   "cap": 5,
+   "intl": true
+  },
+  {
+   "id": "RSU",
+   "name": "여수공항",
+   "lon": 127.6169,
+   "lat": 34.8423,
+   "cap": 2
+  },
+  {
+   "id": "USN",
+   "name": "울산공항",
+   "lon": 129.3518,
+   "lat": 35.5935,
+   "cap": 2
+  },
+  {
+   "id": "KPO",
+   "name": "포항경주공항",
+   "lon": 129.4204,
+   "lat": 35.9879,
+   "cap": 1
+  },
+  {
+   "id": "HIN",
+   "name": "사천공항",
+   "lon": 128.0703,
+   "lat": 35.0886,
+   "cap": 1
+  },
+  {
+   "id": "YNY",
+   "name": "양양국제공항",
+   "lon": 128.6692,
+   "lat": 38.0613,
+   "cap": 3,
+   "intl": true
+  },
+  {
+   "id": "WJU",
+   "name": "원주공항",
+   "lon": 127.9604,
+   "lat": 37.4381,
+   "cap": 1
+  },
+  {
+   "id": "KUV",
+   "name": "군산공항",
+   "lon": 126.6158,
+   "lat": 35.9038,
+   "cap": 1
+  },
+  {
+   "id": "FNJ",
+   "kp": true,
+   "name": "평양순안국제공항",
+   "lon": 125.67,
+   "lat": 39.2241,
+   "cap": 2,
+   "intl": true
+  },
+  {
+   "id": "WOS",
+   "kp": true,
+   "name": "원산갈마국제공항",
+   "lon": 127.486,
+   "lat": 39.1668,
+   "cap": 1,
+   "intl": true
+  },
+  {
+   "id": "RGO",
+   "kp": true,
+   "name": "청진어랑비행장",
+   "lon": 129.6475,
+   "lat": 41.428,
+   "cap": 0.3
+  },
+  {
+   "id": "DSO",
+   "kp": true,
+   "name": "함흥선덕비행장",
+   "lon": 127.473,
+   "lat": 39.745,
+   "cap": 0.3
+  },
+  {
+   "id": "YJS",
+   "kp": true,
+   "name": "삼지연비행장",
+   "lon": 128.4098,
+   "lat": 41.9071,
+   "cap": 0.3
+  }
+ ],
+ "foreign": [
+  {
+   "id": "DDG",
+   "name": "단둥",
+   "country": "CN",
+   "lon": 124.39,
+   "lat": 40.13,
+   "pop": 2.2,
+   "income": 15000
+  },
+  {
+   "id": "SHE",
+   "name": "선양",
+   "country": "CN",
+   "lon": 123.43,
+   "lat": 41.8,
+   "pop": 9.1,
+   "income": 20000
+  },
+  {
+   "id": "DLC",
+   "name": "다롄",
+   "country": "CN",
+   "lon": 121.6,
+   "lat": 38.91,
+   "pop": 7.5,
+   "income": 25000
+  },
+  {
+   "id": "CGQ",
+   "name": "창춘",
+   "country": "CN",
+   "lon": 125.32,
+   "lat": 43.88,
+   "pop": 9.0,
+   "income": 18000
+  },
+  {
+   "id": "YNJ",
+   "name": "옌지(연변)",
+   "country": "CN",
+   "lon": 129.51,
+   "lat": 42.9,
+   "pop": 2.0,
+   "income": 15000
+  },
+  {
+   "id": "HRB",
+   "name": "하얼빈",
+   "country": "CN",
+   "lon": 126.53,
+   "lat": 45.8,
+   "pop": 10.0,
+   "income": 16000
+  },
+  {
+   "id": "PEK",
+   "name": "베이징",
+   "country": "CN",
+   "lon": 116.4,
+   "lat": 39.9,
+   "pop": 21.9,
+   "income": 30000
+  },
+  {
+   "id": "TAO",
+   "name": "칭다오",
+   "country": "CN",
+   "lon": 120.38,
+   "lat": 36.07,
+   "pop": 10.0,
+   "income": 25000
+  },
+  {
+   "id": "SHA",
+   "name": "상하이",
+   "country": "CN",
+   "lon": 121.47,
+   "lat": 31.23,
+   "pop": 24.9,
+   "income": 33000
+  },
+  {
+   "id": "VVO",
+   "name": "블라디보스토크",
+   "country": "RU",
+   "lon": 131.89,
+   "lat": 43.12,
+   "pop": 0.6,
+   "income": 25000
+  },
+  {
+   "id": "FUK",
+   "name": "후쿠오카",
+   "country": "JP",
+   "lon": 130.4,
+   "lat": 33.59,
+   "pop": 5.5,
+   "income": 40000
+  },
+  {
+   "id": "KIX",
+   "name": "오사카",
+   "country": "JP",
+   "lon": 135.5,
+   "lat": 34.69,
+   "pop": 19.0,
+   "income": 42000
+  },
+  {
+   "id": "TYO",
+   "name": "도쿄",
+   "country": "JP",
+   "lon": 139.69,
+   "lat": 35.68,
+   "pop": 37.0,
+   "income": 47000
+  }
+ ],
+ "gateways": [
+  {
+   "name": "신의주–단둥",
+   "lon": 124.4,
+   "lat": 40.08,
+   "to": "DDG",
+   "road": true,
+   "rail": true
+  },
+  {
+   "name": "만포–지안",
+   "lon": 126.29,
+   "lat": 41.15,
+   "to": "SHE",
+   "road": true,
+   "rail": true
+  },
+  {
+   "name": "혜산–창바이",
+   "lon": 128.18,
+   "lat": 41.39,
+   "to": "YNJ",
+   "road": true,
+   "rail": false
+  },
+  {
+   "name": "남양–투먼",
+   "lon": 129.85,
+   "lat": 42.96,
+   "to": "YNJ",
+   "road": true,
+   "rail": true
+  },
+  {
+   "name": "두만강–하산",
+   "lon": 130.62,
+   "lat": 42.43,
+   "to": "VVO",
+   "road": true,
+   "rail": true
+  }
+ ],
+ "ferries": [
+  {
+   "name": "목포–제주",
+   "from": [
+    126.38,
+    34.78
+   ],
+   "to": [
+    126.54,
+    33.52
+   ],
+   "hours": 4.5
+  },
+  {
+   "name": "완도–제주",
+   "from": [
+    126.76,
+    34.31
+   ],
+   "to": [
+    126.54,
+    33.52
+   ],
+   "hours": 2.7
+  },
+  {
+   "name": "부산–제주",
+   "from": [
+    129.04,
+    35.1
+   ],
+   "to": [
+    126.54,
+    33.52
+   ],
+   "hours": 12
+  },
+  {
+   "name": "포항–울릉",
+   "from": [
+    129.38,
+    36.03
+   ],
+   "to": [
+    130.91,
+    37.48
+   ],
+   "hours": 3.3
+  },
+  {
+   "name": "인천–백령",
+   "from": [
+    126.6,
+    37.45
+   ],
+   "to": [
+    124.71,
+    37.97
+   ],
+   "hours": 4
+  },
+  {
+   "name": "부산–후쿠오카",
+   "from": [
+    129.04,
+    35.1
+   ],
+   "to": "FUK",
+   "hours": 3.5
+  }
+ ],
+ "routes": [
+  [
+   "GMP",
+   "CJU",
+   90
   ],
-  "foreign": [
-    { "id": "DDG", "name": "단둥", "country": "CN", "lon": 124.39, "lat": 40.13, "pop": 2.2, "income": 15000 },
-    { "id": "SHE", "name": "선양", "country": "CN", "lon": 123.43, "lat": 41.80, "pop": 9.1, "income": 20000 },
-    { "id": "DLC", "name": "다롄", "country": "CN", "lon": 121.60, "lat": 38.91, "pop": 7.5, "income": 25000 },
-    { "id": "CGQ", "name": "창춘", "country": "CN", "lon": 125.32, "lat": 43.88, "pop": 9.0, "income": 18000 },
-    { "id": "YNJ", "name": "옌지(연변)", "country": "CN", "lon": 129.51, "lat": 42.90, "pop": 2.0, "income": 15000 },
-    { "id": "HRB", "name": "하얼빈", "country": "CN", "lon": 126.53, "lat": 45.80, "pop": 10.0, "income": 16000 },
-    { "id": "PEK", "name": "베이징", "country": "CN", "lon": 116.40, "lat": 39.90, "pop": 21.9, "income": 30000 },
-    { "id": "TAO", "name": "칭다오", "country": "CN", "lon": 120.38, "lat": 36.07, "pop": 10.0, "income": 25000 },
-    { "id": "SHA", "name": "상하이", "country": "CN", "lon": 121.47, "lat": 31.23, "pop": 24.9, "income": 33000 },
-    { "id": "VVO", "name": "블라디보스토크", "country": "RU", "lon": 131.89, "lat": 43.12, "pop": 0.6, "income": 25000 },
-    { "id": "FUK", "name": "후쿠오카", "country": "JP", "lon": 130.40, "lat": 33.59, "pop": 5.5, "income": 40000 },
-    { "id": "KIX", "name": "오사카", "country": "JP", "lon": 135.50, "lat": 34.69, "pop": 19.0, "income": 42000 },
-    { "id": "TYO", "name": "도쿄", "country": "JP", "lon": 139.69, "lat": 35.68, "pop": 37.0, "income": 47000 }
+  [
+   "GMP",
+   "PUS",
+   30
   ],
-  "gateways": [
-    { "name": "신의주–단둥", "lon": 124.40, "lat": 40.08, "to": "DDG", "road": true, "rail": true },
-    { "name": "만포–지안", "lon": 126.29, "lat": 41.15, "to": "SHE", "road": true, "rail": true },
-    { "name": "혜산–창바이", "lon": 128.18, "lat": 41.39, "to": "YNJ", "road": true, "rail": false },
-    { "name": "남양–투먼", "lon": 129.85, "lat": 42.96, "to": "YNJ", "road": true, "rail": true },
-    { "name": "두만강–하산", "lon": 130.62, "lat": 42.43, "to": "VVO", "road": true, "rail": true }
+  [
+   "GMP",
+   "KWJ",
+   10
   ],
-  "ferries": [
-    { "name": "목포–제주", "from": [126.38, 34.78], "to": [126.54, 33.52], "hours": 4.5 },
-    { "name": "완도–제주", "from": [126.76, 34.31], "to": [126.54, 33.52], "hours": 2.7 },
-    { "name": "부산–제주", "from": [129.04, 35.10], "to": [126.54, 33.52], "hours": 12 },
-    { "name": "포항–울릉", "from": [129.38, 36.03], "to": [130.91, 37.48], "hours": 3.3 },
-    { "name": "인천–백령", "from": [126.60, 37.45], "to": [124.71, 37.97], "hours": 4 },
-    { "name": "부산–후쿠오카", "from": [129.04, 35.10], "to": "FUK", "hours": 3.5 }
+  [
+   "GMP",
+   "USN",
+   10
+  ],
+  [
+   "GMP",
+   "RSU",
+   8
+  ],
+  [
+   "GMP",
+   "KPO",
+   4
+  ],
+  [
+   "GMP",
+   "HIN",
+   2
+  ],
+  [
+   "GMP",
+   "TAE",
+   2
+  ],
+  [
+   "GMP",
+   "YNY",
+   2
+  ],
+  [
+   "CJU",
+   "PUS",
+   30
+  ],
+  [
+   "CJU",
+   "TAE",
+   20
+  ],
+  [
+   "CJU",
+   "CJJ",
+   20
+  ],
+  [
+   "CJU",
+   "KWJ",
+   12
+  ],
+  [
+   "CJU",
+   "MWX",
+   4
+  ],
+  [
+   "CJU",
+   "RSU",
+   4
+  ],
+  [
+   "CJU",
+   "USN",
+   4
+  ],
+  [
+   "CJU",
+   "YNY",
+   3
+  ],
+  [
+   "CJU",
+   "WJU",
+   2
+  ],
+  [
+   "CJU",
+   "KUV",
+   3
+  ],
+  [
+   "CJU",
+   "ICN",
+   2
+  ],
+  [
+   "ICN",
+   "PUS",
+   3
+  ],
+  [
+   "ICN",
+   "TAE",
+   2
+  ],
+  [
+   "FNJ",
+   "WOS",
+   1
+  ],
+  [
+   "FNJ",
+   "RGO",
+   1
+  ],
+  [
+   "FNJ",
+   "YJS",
+   1
+  ],
+  [
+   "FNJ",
+   "DSO",
+   1
+  ],
+  [
+   "ICN",
+   "TYO",
+   40
+  ],
+  [
+   "ICN",
+   "KIX",
+   30
+  ],
+  [
+   "ICN",
+   "FUK",
+   20
+  ],
+  [
+   "ICN",
+   "SHA",
+   25
+  ],
+  [
+   "ICN",
+   "PEK",
+   20
+  ],
+  [
+   "ICN",
+   "TAO",
+   15
+  ],
+  [
+   "ICN",
+   "DLC",
+   8
+  ],
+  [
+   "ICN",
+   "SHE",
+   10
+  ],
+  [
+   "ICN",
+   "CGQ",
+   4
+  ],
+  [
+   "ICN",
+   "HRB",
+   4
+  ],
+  [
+   "ICN",
+   "YNJ",
+   4
+  ],
+  [
+   "ICN",
+   "VVO",
+   6
+  ],
+  [
+   "ICN",
+   "DDG",
+   2
+  ],
+  [
+   "GMP",
+   "TYO",
+   12
+  ],
+  [
+   "GMP",
+   "KIX",
+   6
+  ],
+  [
+   "GMP",
+   "SHA",
+   6
+  ],
+  [
+   "GMP",
+   "PEK",
+   4
+  ],
+  [
+   "PUS",
+   "FUK",
+   8
+  ],
+  [
+   "PUS",
+   "KIX",
+   8
+  ],
+  [
+   "PUS",
+   "TYO",
+   6
+  ],
+  [
+   "PUS",
+   "SHA",
+   4
+  ],
+  [
+   "PUS",
+   "TAO",
+   3
+  ],
+  [
+   "PUS",
+   "VVO",
+   2
+  ],
+  [
+   "CJU",
+   "SHA",
+   6
+  ],
+  [
+   "CJU",
+   "PEK",
+   3
+  ],
+  [
+   "CJU",
+   "KIX",
+   3
+  ],
+  [
+   "TAE",
+   "KIX",
+   4
+  ],
+  [
+   "TAE",
+   "FUK",
+   2
+  ],
+  [
+   "CJJ",
+   "KIX",
+   2
+  ],
+  [
+   "CJJ",
+   "SHE",
+   2
+  ],
+  [
+   "MWX",
+   "FUK",
+   1
+  ],
+  [
+   "YNY",
+   "VVO",
+   1
+  ],
+  [
+   "FNJ",
+   "PEK",
+   2
+  ],
+  [
+   "FNJ",
+   "SHE",
+   2
+  ],
+  [
+   "FNJ",
+   "VVO",
+   1
   ]
+ ]
 }

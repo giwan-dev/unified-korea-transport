@@ -3,7 +3,8 @@
 network.bin (little endian), 열 단위 배열을 차례로 이어 붙인다:
   노드      Int32 [경도×1e5, 위도×1e5] × N
   링크      a Int32, b Int32, len Float32, speed Uint16, name Uint16, colour Uint16,
-            mode Uint8, cls Uint8, lanes Uint8, tracks Uint8, paved Uint8, kp Uint8, power Uint8
+            mode Uint8, cls Uint8, lanes Uint8, tracks Uint8, paved Uint8, kp Uint8, power Uint8,
+            open Uint16 (공사 중 노선의 개통 연도, 0 = 운영 중)
   도형      링크별 꼭짓점 수 Uint32 × L, 꼭짓점 Int32 [경도×1e5, 위도×1e5] × V
 network.meta.json: 개수, 이름·색 표, 등급·전력 표, 역·IC 목록
 """
@@ -42,17 +43,20 @@ def write(net, bin_path, meta_path):
     paved = np.array([l.get("paved", 1) for l in links], "u1")
     kp = np.array([l["kp"] for l in links], "u1")
     power = np.array([POWERS.index(l.get("power", "none")) for l in links], "u1")
+    opening = np.array([l.get("open", 0) for l in links], "<u2")   # 공사 중 노선의 개통 연도 (0 = 운영 중)
     counts = np.array([len(l["geom"]) // 2 for l in links], "<u4")
-    verts = np.round(np.concatenate([np.array(l["geom"], dtype=np.float64) for l in links]) * SCALE).astype("<i4")
+    # 여러 선으로 이뤄진 도형은 NaN 구분자를 INT32_MAX로 저장한다
+    raw = np.concatenate([np.array(l["geom"], dtype=np.float64) for l in links]) * SCALE
+    verts = np.where(np.isnan(raw), 2147483647, np.round(raw)).astype("<i4")
 
-    parts = [nodes, a, b, length, speed, name, colour, mode, cls, lanes, tracks, paved, kp, power, counts, verts]
+    parts = [nodes, a, b, length, speed, name, colour, mode, cls, lanes, tracks, paved, kp, power, opening, counts, verts]
     with open(bin_path, "wb") as f:
         for p in parts:
             f.write(p.tobytes())
             pad = (-f.tell()) % 4   # 다음 배열이 4바이트 경계에서 시작하도록
             f.write(b"\0" * pad)
     meta = {
-        "nodes": len(net["nodes"]), "links": L, "verts": int(len(verts) // 2), "scale": SCALE,
+        "nodes": len(net["nodes"]), "links": L, "verts": int(len(verts) // 2), "scale": SCALE, "hasOpen": True,
         "names": list(names), "colours": list(colours), "classes": CLASSES, "powers": POWERS,
         "stations": net["stations"], "metro_stations": net.get("metro_stations", []), "junctions": net["junctions"],
     }

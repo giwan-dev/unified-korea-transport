@@ -59,7 +59,7 @@ PROVINCES = {
 GRID = 0.005
 
 ROAD_CLASSES = ["motorway", "trunk", "primary", "secondary"]
-ROAD_LINKS = {"motorway_link": "motorway", "trunk_link": "trunk"}
+ROAD_LINKS = {"motorway_link": "motorway", "trunk_link": "trunk", "primary_link": "primary", "secondary_link": "secondary"}
 WGS84_KM = 111.32
 
 
@@ -179,6 +179,17 @@ def build_zones(countries=("KR", "KP")):
             if pr["name"] not in covered:
                 log("no level-6 zones in", pr["name"], "- using province as one zone")
                 zones.append({**pr, "province": pr["name"], "country": c})
+                continue
+            # 시·군 경계로 덮이지 않은 땅(예: 개성 시내처럼 도 바로 아래 있는 중심 구역)은 따로 존을 만든다
+            mine = [z["geom"] for z in zones if z["province"] == pr["name"]]
+            try:
+                rest = shapely.make_valid(pr["geom"]).difference(shapely.make_valid(unary_union(mine)))
+            except shapely.errors.GEOSException:
+                continue
+            parts = [g for g in getattr(rest, "geoms", [rest]) if g.geom_type == "Polygon" and g.area > 0.002]
+            if parts:
+                log("uncovered area in", pr["name"], round(sum(g.area for g in parts), 3), "-> extra zone")
+                zones.append({"level": 6, "name": pr["name"], "geom": unary_union(parts), "province": pr["name"], "country": c})
     log("zones", len(zones), "KR", sum(z["country"] == "KR" for z in zones),
         "KP", sum(z["country"] == "KP" for z in zones))
     return zones
@@ -244,6 +255,9 @@ class NetHandler:
         self.seen_ways = seen_ways  # 두 추출본에 겹치는 웨이는 한 번만 센다
         self.segs = []          # (mode, cls, cellA, cellB, attrs)
         self.cellpts = defaultdict(lambda: [0.0, 0.0, 0])
+        # 실제 교차점: 여러 웨이가 함께 쓰는 OSM 노드. 격자 칸의 대표 좌표로 쓴다
+        self.node_use = {}
+        self.junction = {}      # 칸 → (사용 횟수, 경도, 위도)
         self.stations = []      # (name, lon, lat)
         self.metro_stations = []  # 도시철도·경전철 역
         self.junctions = []     # (name, lon, lat)
@@ -291,6 +305,14 @@ class NetHandler:
         t = w.tags
         hw = t.get("highway")
         rw = t.get("railway")
+        # 공사 중 노선은 원래 등급으로 읽고 개통 연도를 붙인다 (게임에서 그해에 자동 개통)
+        opening = 0
+        if hw == "construction" and t.get("construction") in set(ROAD_CLASSES) | set(ROAD_LINKS):
+            hw = t.get("construction")
+            opening = _opening_year(t, 2029 if hw.startswith("motorway") else 2028)
+        elif rw == "construction" and t.get("construction") in ("rail", "subway", "light_rail"):
+            rw = t.get("construction")
+            opening = _opening_year(t, 2030)
         if hw in ROAD_CLASSES or hw in ROAD_LINKS:
             if hw == "secondary" and self.country == "KR":
                 return
@@ -298,17 +320,22 @@ class NetHandler:
             oneway = t.get("oneway") in ("yes", "1") or hw == "motorway"
             lanes = _int(t.get("lanes"))
             attrs = {
+                "opening": opening,
                 "oneway": oneway, "lanes": lanes,
                 "paved": t.get("surface") not in ("unpaved", "dirt", "gravel", "ground", "compacted"),
                 "name": ko_name(t), "ref": t.get("ref"), "ramp": hw in ROAD_LINKS,
             }
         elif rw == "rail" and t.get("service") is None and t.get("usage") in (None, "main", "branch"):
             mode = "rail"
-            hs = t.get("highspeed") == "yes"
+            # 고속 전용선만 고속선으로 본다. 중앙선·경강선 일부처럼 시속 250km로 개량했어도
+            # 일반열차와 함께 쓰는 선로(highspeed=yes)는 일반선으로 두고 최고속도만 반영한다
+            nm = ko_name(t) or ""
+            hs = t.get("highspeed") == "yes" and "고속" in nm
             cls = "hsr" if hs else "conv"
             volt = _int(t.get("voltage"))
             elec = t.get("electrified") in ("contact_line", "yes")
             attrs = {
+                "opening": opening,
                 "tracks": _int(t.get("tracks")), "oneway": False,
                 "power": ("AC" if volt and volt >= 15000 else "DC") if elec else "none",
                 "name": ko_name(t), "maxspeed": _int(t.get("maxspeed")),
@@ -317,7 +344,7 @@ class NetHandler:
             mode, cls = "metro", "metro"
             route, colour = self.metro_routes.get(w.id, (ko_name(t) or "", ""))
             attrs = {"tracks": 2, "oneway": False, "power": "AC", "name": route or ko_name(t),
-                     "maxspeed": None, "route": route, "colour": colour}
+                     "maxspeed": None, "route": route, "colour": colour, "opening": opening}
         else:
             return
         if w.id in self.seen_ways:
@@ -325,8 +352,17 @@ class NetHandler:
         self.seen_ways.add(w.id)
         try:
             pts = [(nd.lon, nd.lat) for nd in w.nodes]
+            refs = [nd.ref for nd in w.nodes]
         except osmium.InvalidLocationError:
             return
+        for ref, (lon, lat) in zip(refs, pts):
+            k = self.node_use.get(ref, 0) + 1
+            self.node_use[ref] = k
+            if k >= 2:
+                c = cell_of(lon, lat)
+                cur = self.junction.get(c)
+                if cur is None or k > cur[0]:
+                    self.junction[c] = (k, lon, lat)
         prev = None
         buf = []
         for lon, lat in pts:
@@ -339,6 +375,15 @@ class NetHandler:
                 buf = []
             buf.append((lon, lat))
             prev = c
+
+
+def _opening_year(t, default):
+    """opening_date(예: 2027-12) 태그의 연도, 없으면 기본값"""
+    for k in ("opening_date", "construction:end_date", "end_date"):
+        v = t.get(k) or ""
+        if len(v) >= 4 and v[:4].isdigit() and 2025 <= int(v[:4]) <= 2045:
+            return max(int(v[:4]), 2027)
+    return default
 
 
 def _route_name(name):
@@ -377,21 +422,29 @@ def build_network(zones):
 
     # 셀 단위 엣지 병합. 국가는 셀 대표점이 속한 존으로 판정한다.
     cellpts = defaultdict(lambda: [0.0, 0.0, 0])
+    junction = {}
     for h in handlers.values():
         for k, v in h.cellpts.items():
             cp = cellpts[k]; cp[0] += v[0]; cp[1] += v[1]; cp[2] += v[2]
+        for k, v in h.junction.items():
+            if k not in junction or v[0] > junction[k][0]:
+                junction[k] = v
+        h.node_use = None
     edges = {}
     for c, h in handlers.items():
         for mode, cls, a, b, at, pts in h.segs:
             route = at.get("route", "") if mode == "metro" else ""
+            if at.get("opening"):
+                route = f"{route}@{at['opening']}"
             key = (mode, min(a, b), max(a, b), route)
             e = edges.get(key)
             if e is None:
                 e = edges[key] = {"mode": mode, "cls": cls, "lanes2": 0, "lanes1": 0, "tracks": 0,
                                   "ways": 0, "paved": True, "power": "none", "names": defaultdict(int),
                                   "ramp_only": True, "maxspeed": 0, "src": c, "route": route,
-                                  "colour": at.get("colour", ""),
-                                  "pts": pts if a == key[1] else pts[::-1]}
+                                  "colour": at.get("colour", ""), "opening": at.get("opening", 0),
+                                  "pts": pts if a == key[1] else pts[::-1], "pieces": []}
+            e["pieces"].append(pts)
             if CLASS_RANK[cls] > CLASS_RANK[e["cls"]]:
                 e["cls"] = cls
             e["ways"] += 1
@@ -416,8 +469,8 @@ def build_network(zones):
     zone_country = _cell_country_lookup(zones, cellpts)
     # 중국·러시아 쪽 도로·철도는 뺀다 (양 끝이 모두 외국 영토 안인 엣지).
     # 존 밖이라는 기준을 쓰면 어느 행정구역에도 속하지 않는 비무장지대 구간(경의선·동해선)까지 잘린다.
-    foreign = _foreign_lookup(cellpts)
-    edges = {k: e for k, e in edges.items() if not (foreign(k[1]) and foreign(k[2]))}
+    inside = _korea_lookup(zones, cellpts)
+    edges = {k: e for k, e in edges.items() if inside(k[1]) or inside(k[2])}
     log("cell edges inside zones", len(edges))
 
     # 역·IC는 단순화 시 보존해야 하므로 먼저 셀에 붙인다.
@@ -450,7 +503,11 @@ def build_network(zones):
         if key not in node_index:
             cp = cellpts[cell]
             node_index[key] = len(nodes)
-            nodes.append([round(cp[0] / cp[2], 4), round(cp[1] / cp[2], 4)])
+            j = junction.get(cell)
+            if j is not None and not (isinstance(key, tuple) and key[0] == "m"):
+                nodes.append([round(j[1], 5), round(j[2], 5)])
+            else:
+                nodes.append([round(cp[0] / cp[2], 5), round(cp[1] / cp[2], 5)])
         return node_index[key]
 
     out_links = []
@@ -462,10 +519,7 @@ def build_network(zones):
         # 화면용 도형: 실제 웨이를 약 20m로 단순화하고 양 끝은 노드 좌표에 맞춘다
         raw = [c for xy in L["line"] for c in xy]
         length = _polyline_km(raw)
-        ls = shapely.LineString(L["line"]).simplify(0.0002) if len(L["line"]) > 2 else shapely.LineString(L["line"])
-        coords = list(ls.coords)
-        coords[0] = tuple(nodes[a]); coords[-1] = tuple(nodes[b])
-        geom = [round(v, 5) for xy in coords for v in xy]
+        geom = draw_geom(L["pieces"])
         name = max(e["names"], key=e["names"].get) if e["names"] else ""
         if e["mode"] == "road":
             dl, skr, skp = ROAD_DEFAULTS[e["cls"]]
@@ -476,17 +530,19 @@ def build_network(zones):
                 speed *= 0.6
             out_links.append({"mode": 0, "cls": e["cls"], "a": a, "b": b, "len": round(length, 2),
                               "lanes": lanes, "speed": round(speed), "paved": int(e["paved"]),
-                              "name": name, "kp": int(country == "KP"), "geom": geom})
+                              "name": name, "kp": int(country == "KP"), "geom": geom, "open": e.get("opening", 0)})
         elif metro:
             out_links.append({"mode": 2, "cls": "metro", "a": a, "b": b, "len": round(length, 2),
                               "tracks": 2, "speed": 35, "power": "AC",
                               "name": e.get("route") or name, "colour": e.get("colour", ""),
-                              "kp": int(country == "KP"), "geom": geom})
+                              "kp": int(country == "KP"), "geom": geom, "open": e.get("opening", 0)})
         else:
             if e["cls"] == "hsr":
                 speed = 230
             elif country == "KR":
-                speed = 100 if e["power"] != "none" else 80
+                # OSM 최고속도가 있으면 표정속도로 그 80%를 쓴다 (정차·감속 감안), 최대 시속 200km
+                base_speed = 100 if e["power"] != "none" else 80
+                speed = min(200, max(base_speed, round(e["maxspeed"] * 0.8))) if e["maxspeed"] else base_speed
             else:
                 speed = 40
             tracks = e["tracks"] or (2 if country == "KR" else 1)
@@ -494,7 +550,9 @@ def build_network(zones):
                 tracks = 2
             out_links.append({"mode": 1, "cls": e["cls"], "a": a, "b": b, "len": round(length, 2),
                               "tracks": min(tracks, 4), "speed": speed, "power": e["power"],
-                              "name": name, "kp": int(country == "KP"), "geom": geom})
+                              "name": name, "kp": int(country == "KP"), "geom": geom, "open": e.get("opening", 0)})
+
+    heal_gaps(nodes, out_links)
 
     out_stations = _dedupe_named([(n, node_index[c]) for n, c in stations if c in node_index])
     out_junctions = _dedupe_named([(n, node_index[c]) for n, c in junctions if c in node_index])
@@ -516,6 +574,57 @@ def build_network(zones):
             "metro_stations": out_metro, "junctions": out_junctions}, places
 
 
+def draw_geom(pieces, tol=0.00015):
+    """화면용 도형: 링크를 이룬 OSM 웨이 조각을 이어 붙여 단순화한다 (꺾임·틈 없이 실제 모양 그대로).
+    조각 사이에는 [nan, nan]을 넣어 여러 선으로 나눈다."""
+    merged = shapely.line_merge(shapely.MultiLineString([pc for pc in pieces if len(pc) >= 2]))
+    lines = getattr(merged, "geoms", [merged])
+    out = []
+    for ln in lines:
+        if ln.is_empty:
+            continue
+        if out:
+            out += [float("nan"), float("nan")]
+        out += [round(v, 5) for xy in ln.simplify(tol).coords for v in xy]
+    return out
+
+
+def heal_gaps(nodes, links, max_km=0.6):
+    """막다른 도로 끝이 600m 안의 다른 도로 노드와 이어지지 않았으면 짧은 연결 링크를 놓는다.
+    (OSM에서 등급이 낮은 연결 도로를 뺐거나 격자 맞춤으로 생긴 틈)"""
+    from scipy.spatial import cKDTree
+    deg = defaultdict(int)
+    nb = defaultdict(set)
+    cls_at = {}
+    for l in links:
+        if l["mode"] != 0 or l.get("open"):
+            continue
+        for x, y in ((l["a"], l["b"]), (l["b"], l["a"])):
+            deg[x] += 1
+            nb[x].add(y)
+            cls_at.setdefault(x, l)
+    ids = sorted(deg)
+    pts = np.array([nodes[i] for i in ids]) * [88.0, 111.0]
+    tree = cKDTree(pts)
+    added = 0
+    for k, n in enumerate(ids):
+        if deg[n] != 1:
+            continue
+        for d, j in zip(*tree.query(pts[k], k=4)):
+            m = ids[j]
+            if m == n or m in nb[n] or d > max_km:
+                continue
+            src = cls_at[n]
+            x1, y1 = nodes[n]; x2, y2 = nodes[m]
+            links.append({"mode": 0, "cls": src["cls"], "a": n, "b": m, "len": round(d * 1.2 + 0.05, 2),
+                          "lanes": src["lanes"], "speed": min(src["speed"], 40), "paved": 1,
+                          "name": src["name"], "kp": src["kp"], "geom": [x1, y1, x2, y2], "open": 0})
+            nb[n].add(m); nb[m].add(n)
+            added += 1
+            break
+    log("healed road gaps", added)
+
+
 def _dedupe_named(items):
     seen = set()
     out = []
@@ -525,6 +634,27 @@ def _dedupe_named(items):
         seen.add((name, node))
         out.append([name, node])
     return out
+
+
+def _korea_lookup(zones, cellpts):
+    """셀이 남북 영토(해안선으로 다듬은 존 경계) 안인지.
+    Natural Earth 국경은 거칠어서 압록강·두만강 건너 중국 쪽 도로가 남는 문제가 있었다.
+    압록강·두만강 쪽은 50m만 봐 준다 (단둥 강변 도로가 따라 들어오지 않도록).
+    어느 행정구역에도 속하지 않는 비무장지대(경의선·동해선)만 500m까지 넉넉히 본다."""
+    union = unary_union([z["geom"] for z in zones])
+    tight = union.buffer(0.0005)
+    loose = union.buffer(0.005)
+    shapely.prepare(tight)
+    shapely.prepare(loose)
+    cache = {}
+
+    def f(cell):
+        if cell not in cache:
+            cp = cellpts[cell]
+            pt = shapely.Point(cp[0] / cp[2], cp[1] / cp[2])
+            cache[cell] = tight.contains(pt) or (pt.y < 38.8 and loose.contains(pt))
+        return cache[cell]
+    return f
 
 
 def _foreign_lookup(cellpts):
@@ -599,8 +729,6 @@ def _contract(edges, keep):
     링크마다 지나는 셀(chain)과 엣지 순서(seq: (key, 정방향 여부))를 함께 돌려준다."""
     adj = defaultdict(list)
     for key, e in edges.items():
-        if e["mode"] == "road" and e["ramp_only"] and e["cls"] not in ("motorway", "trunk"):
-            continue
         mode, a, b = key[0], key[1], key[2]
         adj[(mode, a)].append((b, key))
         adj[(mode, b)].append((a, key))
@@ -659,7 +787,8 @@ def _contract(edges, keep):
         for k, fwd in seq:
             pts = edges[k]["pts"] if fwd else edges[k]["pts"][::-1]
             line.extend(pts if not line else pts[1:])
-        links.append({"cells": chain, "attrs": merged, "line": line})
+        pieces = [pc for k in keys for pc in edges[k]["pieces"]]
+        links.append({"cells": chain, "attrs": merged, "line": line, "pieces": pieces})
     return links
 
 

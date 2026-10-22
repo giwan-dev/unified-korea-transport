@@ -93,10 +93,94 @@ def kp_places():
     return out
 
 
+def polygonal(g):
+    """교차 연산 뒤 섞여 나오는 선·점을 버리고 면만 남긴다"""
+    g = shapely.make_valid(g)
+    if g.geom_type in ("Polygon", "MultiPolygon"):
+        return g
+    parts = [x for x in getattr(g, "geoms", []) if x.geom_type in ("Polygon", "MultiPolygon")]
+    return unary_union(parts) if parts else shapely.Polygon()
+
+
+def kp_land(zones, places):
+    """북측 육지 면. OSM 시·군 경계는 영해까지 포함하므로 해안선(natural=coastline)으로 잘라 낸다.
+
+    시·군 경계와 해안선을 합쳐 면을 나누고, 동·리·마을 지명 점이 들어 있는 면만 육지로 본다
+    (해안선은 열린 선이라 바로 면을 만들 수 없다). 무인도는 빠진다.
+    """
+    area = shapely.make_valid(unary_union([z["geom"] for z in zones]))
+    lines = []
+    flt = osmium.filter.TagFilter(("natural", "coastline"))
+    for w in osmium.FileProcessor(str(build_data.PBF["KP"]), osmium.osm.NODE | osmium.osm.WAY)             .with_locations().with_filter(flt):
+        if w.is_way():
+            try:
+                lines.append(shapely.LineString([(n.lon, n.lat) for n in w.nodes]))
+            except Exception:
+                pass
+    coast = unary_union(lines).intersection(area.buffer(0.02))
+    faces = list(shapely.ops.polygonize(shapely.node(unary_union([coast, area.boundary]))))
+    marks = shapely.STRtree([shapely.Point(x, y) for _, x, y in places])
+    # 지명이 드문 산간·강 하구 쪽 육지 면도 살리도록, Natural Earth 육지(조금 안쪽으로 줄임) 안에 있으면 육지로 본다
+    import geopandas as gpd
+    ne_land = unary_union(list(gpd.read_file(f"zip://{(RAW / 'ne_10m_land.zip').as_posix()}").geometry)).buffer(-0.01)
+    shapely.prepare(ne_land)
+
+    def is_land(f):
+        if not area.contains(f.representative_point()):
+            return False
+        return len(marks.query(f, predicate="contains")) > 0 or ne_land.contains(f.representative_point())
+    land = [f for f in faces if is_land(f)]
+    land = shapely.make_valid(unary_union(land))
+    log("KP coastline ways", len(lines), "faces", len(faces), "land/area", round(land.area / area.area, 3))
+    if land.area < 0.5 * area.area:
+        log("coastline clipping looks wrong; keeping OSM boundaries")
+        return None
+    return land
+
+
+def fill_kp_holes(zones):
+    """해안선으로 자르면서 빠진 내륙 땅(의주·룡천 등 강어귀)을 닿아 있는 시·군에 붙인다."""
+    import geopandas as gpd
+    c = gpd.read_file(f"zip://{(RAW / 'ne_10m_admin_0_countries.zip').as_posix()}")
+    prk = unary_union(list(c[c.ADM0_A3 == "PRK"].geometry)).buffer(-0.005)
+    hole = prk.difference(unary_union([z["geom"] for z in zones]))
+    n = 0
+    for part in getattr(hole, "geoms", [hole]):
+        if part.geom_type != "Polygon" or area_km2(part) < 3:
+            continue
+        ring = part.buffer(0.01)
+        best = max(zones, key=lambda z: z["geom"].intersection(ring).area)
+        if best["geom"].intersection(ring).area <= 0:
+            continue
+        best["geom"] = polygonal(shapely.make_valid(unary_union([best["geom"], part.buffer(0.0005)])))
+        n += 1
+    log("KP holes filled", n)
+
+
+def merge_slivers(zones, min_km2=1.5):
+    """해안선으로 잘리고 거의 바다만 남은 작은 존(1.5km² 미만)은 맞닿은 시·군에 합친다."""
+    small = [z for z in zones if area_km2(z["geom"]) < min_km2]
+    rest = [z for z in zones if area_km2(z["geom"]) >= min_km2]
+    for z in small:
+        ring = z["geom"].buffer(0.01)
+        best = max(rest, key=lambda r: r["geom"].intersection(ring).area)
+        if best["geom"].intersection(ring).area > 0:
+            best["geom"] = polygonal(shapely.make_valid(unary_union([best["geom"], z["geom"]])))
+        log("sliver zone merged", z["name"], round(area_km2(z["geom"]), 2), "km2 ->", best["name"])
+    return rest
+
+
 def kp_units():
-    """북: OSM 시·군·구역 안을 인구 격자 묶음 중심의 보로노이로 나눈다."""
+    """북: OSM 시·군·구역 경계를 해안선으로 자른 뒤, 그 안을 인구 격자 묶음 중심의 보로노이로 나눈다."""
     zones = build_data.build_zones(countries=("KP",))
     places = kp_places()
+    land = kp_land(zones, places)
+    if land is not None:
+        for z in zones:
+            z["geom"] = polygonal(z["geom"].intersection(land))
+        zones = [z for z in zones if not z["geom"].is_empty]
+        fill_kp_holes(zones)
+        zones = merge_slivers(zones)
     pl_xy = np.array([(x, y) for _, x, y in places]) if places else np.zeros((0, 2))
     with rasterio.open(KP_POP) as src:
         arr = src.read(1).astype("float64")
@@ -133,7 +217,9 @@ def kp_units():
             part = cell.intersection(g)
             if part.is_empty or part.area <= 0:
                 continue
-            part = shapely.make_valid(part)
+            part = polygonal(part)
+            if part.is_empty:
+                continue
             c = part.representative_point()
             units.append(unit_kp(z, part, nearest_name(places, pl_xy, c.x, c.y, part, used) or z["name"]))
     log("KP zones", len(zones), "units", len(units))
@@ -161,6 +247,7 @@ def nearest_name(places, pl_xy, x, y, part, used):
 
 
 def simplify_coverage(geoms, tol):
+    geoms = [polygonal(g) for g in geoms]
     arr = np.array(geoms, dtype=object)
     try:
         return list(shapely.coverage_simplify(arr, tol))
@@ -191,7 +278,7 @@ def main():
         for u in groups[key]:
             u["zone_id"] = zi
         zones.append({"country": key[0], "province": key[1], "name": key[2],
-                      "geom": shapely.make_valid(unary_union([u["geom"] for u in groups[key]]))})
+                      "geom": polygonal(unary_union([u["geom"] for u in groups[key]]))})
     units.sort(key=lambda u: (u["zone_id"], u["name"]))
     for i, u in enumerate(units):
         u["id"] = i
@@ -210,14 +297,14 @@ def main():
     by_zone = defaultdict(list)
     for u in units:
         by_zone[u["zone_id"]].append(simple[u["id"]])
-    sgg_simple = [shapely.make_valid(unary_union(by_zone[zi])) for zi in range(len(zones))]
+    sgg_simple = [polygonal(unary_union(by_zone[zi])) for zi in range(len(zones))]
     sgg_simple = simplify_coverage(sgg_simple, TOL_SGG)
     for z, g in zip(zones, sgg_simple):
         z["geom_simple"] = g
     sido = defaultdict(list)
     for z, g in zip(zones, sgg_simple):
         sido[(z["country"], z["province"])].append(g)
-    sido_rows = [(k, shapely.make_valid(unary_union(v))) for k, v in sido.items()]
+    sido_rows = [(k, polygonal(unary_union(v))) for k, v in sido.items()]
     sido_geoms = simplify_coverage([g for _, g in sido_rows], TOL_SIDO)
 
     OUT.mkdir(parents=True, exist_ok=True)

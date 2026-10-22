@@ -25,10 +25,12 @@ const progress = (label) => (v) => post('progress', { label, value: v });
 
 /** 새 게임: 기준 연도 보정과 배정 (baseline이 없을 때만) */
 function calibrateFresh(ctx) {
+  model.provisionalIncome();
   model.calibrateK(ctx.integration, progress('기준 연도 보정 중'));
-  const totals = model.assign(ctx.integration, progress('기준 연도 통행배정'));
+  model.assign(ctx.integration, progress('기준 연도 통행배정'));
   model.initEconomy();
-  return totals;
+  // 지역별 소득이 정해졌으니 한 번 더 배정해 기준 연도 결과를 맞춘다 (이어서 해를 넘겨도 튀지 않도록)
+  return model.assign(ctx.integration, progress('기준 연도 마무리'), true);
 }
 
 self.onmessage = (ev) => {

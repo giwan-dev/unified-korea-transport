@@ -80,7 +80,10 @@ export const P = {
   airFarePerKm: 90,
   airIntlFareFactor: 1.6,
   airASC: 60,                 // 예약·탑승 절차 등 항공 고유 불편 (국내선은 제주처럼 다른 수단이 없을 때 주로 쓰인다)
-  airCongestionMin: 60,       // 공항 V/C가 1을 넘을 때 1당 추가 지체 (분)
+  airCongestionMin: 60,       // 공항 V/C·노선 탑승률이 1을 넘을 때 1당 추가 지체 (분)
+  airSeats: 180,              // 편당 좌석
+  airScheduleBase: 360,       // 스케줄 지체 = 360 / 하루 운항 횟수 (분)
+  airScheduleMaxMin: 180,
 
   // --- 국외 연결: 국경·출입국 비용 (분)
   intlBorderMin: { CN: 300, RU: 300, JP: 240 },

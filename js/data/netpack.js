@@ -16,6 +16,7 @@ export function decodeNetwork(meta, buf) {
   const mode = take(Uint8Array, L), cls = take(Uint8Array, L);
   const lanes = take(Uint8Array, L), tracks = take(Uint8Array, L);
   const paved = take(Uint8Array, L), kp = take(Uint8Array, L), power = take(Uint8Array, L);
+  const open = meta.hasOpen ? take(Uint16Array, L) : null;
   const counts = take(Uint32Array, L);
   const verts = take(Int32Array, meta.verts * 2);
 
@@ -26,7 +27,10 @@ export function decodeNetwork(meta, buf) {
   for (let i = 0; i < L; i++) {
     const n = counts[i];
     const geom = new Array(n * 2);
-    for (let k = 0; k < n * 2; k++) geom[k] = verts[v * 2 + k] / s;
+    for (let k = 0; k < n * 2; k++) {
+      const q = verts[v * 2 + k];
+      geom[k] = q === 2147483647 ? NaN : q / s;   // NaN: 여러 선 사이 구분자
+    }
     v += n;
     const l = {
       a: a[i], b: b[i], mode: mode[i], cls: meta.classes[cls[i]], len: Math.round(len[i] * 100) / 100,
@@ -34,6 +38,7 @@ export function decodeNetwork(meta, buf) {
     };
     if (mode[i] === 0) { l.lanes = lanes[i]; l.paved = paved[i]; } else { l.tracks = tracks[i]; l.power = meta.powers[power[i]]; }
     if (colour[i]) l.colour = meta.colours[colour[i]];
+    if (open && open[i]) l.open = open[i];
     links[i] = l;
   }
   return { nodes, links, stations: meta.stations, metro_stations: meta.metro_stations, junctions: meta.junctions };

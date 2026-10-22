@@ -55,6 +55,16 @@ export const UPGRADES = [
     apply: () => ({ power: 'AC' }),
   },
   {
+    id: 'metroexpress', mode: 2, label: '급행화 (대피선·급행 운행)', perKm: 150, years: 3,
+    applies: (l) => l.speed < 50,
+    apply: (l) => ({ speed: Math.min(l.speed + 12, 50) }),
+  },
+  {
+    id: 'metrocap', mode: 2, label: '증편 (신호 개량·차량 증차)', perKm: 60, years: 2,
+    applies: (l) => !(l.tracks >= 3),
+    apply: () => ({ tracks: 3 }),
+  },
+  {
     id: 'speedup', mode: 1, label: '고속화 (200km/h급)', perKm: 400, years: 5,
     applies: (l) => l.cls === 'conv' && l.speed < 200,
     apply: (l) => ({ speed: 200, tracks: Math.max(2, l.tracks), power: 'AC' }),
