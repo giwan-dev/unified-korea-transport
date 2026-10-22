@@ -294,7 +294,7 @@ export function startNewBuild(base, state, plan) {
       kp, name: plan.lineName || '', built: false, geom: segs[i].flat().map((v) => Math.round(v * 1e5) / 1e5), ...spec.attrs,
     });
   }
-  total += plan.extraCost || 0;   // 중간 IC·역 설치비
+  total += plan.extraCost || 0;   // 중간 IC·역·휴게소 설치비
   if (!canAfford(state, total, spec.years)) {
     state.newNodes.length -= plan.points.filter((p) => p.node == null).length;
     return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
@@ -304,10 +304,13 @@ export function startNewBuild(base, state, plan) {
     const nm = plan.names[i];
     if (nm) state.names[nodeIds[i]] = { name: nm.name, kind: nm.kind, auto: nm.auto !== false };
   });
+  for (const r of plan.restAreas || []) (state.restAreas ||= []).push({ ...r, built: false, links: links.map((l) => l.id) });
   const endName = (i) => plan.points[i].name || nameOf(state, nodeIds[i]) || '';
-  const label = `${plan.lineName ? `${plan.lineName} ` : ''}${spec.label} ${endName(0)}–${endName(nodeIds.length - 1)} (${kmTotal.toFixed(0)}km)`;
+  // 기존선 연장은 노선 이름을 이어 쓰고, 신설은 새 노선으로 적는다
+  const span = `${endName(0)}–${endName(nodeIds.length - 1)} (${kmTotal.toFixed(0)}km)`;
+  const label = plan.extendOf ? `${plan.extendOf} 연장 ${span}` : `${plan.lineName ? `${plan.lineName} ` : ''}${spec.label} ${span}`;
   startProject(state, {
-    id: crypto.randomUUID(), kind: 'new', type: plan.type, links: links.map((l) => l.id),
+    id: crypto.randomUUID(), kind: 'new', type: plan.type, links: links.map((l) => l.id), extension: !!plan.extendOf,
     stations: spec.mode >= 1 ? nodeIds.filter((_, i) => plan.names[i]?.kind === 'station') : [],
     cost: total, years: spec.years, label,
   });
@@ -466,6 +469,7 @@ function completeProject(base, state, p) {
     }
   } else {
     for (const id of p.links) state.newLinks[id - base.links.length].built = true;
+    for (const r of state.restAreas || []) if (p.links.includes(r.links[0])) r.built = true;
     for (const s of p.stations) if (!state.newStations.includes(s)) state.newStations.push(s);
   }
 }

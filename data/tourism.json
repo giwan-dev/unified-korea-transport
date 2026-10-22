@@ -1,0 +1,28 @@
+{
+  "note": "주요 관광지와 연간 방문객(백만 명) 대략값. 북측 관광지는 남북 통합도에 비례해 열린다(kp). 국외는 출국 관광 목적지. 게임용 가정값이며 출처 확인이 필요하다.",
+  "sites": [
+    { "name": "제주", "lon": 126.53, "lat": 33.40, "visitors": 13 },
+    { "name": "서울 도심 (궁궐·명동)", "lon": 126.98, "lat": 37.57, "visitors": 15 },
+    { "name": "부산 해운대", "lon": 129.16, "lat": 35.16, "visitors": 8 },
+    { "name": "강릉 경포", "lon": 128.90, "lat": 37.80, "visitors": 6 },
+    { "name": "속초·설악산", "lon": 128.47, "lat": 38.12, "visitors": 6 },
+    { "name": "경주", "lon": 129.22, "lat": 35.84, "visitors": 6 },
+    { "name": "전주 한옥마을", "lon": 127.15, "lat": 35.82, "visitors": 5 },
+    { "name": "여수 밤바다", "lon": 127.74, "lat": 34.74, "visitors": 5 },
+    { "name": "인천 차이나타운·월미도", "lon": 126.62, "lat": 37.47, "visitors": 3 },
+    { "name": "평창·정선", "lon": 128.55, "lat": 37.55, "visitors": 2 },
+    { "name": "안동 하회마을", "lon": 128.52, "lat": 36.54, "visitors": 2 },
+    { "name": "통영·거제", "lon": 128.43, "lat": 34.85, "visitors": 2 },
+    { "name": "단양", "lon": 128.37, "lat": 36.98, "visitors": 2 },
+    { "name": "남해", "lon": 127.90, "lat": 34.80, "visitors": 1.5 },
+    { "name": "금강산", "lon": 128.18, "lat": 38.65, "visitors": 3, "kp": true },
+    { "name": "백두산·삼지연", "lon": 128.32, "lat": 41.82, "visitors": 2, "kp": true },
+    { "name": "평양", "lon": 125.75, "lat": 39.03, "visitors": 3, "kp": true },
+    { "name": "개성 (고려 왕도)", "lon": 126.55, "lat": 37.97, "visitors": 1.5, "kp": true },
+    { "name": "원산·갈마 해변", "lon": 127.45, "lat": 39.17, "visitors": 2, "kp": true },
+    { "name": "묘향산", "lon": 126.33, "lat": 40.00, "visitors": 1, "kp": true },
+    { "name": "칠보산", "lon": 129.50, "lat": 41.05, "visitors": 0.5, "kp": true },
+    { "name": "마식령", "lon": 127.25, "lat": 38.95, "visitors": 0.5, "kp": true }
+  ],
+  "foreign": { "후쿠오카": 3, "오사카": 4, "도쿄": 4, "상하이": 2, "베이징": 1.5, "칭다오": 1, "블라디보스토크": 1, "옌지(연변)": 0.5 }
+}

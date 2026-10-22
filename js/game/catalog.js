@@ -38,6 +38,11 @@ export const UPGRADES = [
     apply: (l) => ({ speed: Math.min(Math.max(Math.round(l.speed * 1.5), l.speed + 30), 150) }),
   },
   {
+    id: 'straighten', mode: 1, label: '직선화 (곡선 구간 펴기)', perKm: 250, years: 5,
+    applies: (l) => l.cls === 'conv' && !l.straight,
+    apply: (l) => ({ straight: 1, len: Math.round(l.len * 0.9 * 100) / 100, speed: Math.min(200, Math.max(l.speed + 40, 160)) }),
+  },
+  {
     id: 'double', mode: 1, label: '복선화', perKm: 140, years: 4,
     applies: (l) => l.tracks < 2,
     apply: () => ({ tracks: 2 }),

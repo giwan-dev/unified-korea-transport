@@ -63,6 +63,8 @@ self.onmessage = (ev) => {
       // 지난 1년의 교통 조건으로 경제·인구를 갱신한 뒤 새 해의 통행을 배정한다
       model.advanceYear(msg.ctx.integration, msg.ctx.policy);
       results(model.assign(msg.ctx.integration, progress('통행배정'), true));
+    } else if (msg.type === 'route') {
+      post('route', { route: model.routeQuery(msg.from, msg.to) });
     } else if (msg.type === 'baseline') {
       // 개발용: 기준 연도를 계산해 돌려준다 (tools/baseline.html)
       model = new Model(msg.zones, new Float32Array(msg.grid));

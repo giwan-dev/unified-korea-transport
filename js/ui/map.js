@@ -258,8 +258,8 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     id: 'points', type: 'circle', source: 'points',
     filter: ['any', ['==', ['get', 'isNew'], 1], ['==', ['get', 'kind'], 'city'], ['>=', ['zoom'], ['case', ['==', ['get', 'metro'], 1], 11, ['==', ['get', 'kind'], 'station'], 9, 10]]],
     paint: {
-      'circle-radius': ['match', ['get', 'kind'], 'city', 6, 'station', 4, 3],
-      'circle-color': ['match', ['get', 'kind'], 'city', '#f2c14e', 'station', '#ffffff', '#1d232b'],
+      'circle-radius': ['match', ['get', 'kind'], 'city', 6, 'station', 4, 'rest', 4, 3],
+      'circle-color': ['match', ['get', 'kind'], 'city', '#f2c14e', 'station', '#ffffff', 'rest', '#2f8f5b', '#1d232b'],
       'circle-stroke-color': ['case', ['==', ['get', 'metro'], 1], '#1a9a6c', ['==', ['get', 'kind'], 'station'], '#6c3fa0', '#ffffff'],
       'circle-stroke-width': 1.5,
     },
@@ -297,6 +297,14 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     layout: { 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 11, 'text-offset': [0, 1.1], 'text-anchor': 'top' },
     paint: { 'text-color': '#7a3d70', 'text-halo-color': '#ffffff', 'text-halo-width': 1.2 },
   });
+
+  // 소요 시간 측정 경로 (승용차 주황, 철도 파랑)
+  map.addSource('route', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({ id: 'route-line', type: 'line', source: 'route', filter: ['!=', ['get', 'k'], 'pt'],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': ['match', ['get', 'k'], 'car', '#e8782c', '#2453c9'], 'line-width': 6, 'line-opacity': 0.75 } });
+  map.addLayer({ id: 'route-pts', type: 'circle', source: 'route', filter: ['==', ['get', 'k'], 'pt'],
+    paint: { 'circle-radius': 7, 'circle-color': '#ffffff', 'circle-stroke-color': '#1d232b', 'circle-stroke-width': 3 } });
 
   map.addSource('draft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({ id: 'draft-line', type: 'line', source: 'draft', filter: ['==', ['geometry-type'], 'LineString'],

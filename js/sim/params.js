@@ -89,6 +89,10 @@ export const P = {
   intlBorderMin: { CN: 300, RU: 300, JP: 240 },
   extMassFactor: 0.25,        // 국외 도시의 통행 발생 비중 (언어·비자·생활권 차이로 국내 도시보다 적다)
 
+  // --- 관광
+  tourismMass: 15,            // 관광지 하루 방문객 1명을 인구 몇 명분의 목적지 매력으로 볼지
+  inboundTourism: 4,          // 국외 출발 관광(입국) 배율: 국외 존 통행 발생 축소(0.25)를 관광에서는 되돌린다
+
   // --- 남북 통합
   borderPenaltyMin: 300,      // 통합도 0일 때 남북 간 추가 일반화비용(분)
   integrationStart: 0.15,

@@ -33,8 +33,10 @@ let lastIncome = null;
 let dataStamp = null;
 let isForeign = () => false;   // 외국 땅 판정 (주변국 육지 자료를 받으면 바뀐다)
 let multi = null;               // 드래그로 고른 구간들
+let measure = null;             // 소요 시간 측정: {from, to}
 const snap = { node: true, line: true };   // 그리기: 노드에 붙이기 / 선 위에 붙이기(중간 IC·역)
 const MID_COST = { road: 300, rail: 200 };  // 중간 IC·역 설치비 (억원)
+const REST = { spacingKm: 40, cost: 150 };  // 고속도로 휴게소: 약 40km마다, 한 곳 설치비 (억원)
 let wholeRoute = false;    // 개량을 같은 이름 노선 전체에 적용
 
 
@@ -70,6 +72,7 @@ async function init() {
   state ||= newGame('normal');
   if (meta) state.dataStamp = meta.stamp;
   initAirRoutes(state, world.routes || []);
+  assignTourism(await fetch('data/tourism.json').then((r) => r.json()).catch(() => null));
   const baseline = await loadBaseline(meta);
   // 저장된 게임의 그해 계산 상태 (같은 해·같은 데이터일 때만)
   const saved = state.snapshot ? await loadSim() : null;
@@ -113,6 +116,30 @@ async function init() {
   await mapReady;
   // 콘솔 디버깅용
   window.ukt = { map, base, select, selectBox, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+}
+
+/** 관광지를 가장 가까운 존(국외는 같은 이름의 거점)에 하루 방문객으로 붙인다 */
+function assignTourism(t) {
+  if (!t) return;
+  for (const s of t.sites) {
+    // 존 중심이 아니라 읍면동(소구역) 중심 중 가장 가까운 곳의 존 (안동 하회마을이 예천군으로 가지 않도록)
+    let best = -1, bd = Infinity;
+    zoneProps.forEach((z, i) => {
+      if (z.ext) return;
+      for (const [x, y] of z.subs) {
+        const d = (x - s.lon) ** 2 + (y - s.lat) ** 2;
+        if (d < bd) { bd = d; best = i; }
+      }
+    });
+    const daily = (s.visitors * 1e6) / 365;
+    const z = zoneProps[best];
+    if (s.kp) z.tourKP = (z.tourKP || 0) + daily; else z.tour = (z.tour || 0) + daily;
+    (z.sites ||= []).push(s.name);
+  }
+  for (const [name, v] of Object.entries(t.foreign || {})) {
+    const z = zoneProps.find((x) => x.ext && x.name === name);
+    if (z) z.tour = (z.tour || 0) + (v * 1e6) / 365;
+  }
 }
 
 /** 미리 계산한 기준 연도 (데이터 버전이 맞을 때만) */
@@ -212,6 +239,7 @@ function onWorker(ev) {
   }
   else if (m.type === 'error') { setBusy(false); console.error(m.message); alert('시뮬레이션 오류\n' + m.message); }
   else if (m.type === 'result') applyResult(m);
+  else if (m.type === 'route') showRoute(m.route);
 }
 
 function applyResult(res) {
@@ -415,13 +443,14 @@ function nodeNames() {
   }
   for (const f of base.foreignNodes || []) out.set(f.node, { name: f.name, kind: 'city', isNew: 0, country: f.country });
   for (const [k, v] of Object.entries(state.names)) out.set(+k, { name: v.name, kind: v.kind, isNew: 1 });
+  (state.restAreas || []).forEach((r, i) => out.set(`rest${i}`, { name: r.name + (r.built ? '' : ' (공사 중)'), kind: 'rest', isNew: 1, coord: [r.lon, r.lat] }));
   return out;
 }
 
 function refreshPoints() {
   const features = [];
   for (const [node, v] of nodeNames()) {
-    const c = nodeCoord(node);
+    const c = v.coord || nodeCoord(node);
     if (!c) continue;
     features.push({ type: 'Feature', properties: { node, ...v }, geometry: { type: 'Point', coordinates: c } });
   }
@@ -489,6 +518,7 @@ function subArea(i) {
 
 function bindMap() {
   map.on('click', (e) => {
+    if (measure) { measureClick(e.lngLat); return; }
     if (draft?.type === 'airport') { placeAirport(e.lngLat); return; }
     if (draft) { addDraftPoint(e.lngLat); return; }
     const box = [[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]];
@@ -654,6 +684,81 @@ function nearestOnLink(lngLat, mode, maxPx) {
   return best;
 }
 
+// ------------------------------------------------------------ 두 지점 소요 시간
+
+function startMeasure() {
+  cancelDraft();
+  measure = { from: null, to: null };
+  map.getCanvas().style.cursor = 'crosshair';
+  select(null);
+  $('#selection').hidden = false;
+  $('#selection').innerHTML = `${header('소요 시간 측정')}<p class="hint">출발지를 지도에서 누르세요.</p>`;
+  $('#selection .close').onclick = endMeasure;
+}
+
+function endMeasure() {
+  measure = null;
+  map.getCanvas().style.cursor = '';
+  map.getSource('route').setData({ type: 'FeatureCollection', features: [] });
+  select(null);
+}
+
+function measureClick(ll) {
+  const p = [ll.lng, ll.lat];
+  if (!measure.from || measure.to) {
+    measure = { from: p, to: null };
+    $('#selection').innerHTML = `${header('소요 시간 측정')}<p class="hint">도착지를 누르세요.</p>`;
+  } else {
+    measure.to = p;
+    $('#selection').innerHTML = `${header('소요 시간 측정')}<p class="hint">계산 중…</p>`;
+    worker.postMessage({ type: 'route', from: measure.from, to: measure.to });
+  }
+  $('#selection .close').onclick = endMeasure;
+  const pts = [measure.from, measure.to].filter(Boolean).map((c) => ({ type: 'Feature', properties: { k: 'pt' }, geometry: { type: 'Point', coordinates: c } }));
+  map.getSource('route').setData({ type: 'FeatureCollection', features: pts });
+}
+
+function fmtMin(m) {
+  if (!isFinite(m)) return '–';
+  const h = Math.floor(m / 60), mm = Math.round(m % 60);
+  return h ? `${h}시간 ${mm}분` : `${mm}분`;
+}
+
+function showRoute(r) {
+  if (!measure) return;
+  const name = (k) => ({ car: '승용차', rail: '철도', transit: '버스·도시철도', air: '항공' }[k]);
+  const rows = ['car', 'rail', 'transit', 'air'].filter((k) => r[k]).sort((a, b) => r[a].min - r[b].min);
+  const best = rows[0];
+  const detail = (k) => {
+    const v = r[k];
+    if (k === 'car') return `${v.km.toFixed(0)}km · 유류비 등 약 ${Math.round(v.cost / 1000).toLocaleString()}천원`;
+    if (k === 'rail') {
+      const st = (i) => esc(nodeNames().get(result.stations.node[i])?.name || '');
+      return `${st(v.s)}→${st(v.t)} · 대기 ${Math.round(v.wait)}분 · 약 ${Math.round(v.cost / 1000)}천원`;
+    }
+    if (k === 'air') return `${esc(airportName(v.a))}→${esc(airportName(v.b))} · 하루 ${v.freq}편 · 약 ${Math.round(v.cost / 1000)}천원`;
+    return `약 ${Math.round(v.cost / 100) * 100}원`;
+  };
+  $('#selection').innerHTML = `${header('소요 시간 측정')}
+    <p class="hint">직선거리 ${r.crowKm.toFixed(0)}km · 올해 혼잡 반영</p>
+    <table class="kv">${rows.map((k) => `<tr><td>${k === best ? '<b>' : ''}${name(k)}${k === best ? '</b>' : ''}<div class="m">${detail(k)}</div></td><td>${fmtMin(r[k].min)}</td></tr>`).join('')
+      || '<tr><td>이을 수단이 없습니다</td><td></td></tr>'}</table>
+    <p class="hint">다른 두 지점을 누르면 다시 잽니다. 닫기를 누르면 끝납니다.</p>`;
+  $('#selection .close').onclick = endMeasure;
+  const feats = [measure.from, measure.to].map((c) => ({ type: 'Feature', properties: { k: 'pt' }, geometry: { type: 'Point', coordinates: c } }));
+  for (const k of ['car', 'rail']) {
+    if (!r[k]) continue;
+    for (const id of r[k].links) {
+      const g = allLinks()[id].geom, parts = [[]];
+      for (let i = 0; i < g.length; i += 2) {
+        if (Number.isNaN(g[i])) parts.push([]); else parts[parts.length - 1].push([g[i], g[i + 1]]);
+      }
+      feats.push({ type: 'Feature', properties: { k }, geometry: { type: 'MultiLineString', coordinates: parts } });
+    }
+  }
+  map.getSource('route').setData({ type: 'FeatureCollection', features: feats });
+}
+
 function addDraftPoint(lngLat) {
   const spec = NEW_BUILDS[draft.type];
   let node = snap.node ? nearestNode(lngLat, spec.mode, 14) : null;
@@ -719,8 +824,29 @@ function draftCost() {
     km += len; cost += spec.perKm * len * (kp ? KP_COST_FACTOR : 1) * segFactor[i];
   }
   const mids = draft.points.filter((p) => p.split != null).length;
-  const extraCost = mids * (spec.mode === 0 ? MID_COST.road : MID_COST.rail);
-  return { km, cost: Math.round(cost) + extraCost, extraCost, mids, years: spec.years, segFactor, foreignKm };
+  const rests = restPositions(segs).length;
+  const extraCost = mids * (spec.mode === 0 ? MID_COST.road : MID_COST.rail) + rests * REST.cost;
+  return { km, cost: Math.round(cost) + extraCost, extraCost, mids, rests, years: spec.years, segFactor, foreignKm };
+}
+
+/** 고속도로 휴게소 자리: 곡선을 따라 약 40km마다 (양 끝 20km 안쪽 제외) */
+function restPositions(segs) {
+  if (!draft || !['motorway', 'tunnelRoad'].includes(draft.type)) return [];
+  const line = segs.flatMap((s, i) => (i ? s.slice(1) : s));
+  const total = polylineKm(line);
+  const out = [];
+  let acc = 0, next = REST.spacingKm;
+  for (let k = 0; k + 1 < line.length; k++) {
+    const d = kmBetween(line[k][0], line[k][1], line[k + 1][0], line[k + 1][1]);
+    while (acc + d >= next && next <= total - REST.spacingKm / 2) {
+      const t = (next - acc) / d;
+      const lon = line[k][0] + t * (line[k + 1][0] - line[k][0]), lat = line[k][1] + t * (line[k + 1][1] - line[k][1]);
+      if (!isForeign(lon, lat)) out.push([lon, lat]);
+      next += REST.spacingKm;
+    }
+    acc += d;
+  }
+  return out;
 }
 
 /** 노선 끝 도시 이름: 국외 거점이면 그 도시, 아니면 가까운 시·군 */
@@ -735,12 +861,34 @@ function usedLineNames() {
   return new Set(allLinks().map((l) => l.name).filter(Boolean));
 }
 
-/** 그리는 중인 노선의 이름 (직접 고쳤으면 그 이름) */
+/** 그리는 노선의 첫 점이나 끝점이 같은 종류 기존 노선의 종점이면 그 노선 이름 (연장 후보) */
+function extensionOf() {
+  if (!draft || draft.points.length < 2) return null;
+  const spec = NEW_BUILDS[draft.type];
+  for (const p of [draft.points[0], draft.points[draft.points.length - 1]]) {
+    if (p.node == null) continue;
+    const count = new Map();
+    for (const l of allLinks()) {
+      if ((l.a !== p.node && l.b !== p.node) || l.mode !== spec.mode || l.cls !== spec.attrs.cls || !l.name || l.ext) continue;
+      count.set(l.name, (count.get(l.name) || 0) + 1);
+    }
+    // 그 점에서 한 구간만 뻗는 노선 = 종점
+    for (const [name, n] of count) if (n === 1) return name;
+  }
+  return null;
+}
+
+/** 그리는 중인 노선의 이름 (직접 고쳤으면 그 이름, 기존선 연장이면 그 노선 이름) */
 function draftLineName() {
   if (draft.lineNameEdited) return draft.lineName;
   if (draft.points.length < 2) return '';
-  const a = endCity(draft.points[0]), b = endCity(draft.points[draft.points.length - 1]);
-  draft.lineName = autoLineName(draft.type, a, b, usedLineNames());
+  const ext = draft.extend !== false ? extensionOf() : null;
+  draft.extendOf = ext;
+  if (ext) draft.lineName = ext;
+  else {
+    const a = endCity(draft.points[0]), b = endCity(draft.points[draft.points.length - 1]);
+    draft.lineName = autoLineName(draft.type, a, b, usedLineNames());
+  }
   return draft.lineName;
 }
 
@@ -763,7 +911,8 @@ function commitDraft() {
     p.node = splitLink(base, state, p.split, p.lon, p.lat);
     split = true;
   }
-  const r = startNewBuild(base, state, { type: draft.type, points: draft.points, names, lineName, segFactor: dc.segFactor, extraCost: dc.extraCost });
+  const restAreas = restPositions(smoothSegments(draft.points)).map(([lon, lat]) => ({ lon, lat, name: namer.suggest(lon, lat, 'rest') }));
+  const r = startNewBuild(base, state, { type: draft.type, points: draft.points, names, lineName, extendOf: draft.extendOf, segFactor: dc.segFactor, extraCost: dc.extraCost, restAreas });
   if (split) refreshLinks();
   if (!r.ok) { alert(r.reason); return; }
   draft.points.forEach((p) => { p.reserved = false; });
@@ -784,6 +933,7 @@ function addFeatureStatesAfterRebuild() { refreshLinks(); }
 
 function bindUI() {
   $('#btn-next').onclick = nextYear;
+  $('#btn-measure').onclick = () => (measure ? endMeasure() : startMeasure());
   document.querySelectorAll('#tabs button').forEach((b) => { b.onclick = () => switchTab(b.dataset.tab); });
   $('#legend').addEventListener('change', (e) => {
     if (e.target.id === 'metric') { metric = e.target.value; paintZones(); renderLegend(); }
@@ -857,6 +1007,7 @@ function renderStatus() {
       <tr><td>수단 분담 (승용차·철도·대중교통)</td><td>${pct(t.road / t.trips, 0)} · ${pct(t.rail / t.trips, 0)} · ${pct(t.transit / t.trips, 0)}</td></tr>
       <tr><td>남북 간 통행 (일)</td><td>${fmtPop(t.kpkr)} 통행</td></tr>
       <tr><td>항공 · 국제 통행 (일)</td><td>${fmtPop(t.air || 0)} · ${fmtPop(t.intl || 0)}</td></tr>
+      <tr><td>관광 통행 (일)</td><td>${fmtPop(t.tour || 0)} <span class="m">입국 ${fmtPop(t.tourIn || 0)} · 출국 ${fmtPop(t.tourOut || 0)}</span></td></tr>
       <tr><td>정체 도로 (V/C&gt;1)</td><td>${Math.round(cong).toLocaleString()} km</td></tr>
     </table>
     <h4>인구 이동 (지난 1년)</h4>
@@ -892,15 +1043,19 @@ function renderBuild() {
     const lineName = draftLineName();
     body = `<h4>${spec.label}</h4>
       ${lineName ? `<div class="name-row"><span class="kind">노선</span><input type="text" id="line-name" value="${esc(lineName)}"></div>` : ''}
+      ${draft.extendOf || draft.extend === false ? `<div class="name-row"><label><input type="checkbox" id="draft-extend" ${draft.extendOf ? 'checked' : ''}>
+        기존 노선의 연장으로 놓기${draft.extendOf ? ` (${esc(draft.extendOf)})` : ''}</label></div>` : ''}
+      ${draft.points.length > 1 ? `<p class="hint">${draft.extendOf ? `기존선 연장: ${esc(draft.extendOf)}의 종점에서 이어 같은 노선 이름을 씁니다.` : '신설 노선: 새 노선 이름을 붙입니다.'}</p>` : ''}
       <p class="hint">기존 ${spec.mode ? '선로' : '도로'} 근처를 누르면 연결됩니다. ${spec.mode ? '각 점은 역이 됩니다.' : '도로는 양 끝을 기존 도로에 붙여야 합니다.'}
       Backspace: 마지막 점 지우기 · Enter: 착공 · Esc: 취소</p>
       <div>${draft.points.map((p, i) => pointRow(p, i)).join('') || '<p class="hint">시작점을 누르세요.</p>'}</div>
       <table class="kv" style="margin-top:8px">
-        <tr><td>연장</td><td>${km.toFixed(1)} km</td></tr>
+        <tr><td>길이</td><td>${km.toFixed(1)} km</td></tr>
         <tr><td>사업비</td><td>${formatWon(cost)}</td></tr>
         <tr><td>공사 기간 · 연 분담</td><td>${years}년 · ${formatWon(cost / years)}</td></tr>
         ${foreignKm > 0.5 ? `<tr><td>외국 구간 (상대국 절반 부담)</td><td>${foreignKm.toFixed(0)} km</td></tr>` : ''}
-        ${draftCost().mids ? `<tr><td>중간 ${spec.mode === 0 ? 'IC' : '역'} ${draftCost().mids}곳 설치</td><td>${formatWon(draftCost().extraCost)}</td></tr>` : ''}
+        ${draftCost().mids ? `<tr><td>중간 ${spec.mode === 0 ? 'IC' : '역'} ${draftCost().mids}곳</td><td>${formatWon(draftCost().mids * (spec.mode === 0 ? MID_COST.road : MID_COST.rail))}</td></tr>` : ''}
+        ${draftCost().rests ? `<tr><td>휴게소 ${draftCost().rests}곳 (약 ${REST.spacingKm}km마다)</td><td>${formatWon(draftCost().rests * REST.cost)}</td></tr>` : ''}
       </table>
       <div class="name-row"><label><input type="checkbox" id="snap-node" ${snap.node ? 'checked' : ''}> 노드에 붙이기</label>
         <label><input type="checkbox" id="snap-line" ${snap.line ? 'checked' : ''}> 선 위에 붙이기 (중간 ${spec.mode === 0 ? 'IC' : '역'})</label></div>
@@ -924,6 +1079,8 @@ function renderBuild() {
     $('#snap-line').onchange = (e) => { snap.line = e.target.checked; };
     const ln = $('#line-name');
     if (ln) ln.onchange = () => { draft.lineName = ln.value.trim() || draft.lineName; draft.lineNameEdited = true; };
+    const ex = $('#draft-extend');
+    if (ex) ex.onchange = () => { draft.extend = ex.checked; draft.lineNameEdited = false; renderBuild(); };
     $('#draft-cancel').onclick = cancelDraft;
     el.querySelectorAll('[data-pname]').forEach((inp) => {
       inp.onchange = () => renameDraftPoint(+inp.dataset.pname, inp.value.trim());
@@ -1084,6 +1241,9 @@ function renderStats() {
     <h4>노선 순위</h4><table class="cmp"><tr><th>노선</th><th>회/일</th><th>여객/일</th><th>탑승률</th></tr>${routeRows}</table>
     <h4>공항 순위</h4><table class="cmp"><tr><th>공항</th><th>여객/일</th><th>V/C</th></tr>${apRows}</table>
     ${latentRows ? `<h4>미취항 잠재 수요</h4><table class="cmp"><tr><th>노선</th><th>여객/일</th></tr>${latentRows}</table>` : ''}
+    ${result.totals.tourDest ? `<h3 style="margin-top:16px">관광</h3>
+    <table class="cmp"><tr><th>목적지</th><th>관광 통행/일</th></tr>${Object.entries(result.totals.tourDest).sort((x, y) => y[1] - x[1]).slice(0, 10)
+      .map(([z, v]) => `<tr><td>${esc(zoneName(+z))}${zoneProps[z].sites ? ` <span class="m">${esc(zoneProps[z].sites.join(', '))}</span>` : ''}</td><td>${Math.round(v).toLocaleString()}</td></tr>`).join('')}</table>` : ''}
     <h3 style="margin-top:16px">철도</h3>
     <h4>역 순위 (지역 간 승하차)</h4><table class="cmp"><tr><th>역</th><th>명/일</th></tr>${stRows}</table>
     <h4>노선 순위 (최대 구간 이용객)</h4><table class="cmp"><tr><th>노선</th><th>명/일</th><th>V/C</th></tr>${railRows}</table>

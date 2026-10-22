@@ -3,7 +3,7 @@
 
 import { kmBetween } from '../sim/model.js';
 
-const SUFFIX = { station: '역', IC: 'IC', JCT: 'JCT' };
+const SUFFIX = { station: '역', IC: 'IC', JCT: 'JCT', rest: '휴게소' };
 const PLACE_WEIGHT = { city: 3, town: 2, suburb: 1.3, village: 1 };
 const ADMIN_TAIL = /(특별자치시|특별자치도|특별시|광역시|직할시|노동자구|구역|시|군|구|읍|면|동|리)$/;
 
@@ -19,7 +19,7 @@ export class Namer {
   }
 
   // 역과 IC는 이름 공간이 다르다 (서울역과 서울IC는 공존). IC와 JCT는 함께 본다.
-  key(name, kind) { return (kind === 'station' ? 's:' : 'r:') + normalize(name); }
+  key(name, kind) { return (kind === 'station' ? 's:' : kind === 'rest' ? 'h:' : 'r:') + normalize(name); }
   reserve(name, kind) { this.used.add(this.key(name, kind)); }
   release(name, kind) { this.used.delete(this.key(name, kind)); }
   isUsed(name, kind) { return this.used.has(this.key(name, kind)); }
