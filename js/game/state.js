@@ -3,6 +3,7 @@ import { DIFFICULTY, UPGRADES, NEW_BUILDS, KP_COST_FACTOR, AIRPORT, upgradeCost,
 import { P } from '../sim/params.js';
 import { routeKey } from '../sim/model.js';
 import { smoothSegments, polylineKm } from './curve.js';
+import { serviceLinks } from './services.js';
 
 const SAVE_KEY = 'ukt-save-v1';
 const START_YEAR = 2026;
@@ -36,6 +37,7 @@ export function newGame(difficulty = 'normal') {
     placeNames: {},     // 'z:존' / 'u:읍면동' → 바뀐 이름
     air: { auto: true, routes: null, banned: [] },  // 항공 노선 (routes: 키 → {a, b, freq, origin, low})
     happyBonus: {},     // 존 → 행복도 가산점 (사업 효과, 해마다 줄어듦)
+    services: [],       // 운행 계통 (특급·급행·보통)
   };
 }
 
@@ -80,7 +82,11 @@ export function effectiveNetwork(base, state) {
   const airports = (base.airports || []).map((a) => ({ ...a, cap: state.airportCap?.[a.id] ?? a.cap }))
     .concat((state.newAirports || []).filter((a) => a.built).map((a) => ({ ...a, cap: state.airportCap?.[a.id] ?? a.cap, intl: true })));
   const airRoutes = Object.values(state.air?.routes || {}).map((r) => ({ a: r.a, b: r.b, freq: r.freq }));
-  return { nodes, links, stations: [...new Set(stations)], airports, airRoutes, airBanned: state.air?.banned || [] };
+  // 운행 계통(특급·급행·보통)은 실제 링크 뒤에 가상 링크로 붙는다
+  const physCount = links.length;
+  links.push(...serviceLinks(state, links));
+  const serviceStops = (state.services || []).filter((s) => s.built).map((s) => ({ stops: s.stops, trains: s.trains }));
+  return { nodes, links, physCount, serviceStops, stations: [...new Set(stations)], airports, airRoutes, airBanned: state.air?.banned || [] };
 }
 
 export function linkAt(base, state, id) {
@@ -101,7 +107,7 @@ export function canAfford(state, cost, years) {
   return cost / years <= state.budget + (d.borrowLimit - state.debt);
 }
 
-function startProject(state, p) {
+export function startProject(state, p) {
   p.annual = Math.round(p.cost / p.years);
   p.paid = p.annual;
   p.startYear = state.year;
@@ -439,6 +445,11 @@ export function advanceBudgetYear(base, state) {
 }
 
 function completeProject(base, state, p) {
+  if (p.kind === 'service') {
+    const s = (state.services || []).find((x) => x.id === p.service);
+    if (s) s.built = true;
+    return;
+  }
   if (p.kind === 'airRoute') {
     state.air.routes[p.key] = { a: p.a, b: p.b, freq: AIR.manualFreq, origin: 'manual', low: 0 };
     state.air.banned = state.air.banned.filter((k) => k !== p.key);

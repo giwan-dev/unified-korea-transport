@@ -112,8 +112,21 @@ export class Model {
     this.rail = new Graph(n, A, B, (i) => L[i].active && L[i].mode === 1);
     this.freeTime = new Float64Array(L.length);
     this.capacity = new Float64Array(L.length);
+    // 운행 계통의 가상 링크는 실제 링크 뒤에 붙어 온다 (net.physCount부터)
+    this.nPhys = net.physCount ?? L.length;
+    this.virtual = [];
+    const stationSet = new Set(net.stations);
     for (let i = 0; i < L.length; i++) {
       const l = L[i];
+      if (l.via) {
+        // 정차역 사이: 밑 선로 주행시간에서 통과역 정차 시간을 빼고, 열차 등급만큼 빠르다
+        let t = 0;
+        for (const v of l.via) t += this.freeTime[v];
+        this.freeTime[i] = Math.max(1, (t - l.skip * P.railDwellMin) * (P.serviceTimeFactor[l.kind] ?? 1));
+        this.capacity[i] = l.trains * P.railPaxPerTrain[l.cls];
+        this.virtual.push(i);
+        continue;
+      }
       if (l.mode === 0) {
         this.freeTime[i] = (l.len / l.speed) * 60;
         let cap = l.lanes * P.roadCapPerLaneHour[l.cls] * P.dailyFactor;
@@ -124,7 +137,9 @@ export class Model {
         this.capacity[i] = P.metroTrainsPerDay * P.metroPaxPerTrain * (l.tracks >= 3 ? 1.5 : 1);
       } else {
         const pen = l.power === 'AC' ? 1 : P.railNonACPenalty;
-        this.freeTime[i] = (l.len / l.speed) * 60 * pen;
+        // 양 끝이 역이면 정차 시간을 반씩 얹는다 (모든 역에 서는 열차 기준)
+        const dwell = P.railDwellMin * ((stationSet.has(l.a) ? 0.5 : 0) + (stationSet.has(l.b) ? 0.5 : 0));
+        this.freeTime[i] = (l.len / l.speed) * 60 * pen + dwell;
         this.capacity[i] = P.railTrainsPerDay[Math.min(l.tracks, 4)] * P.railPaxPerTrain[l.cls];
       }
     }
@@ -146,6 +161,14 @@ export class Model {
       this.buildTransit();
     }
     this.buildAir();
+    // 역별 운행 계통 열차 수 (시간표가 정해진 역은 그만큼 자주 열차가 온다)
+    this.svcTrains = new Float64Array(this.stationNode.length);
+    for (const s of net.serviceStops || []) {
+      for (const nd of s.stops) {
+        const k = this.stationOf.get(nd);
+        if (k != null) this.svcTrains[k] += s.trains;
+      }
+    }
   }
 
   /**
@@ -335,7 +358,8 @@ export class Model {
   updateStationWaits(it) {
     for (let s = 0; s < this.stationWait.length; s++) {
       const cap = this.stationKP[s] ? P.kpWaitMaxMin : P.waitMaxMin;
-      const target = Math.min(Math.max(P.waitScale / Math.sqrt(this.boardings[s] + 1), P.waitMinMin), cap);
+      let target = Math.min(Math.max(P.waitScale / Math.sqrt(this.boardings[s] + 1), P.waitMinMin), cap);
+      if (this.svcTrains?.[s] > 0) target = Math.min(target, Math.max(3, P.serviceDayMin / (2 * this.svcTrains[s])));
       this.stationWait[s] += (target - this.stationWait[s]) / (it + 1);
     }
   }
@@ -575,6 +599,8 @@ export class Model {
         this.rail.shortestPaths(this.stationNode[s], this.cost);
         this.rail.loadTree(nodeDemand, aux);
       }
+      // 운행 계통 이용객은 밑의 실제 선로도 함께 쓴다 (선로 용량 공유)
+      for (const v of this.virtual) for (const l of L[v].via) aux[l] += aux[v];
       for (let l = 0; l < L.length; l++) this.volume[l] += (aux[l] - this.volume[l]) / (it + offset);
       this.updateStationWaits(it + offset);
       for (let k = 0; k < airOD.length; k++) this.airOD[k] += (airOD[k] - this.airOD[k]) / (it + offset);
@@ -805,14 +831,16 @@ export class Model {
   // ------------------------------------------------------------ 결과
 
   linkResults() {
-    const n = this.net.links.length;
+    const n = this.nPhys ?? this.net.links.length;
     const vol = new Float32Array(n), vc = new Float32Array(n), speed = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       vol[i] = this.volume[i];
       vc[i] = this.capacity[i] > 0 ? this.volume[i] / this.capacity[i] : 0;
       speed[i] = this.cost[i] > 0 ? this.net.links[i].len / (this.cost[i] / 60) : 0;
     }
-    return { vol, vc, speed };
+    // 운행 계통 구간별 이용객 (가상 링크 순서 그대로)
+    const svcVol = Float32Array.from(this.virtual || [], (i) => this.volume[i]);
+    return { vol, vc, speed, svcVol };
   }
 
   zoneResults() {
@@ -1074,7 +1102,7 @@ export class Model {
       }
       if (best) {
         this.rail.shortestPaths(this.stationNode[best.s], this.cost);
-        const links = pathLinks(this.rail, this.stationNode[best.t]);
+        const links = pathLinks(this.rail, this.stationNode[best.t]).flatMap((l) => this.net.links[l].via || [l]);
         const km = links.reduce((acc, l) => acc + this.net.links[l].len, 0);
         out.rail = { ...best, km, links, wait: this.stationWait[best.s], cost: Math.round(km * P.railFarePerKm.conv) };
       }

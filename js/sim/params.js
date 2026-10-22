@@ -32,6 +32,9 @@ export const P = {
   vot: 250,                   // 원/분 (약 15,000원/시)
   carCostPerKm: 160,
   railFarePerKm: { hsr: 150, conv: 90 },
+  railDwellMin: 1,            // 역마다 서는 시간 (분). 운행 계통의 통과역은 이만큼 빨라진다
+  serviceDayMin: 1080,
+  serviceTimeFactor: { limited: 0.92, express: 0.96, local: 1 },  // 특급은 우등 차량·선로 우선권으로 조금 더 빠르다        // 운행 계통의 하루 운행 시간 (분): 대기 ≈ 운행 간격의 절반
   logitLambda: 0.03,          // 수단선택 민감도 (1/분)
   railASC: 10,                // 철도 고유 불편 (분)
   kpRailASCFactor: 0.35,      // 북측 내부 통행은 철도가 주 수단이라 고유 불편을 덜 적용 (자동차·시외버스 부족)
