@@ -38,6 +38,9 @@ export class Model {
   /** 저장된 존 상태 복원 */
   restore(s) {
     for (const k of ['pop', 'income', 'le', 'mys', 'eys', 'hdi', 'amenity']) this[k].set(s[k]);
+    if (s.subW && s.subW.length === this.S) {
+      this.subW.set(s.subW); this.subAmenity.set(s.subAmenity); this.subAmenityReady = true;
+    }
     this.K = s.K; this.accessRef = s.accessRef; this.frontier = s.frontier;
     this.railASC = s.railASC ?? P.railASC;
     this.transitASC = s.transitASC ?? P.transitASC;
@@ -50,6 +53,8 @@ export class Model {
   snapshot() {
     const o = { K: this.K, railASC: this.railASC, transitASC: this.transitASC, accessRef: this.accessRef, frontier: this.frontier };
     for (const k of ['pop', 'income', 'le', 'mys', 'eys', 'hdi', 'amenity']) o[k] = Array.from(this[k]);
+    o.subW = Array.from(this.subW, (v) => Math.round(v * 1e6) / 1e6);
+    o.subAmenity = Array.from(this.subAmenity, (v) => Math.round(v * 1e4) / 1e4);
     o.waits = Array.from(this.stationNode, (nd, i) => [nd, Math.round(this.stationWait[i] * 10) / 10]);
     return o;
   }
@@ -121,18 +126,21 @@ export class Model {
   // ------------------------------------------------------------ 소구역·역세권
 
   initSubzones(zones, grid) {
-    const sx = [], sy = [], sw = [], sz = [];
+    const sx = [], sy = [], sw = [], sz = [], sa = [];
     this.zoneSub0 = new Int32Array(zones.length);
     this.zoneSubN = new Int32Array(zones.length);
     zones.forEach((z, i) => {
       const subs = z.subs || [[z.cx, z.cy, 1]];
       this.zoneSub0[i] = sx.length;
       this.zoneSubN[i] = subs.length;
-      for (const [x, y, w] of subs) { sx.push(x); sy.push(y); sw.push(w); sz.push(i); }
+      for (const [x, y, w, a] of subs) { sx.push(x); sy.push(y); sw.push(w); sz.push(i); sa.push(Math.max(a ?? 1, 0.05)); }
     });
     this.S = sx.length;
     this.subX = Float64Array.from(sx); this.subY = Float64Array.from(sy);
     this.subW = Float64Array.from(sw); this.subZone = Int32Array.from(sz);
+    this.subArea = Float64Array.from(sa);
+    this.subAmenity = new Float64Array(this.S);
+    this.subAmenityReady = false;
     // 소구역별 격자 목록 (CSR)
     const n = grid ? grid.length / 4 : 0;
     const count = new Int32Array(this.S + 1);
@@ -591,6 +599,7 @@ export class Model {
       this.hdi[i] = hdiOf(this.le[i], this.mys[i], this.eys[i], this.income[i]);
     }
     this.calibrateAmenity(0, 'closed');
+    this.calibrateSubAmenity();
   }
 
   utility(i) {
@@ -667,11 +676,18 @@ export class Model {
       this.hdi[i] = hdiOf(this.le[i], this.mys[i], this.eys[i], this.income[i]);
     }
     const mig = this.migrationFlows(integration, policy);
+    // 한 해 순이동이 어느 존에서도 maxNetMigration을 넘지 않도록 전체 흐름을 줄인다 (이사 수요의 물리적 한계)
+    let peak = 0;
+    for (let i = 0; i < Z; i++) peak = Math.max(peak, Math.abs(mig.net[i]) / this.pop[i]);
+    const scale = Math.min(1, P.maxNetMigration / (peak || 1));
+    for (const k of ['net']) for (let i = 0; i < Z; i++) mig[k][i] *= scale;
+    mig.kpToKr *= scale; mig.krToKp *= scale;
     for (let i = 0; i < Z; i++) {
       const g = this.isKP[i] ? P.naturalGrowth.KP : P.naturalGrowth.KR;
       this.pop[i] = Math.max(100, this.pop[i] * (1 + g) + mig.net[i]);
     }
     this.lastMigration = { kpToKr: mig.kpToKr, krToKp: mig.krToKp, net: mig.net };
+    this.relocateWithinZones();
   }
 
   // ------------------------------------------------------------ 결과
@@ -694,6 +710,76 @@ export class Model {
       access: Float64Array.from(this.access), station: this.primaryStations(),
       netMig: this.lastMigration.net ? Float64Array.from(this.lastMigration.net) : new Float64Array(this.Z),
     };
+  }
+
+  /** 소구역(읍면동) 인구와 대중교통·철도 접근시간 */
+  subResults() {
+    const S = this.S;
+    const pop = new Float64Array(S), transit = new Float32Array(S), rail = new Float32Array(S);
+    for (let s = 0; s < S; s++) {
+      pop[s] = this.subW[s] * this.pop[this.subZone[s]];
+      transit[s] = this.subTransitAccess(s);
+      rail[s] = this.subRailAccess(s);
+    }
+    return { pop, transit, rail };
+  }
+
+  // ------------------------------------------------------------ 소구역 인구 이동
+
+  /** 가장 가까운 대중교통(도시철도역 또는 버스) 접근 + 대기 (분) */
+  subTransitAccess(s) {
+    const R = P.roadConnectors, M = P.metroCandidates;
+    let best = Infinity;
+    for (let k = s * R; k < s * R + R; k++) {
+      if (this.subRoadNode[k] >= 0) best = Math.min(best, this.subRoadAcc[k] * P.busAccessFactor + P.busWaitMin);
+    }
+    if (this.subMetro[s * M] >= 0) best = Math.min(best, this.subMetroAcc[s * M] + P.metroWaitMin);
+    return best;
+  }
+
+  /** 지역 간 철도역 접근 + 대기 (분), 역이 없으면 120분으로 본다 */
+  subRailAccess(s) {
+    const K = P.stationCandidates;
+    let best = 120;
+    for (let k = s * K; k < s * K + K; k++) {
+      const st = this.subSt[k];
+      if (st < 0) break;
+      best = Math.min(best, this.subStAcc[k] + this.stationWait[st]);
+    }
+    return best;
+  }
+
+  /** 어메니티를 뺀 소구역 효용: 교통 접근이 좋을수록, 밀도가 낮을수록 높다 */
+  subUtility(s) {
+    const dens = this.subW[s] * this.pop[this.subZone[s]] / this.subArea[s];
+    return -P.subTransitWeight * this.subTransitAccess(s) - P.subRailWeight * this.subRailAccess(s)
+      - P.subDensityElasticity * Math.log(dens + 1);
+  }
+
+  /** 기준 연도 인구 분포가 균형이 되도록 소구역 어메니티를 맞춘다 */
+  calibrateSubAmenity() {
+    for (let s = 0; s < this.S; s++) {
+      this.subAmenity[s] = Math.log(Math.max(this.subW[s], 1e-6)) - Math.log(this.subArea[s]) - this.subUtility(s);
+    }
+    this.subAmenityReady = true;
+  }
+
+  /** 존 안에서 해마다 일부 주민이 더 나은 소구역으로 옮겨 간다 */
+  relocateWithinZones() {
+    if (!this.subAmenityReady) this.calibrateSubAmenity();
+    const r = P.subRelocationRate;
+    for (let z = 0; z < this.Z; z++) {
+      const a = this.zoneSub0[z], n = this.zoneSubN[z];
+      if (n < 2) continue;
+      let sum = 0;
+      const t = new Float64Array(n);
+      for (let k = 0; k < n; k++) {
+        const s = a + k;
+        t[k] = this.subArea[s] * Math.exp(this.subUtility(s) + this.subAmenity[s]);
+        sum += t[k];
+      }
+      for (let k = 0; k < n; k++) this.subW[a + k] += r * (t[k] / sum - this.subW[a + k]);
+    }
   }
 
   /** 존의 가장 큰 소구역이 주로 쓰는 역 (노드 id, 없으면 -1) */

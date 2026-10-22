@@ -12,7 +12,7 @@ const $ = (s) => document.querySelector(s);
 const CLASS_LABEL = { motorway: '고속도로', trunk: '간선국도', primary: '주요 도로', secondary: '지방 도로', hsr: '고속철도', conv: '일반철도', metro: '도시철도' };
 const POLICY_LABEL = { free: '자유 이주', limited: '이주 제한 (허가제)', closed: '이주 통제' };
 
-let map, base, zonesFC, zoneProps, places, grid, namer, worker;
+let map, base, zonesFC, zoneProps, places, grid, subsFC, subPop0, namer, worker;
 let state, result = null, prevSummary = null, requests = [];
 let metric = 'pop';
 let selection = null;      // {type:'link'|'zone'|'node', id}
@@ -31,6 +31,9 @@ async function init() {
   ]);
   zonesFC = z; base = n; places = p; grid = new Float32Array(g);
   zoneProps = zonesFC.features.map((f) => f.properties);
+  // 읍면동 경계는 지도에만 쓰므로 기다리지 않는다
+  const subsReady = fetch('data/subzones.geojson').then((r) => r.json()).then((fc) => { subsFC = fc; });
+  subPop0 = zoneProps.flatMap((zp) => zp.subs.map((s) => s[2] * zp.pop));
   state = load() || newGame('normal');
 
   // 지도가 뜨는 동안 기준 연도 계산을 먼저 시작한다
@@ -47,7 +50,8 @@ async function init() {
 
   const mapReady = createMap('map').then((m) => {
     map = m;
-    addLayers(map, zonesFC, linksFC());
+    addLayers(map, zonesFC, linksFC(), { type: 'FeatureCollection', features: [] });
+    subsReady.then(() => map.getSource('subs').setData(subsFC));
     refreshPoints();
     resetNamer();
     bindMap();
@@ -224,7 +228,19 @@ function showDensity(on) {
 
 function paintZones() {
   showDensity(metric === 'density');
+  const sub = !!METRICS[metric]?.sub;
+  for (const l of ['subs-fill', 'subs-line']) map.setLayoutProperty(l, 'visibility', sub ? 'visible' : 'none');
   if (!result) return;
+  if (sub) {
+    const s = result.subs;
+    for (let i = 0; i < s.pop.length; i++) {
+      let v;
+      if (metric === 'subDensity') v = s.pop[i] / subArea(i);
+      else if (metric === 'subChange') v = s.pop[i] / Math.max(subPop0[i], 1) - 1;
+      else v = s.transit[i];
+      map.setFeatureState({ source: 'subs', id: i }, { color: colorFor(metric, v) });
+    }
+  }
   const z = result.zones;
   const accRef = median(Array.from(z.access));
   for (let i = 0; i < zoneProps.length; i++) {
@@ -234,8 +250,23 @@ function paintZones() {
     else if (metric === 'hdi') v = z.hdi[i];
     else if (metric === 'income') v = z.income[i];
     else if (metric === 'access') v = z.access[i] / accRef;
-    map.setFeatureState({ source: 'zones', id: i }, { color: colorFor(metric, v) });
+    map.setFeatureState({ source: 'zones', id: i }, { color: sub ? null : colorFor(metric, v) });
   }
+}
+
+let subIndex = null;
+/** 소구역 번호 → [존, 존 안 순번] */
+function subInfo(i) {
+  if (!subIndex) {
+    subIndex = [];
+    zoneProps.forEach((zp, z) => zp.subs.forEach((_, k) => subIndex.push([z, k])));
+  }
+  return subIndex[i];
+}
+
+function subArea(i) {
+  const [z, k] = subInfo(i);
+  return Math.max(zoneProps[z].subs[k][3] ?? 1, 0.05);
 }
 
 // ------------------------------------------------------------ 지도 상호작용
@@ -248,6 +279,10 @@ function bindMap() {
     if (pt) return select({ type: 'node', id: pt.properties.node });
     const ln = map.queryRenderedFeatures(box, { layers: ['rails', 'metro', 'roads', 'links-building'] })[0];
     if (ln) return select({ type: 'link', id: ln.properties.id });
+    if (METRICS[metric]?.sub) {
+      const sb = map.queryRenderedFeatures(e.point, { layers: ['subs-fill'] })[0];
+      if (sb) return select({ type: 'sub', id: sb.id });
+    }
     const zn = map.queryRenderedFeatures(e.point, { layers: ['zones-fill'] })[0];
     if (zn) return select({ type: 'zone', id: zn.id });
     select(null);
@@ -262,7 +297,9 @@ function bindMap() {
 function select(sel) {
   if (selection?.type === 'link') map.setFeatureState({ source: 'links', id: selection.id }, { sel: false });
   if (selection?.type === 'zone') map.setFeatureState({ source: 'zones', id: selection.id }, { sel: false });
+  if (selection?.type === 'sub') map.setFeatureState({ source: 'subs', id: selection.id }, { sel: false });
   selection = sel;
+  if (sel?.type === 'sub') map.setFeatureState({ source: 'subs', id: sel.id }, { sel: true });
   if (sel?.type === 'link') map.setFeatureState({ source: 'links', id: sel.id }, { sel: true });
   if (sel?.type === 'zone') map.setFeatureState({ source: 'zones', id: sel.id }, { sel: true });
   renderSelection();
@@ -659,6 +696,7 @@ function renderSelection() {
   el.hidden = false;
   if (selection.type === 'link') el.innerHTML = linkPanel(selection.id);
   else if (selection.type === 'zone') el.innerHTML = zonePanel(selection.id);
+  else if (selection.type === 'sub') el.innerHTML = subPanel(selection.id);
   else el.innerHTML = nodePanel(selection.id);
   el.querySelector('.close')?.addEventListener('click', () => select(null));
   el.querySelectorAll('[data-up]').forEach((b) => {
@@ -753,6 +791,24 @@ function zonePanel(id) {
       <tr><td>접근성 (중앙값=1)</td><td>${(r.access[id] / accRef).toFixed(2)}</td></tr>
       <tr><td>이용 철도역</td><td>${stName ? esc(stName) : '없음 (25km 밖)'}</td></tr>
     </table>`;
+}
+
+function subPanel(i) {
+  const f = subsFC?.features[i];
+  const [z] = subInfo(i);
+  const name = f ? f.properties.name : '소구역';
+  if (!result) return header(name);
+  const s = result.subs;
+  const change = s.pop[i] / Math.max(subPop0[i], 1) - 1;
+  return `${header(name)}
+    <table class="kv">
+      <tr><td>소속</td><td>${esc(zoneProps[z].province)} ${esc(zoneProps[z].name)}</td></tr>
+      <tr><td>인구</td><td>${Math.round(s.pop[i]).toLocaleString()}명 <span class="${change >= 0 ? 'pos' : 'neg'}">(${change >= 0 ? '+' : ''}${pct(change)})</span></td></tr>
+      <tr><td>인구 밀도</td><td>${Math.round(s.pop[i] / subArea(i)).toLocaleString()}/km²</td></tr>
+      <tr><td>대중교통 접근 (대기 포함)</td><td>${Math.round(s.transit[i])}분</td></tr>
+      <tr><td>지역 간 철도역 접근 (대기 포함)</td><td>${s.rail[i] >= 120 ? '역 없음' : Math.round(s.rail[i]) + '분'}</td></tr>
+    </table>
+    <p class="hint">해마다 주민 일부가 같은 시군구 안에서 대중교통·철도 접근이 좋고 덜 붐비는 곳으로 옮겨 갑니다. 새 역을 놓으면 주변 인구가 늘어납니다.</p>`;
 }
 
 function nodePanel(id) {

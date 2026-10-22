@@ -83,9 +83,16 @@ export const P = {
   majorCenterPop: 500000,
   healthDecayMin: 120,
 
+  // --- 소구역(읍면동) 인구 이동: 존 안에서 교통 접근이 좋은 곳으로 옮겨 간다
+  subRelocationRate: 0.08,    // 해마다 목표 분포 쪽으로 움직이는 비율
+  subTransitWeight: 0.03,     // 대중교통 접근 1분당 효용
+  subRailWeight: 0.012,       // 지역 간 철도역 접근 1분당 효용
+  subDensityElasticity: 0.3,
+
   // --- 인구
   naturalGrowth: { KR: -0.0015, KP: 0.004 },
   baseOutMigration: 0.03,
+  maxNetMigration: 0.05,      // 존별 한 해 순이동 상한 (인구 대비)
   migUtilSensitivity: 0.8,
   migDistanceMin: 180,
   migDensityElasticity: 0.15,

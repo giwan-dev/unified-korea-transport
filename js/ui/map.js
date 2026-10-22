@@ -11,6 +11,9 @@ export const METRICS = {
   none: { label: '표시 안 함' },
   density: { label: '인구 밀도 (1km 격자)' },
   pop: { label: '인구', ramp: ['#f7f4ea', '#f2c48d', '#d9682e', '#8f2318'], stops: [0, 100000, 400000, 1000000], fmt: (v) => `${Math.round(v / 1000).toLocaleString()}천` },
+  subDensity: { label: '읍면동 인구 밀도', sub: true, ramp: ['#f7f4ea', '#f6c27a', '#e0662c', '#9b1d14', '#4a0c0a'], stops: [100, 1000, 5000, 15000, 30000], fmt: (v) => `${Math.round(v).toLocaleString()}/km²` },
+  subChange: { label: '읍면동 인구 변화 (시작 대비)', sub: true, ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-0.2, -0.05, 0, 0.05, 0.2], fmt: (v) => `${(v * 100).toFixed(0)}%` },
+  subTransit: { label: '읍면동 대중교통 접근 (분)', sub: true, ramp: ['#1d5c3a', '#5aa36b', '#f5e08a', '#e88a3c', '#8f2318'], stops: [5, 10, 20, 35, 60], fmt: (v) => `${Math.round(v)}분` },
   popChange: { label: '인구 변화 (시작 대비)', ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-0.3, -0.1, 0, 0.1, 0.3], fmt: (v) => `${(v * 100).toFixed(0)}%` },
   hdi: { label: '인간개발지수 (HDI)', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [0.55, 0.65, 0.75, 0.85, 0.95], fmt: (v) => v.toFixed(2) },
   income: { label: '1인당 소득 (PPP $)', ramp: ['#f7f4ea', '#c7d9ee', '#5b8fd1', '#1d3f8f'], stops: [2000, 10000, 30000, 60000], fmt: (v) => `$${Math.round(v / 1000)}k` },
@@ -37,7 +40,7 @@ function firstSymbolId(map) {
   return map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
 }
 
-export function addLayers(map, zonesFC, linksFC) {
+export function addLayers(map, zonesFC, linksFC, subsFC) {
   const below = firstSymbolId(map);
   map.addSource('zones', { type: 'geojson', data: zonesFC });
   map.addLayer({
@@ -50,6 +53,21 @@ export function addLayers(map, zonesFC, linksFC) {
   }, below);
   map.addLayer({
     id: 'zones-sel', type: 'line', source: 'zones',
+    paint: { 'line-color': '#1f5fbf', 'line-width': ['case', ['boolean', ['feature-state', 'sel'], false], 2.5, 0] },
+  });
+
+  // 읍면동·소구역 (해당 지표를 고를 때만 보인다)
+  map.addSource('subs', { type: 'geojson', data: subsFC });
+  map.addLayer({
+    id: 'subs-fill', type: 'fill', source: 'subs', layout: { visibility: 'none' },
+    paint: { 'fill-color': ['coalesce', ['feature-state', 'color'], 'rgba(0,0,0,0)'], 'fill-opacity': 0.65 },
+  }, below);
+  map.addLayer({
+    id: 'subs-line', type: 'line', source: 'subs', layout: { visibility: 'none' }, minzoom: 8,
+    paint: { 'line-color': '#7a7f86', 'line-width': 0.4, 'line-opacity': 0.6 },
+  }, below);
+  map.addLayer({
+    id: 'subs-sel', type: 'line', source: 'subs',
     paint: { 'line-color': '#1f5fbf', 'line-width': ['case', ['boolean', ['feature-state', 'sel'], false], 2.5, 0] },
   });
 

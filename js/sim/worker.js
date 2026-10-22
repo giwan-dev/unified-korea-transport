@@ -11,8 +11,9 @@ function results(totals) {
   const links = model.linkResults();
   const zones = model.zoneResults();
   const stations = model.stationResults();
+  const subs = model.subResults();
   post('result', {
-    links, zones, stations, totals, summary: model.summary(), snapshot: model.snapshot(),
+    links, zones, stations, subs, totals, summary: model.summary(), snapshot: model.snapshot(),
   }, [links.vol.buffer, links.vc.buffer, links.speed.buffer]);
 }
 

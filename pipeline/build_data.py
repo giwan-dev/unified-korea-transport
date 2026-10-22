@@ -73,7 +73,7 @@ def ko_name(tags) -> str | None:
 # ---------------------------------------------------------------- 행정구역
 
 
-def load_admin(country: str):
+def load_admin(country: str, levels=("4", "6")):
     """행정경계 면을 만든다. 경계 태그가 붙은 객체만 C++ 쪽에서 걸러 넘긴다.
 
     국경 하천 등에서 링이 끊겨 면 조립에 실패한 관계는 구성 웨이를 polygonize해서 복구한다.
@@ -89,7 +89,7 @@ def load_admin(country: str):
         t = obj.tags
         lvl = t.get("admin_level")
         name = ko_name(t)
-        if lvl not in ("4", "6") or not name:
+        if lvl not in levels or not name:
             continue
         try:
             geom = wkb.loads(fab.create_multipolygon(obj), hex=True)
@@ -105,7 +105,7 @@ def load_admin(country: str):
         lv = t.get("admin_level")
         if lv == "4" and ko_name(t) not in PROVINCES[country]:
             continue
-        if lv in ("4", "6") and ko_name(t) and r.id not in built:
+        if lv in levels and ko_name(t) and r.id not in built:
             failed[r.id] = (int(t["admin_level"]), ko_name(t),
                             [m.ref for m in r.members if m.type == "w" and m.role in ("outer", "")])
     if failed:
