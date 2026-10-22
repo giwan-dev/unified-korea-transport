@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>통일 한반도 교통망</title>
+  <meta name="description" content="통일 한반도의 고속도로·고속철도를 계획하고 수요와 인구 이동을 시뮬레이션하는 게임">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand">통일 한반도 교통망</div>
+    <div class="stats">
+      <div><span class="k">연도</span><span id="s-year" class="v">–</span></div>
+      <div><span class="k">가용 예산</span><span id="s-budget" class="v">–</span></div>
+      <div><span class="k">부채</span><span id="s-debt" class="v">–</span></div>
+      <div><span class="k">지지율</span><span id="s-approval" class="v">–</span></div>
+      <div><span class="k">남북 통합도</span><span id="s-integration" class="v">–</span></div>
+    </div>
+    <button id="btn-next" class="primary" disabled>다음 해 ▶</button>
+  </header>
+
+  <main>
+    <div id="map"></div>
+    <div id="legend"></div>
+    <div id="busy" hidden>
+      <div class="busy-label">계산 중</div>
+      <div class="bar"><div id="busy-bar"></div></div>
+    </div>
+
+    <aside id="side">
+      <nav id="tabs">
+        <button data-tab="status" class="on">현황</button>
+        <button data-tab="build">건설</button>
+        <button data-tab="projects">사업</button>
+        <button data-tab="requests">민원 <span id="req-count" class="badge" hidden></span></button>
+        <button data-tab="settings">설정</button>
+      </nav>
+      <section id="selection" hidden></section>
+      <section data-panel="status" class="panel on"></section>
+      <section data-panel="build" class="panel"></section>
+      <section data-panel="projects" class="panel"></section>
+      <section data-panel="requests" class="panel"></section>
+      <section data-panel="settings" class="panel"></section>
+    </aside>
+  </main>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
