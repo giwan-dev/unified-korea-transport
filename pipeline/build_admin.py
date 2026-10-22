@@ -1,0 +1,243 @@
+"""행정구역 기준 도형을 만든다 (build_data.py보다 먼저 실행).
+
+- 남: 통계청 SGIS 행정동 경계 (vuski/admdongkor 가공본, CC BY 4.0 / 공공누리 제1유형)를 읍면동 단위로 쓰고,
+      시군구(일반구는 시로 합침)와 시도는 읍면동을 합쳐 만든다.
+- 북: OSM 시·군·구역 경계 안을 인구 격자 묶음 중심의 보로노이로 나눠 읍면동 대신 쓴다.
+      이름은 가까운 OSM 동·리 지명을 붙인다.
+- 경계는 커버리지 단순화(이웃과 공유하는 경계를 같이 줄임)로 틈 없이 가볍게 만든다.
+
+출력
+  - data/raw/admin_master.pkl     원래 정밀도의 단위·존 도형 (build_data, build_grid가 읽는다)
+  - data/admin/units.geojson      읍면동(북은 보로노이 구역) 경계, 지도용
+  - data/admin/sgg.geojson        시군구 경계, 지도용
+  - data/admin/sido.geojson       시도 경계, 지도용
+
+실행: python pipeline/build_admin.py
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import pickle
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+import numpy as np
+import osmium
+import rasterio
+import rasterio.features
+import shapely
+from shapely.geometry import mapping, shape
+from shapely.ops import unary_union
+
+sys.path.insert(0, str(Path(__file__).parent))
+import build_data  # noqa: E402
+from build_grid import weighted_kmeans  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
+RAW = ROOT / "data" / "raw"
+OUT = ROOT / "data" / "admin"
+ADMDONG = RAW / "HangJeongDong_ver20261001.geojson"
+KP_POP = RAW / "prk_pop2025.tif"
+KM_PER_DEG = 111.32
+
+KP_POP_PER_UNIT = 20_000   # 북 보로노이 구역 하나가 맡는 대략적인 인구
+KP_AREA_PER_UNIT = 250     # 인구가 적은 산간도 이 면적(km²)마다 하나씩
+KP_MAX_UNITS = 60
+TOL_UNIT = 0.0008          # 단순화 허용오차(도). 약 80m (줌 12 정도까지 충분)
+TOL_SGG = 0.002
+TOL_SIDO = 0.004
+
+ATTRIBUTION = ("행정동 경계: 통계청 SGIS(공공누리 제1유형) 가공 vuski/admdongkor (CC BY 4.0). "
+               "북측 경계·지명: © OpenStreetMap 기여자 (ODbL).")
+
+
+def log(*a):
+    print(*a, file=sys.stderr, flush=True)
+
+
+def area_km2(g):
+    return g.area * KM_PER_DEG ** 2 * math.cos(math.radians(g.centroid.y))
+
+
+def zone_name_kr(sggnm):
+    """'수원시장안구' → '수원시' (일반구는 시로 합친다)"""
+    m = re.match(r"^(.+?시)(.+구)$", sggnm)
+    return m.group(1) if m else sggnm
+
+
+def kr_units():
+    fc = json.loads(ADMDONG.read_text(encoding="utf-8"))
+    units = []
+    for f in fc["features"]:
+        p = f["properties"]
+        g = shapely.make_valid(shape(f["geometry"]))
+        units.append({
+            "name": p["adm_nm"].split()[-1], "code": p["adm_cd2"], "country": "KR",
+            "province": p["sidonm"], "zone": zone_name_kr(p["sggnm"]), "geom": g,
+        })
+    log("KR units", len(units))
+    return units
+
+
+def kp_places():
+    out = []
+    flt = osmium.filter.KeyFilter("place")
+    for n in osmium.FileProcessor(str(build_data.PBF["KP"]), osmium.osm.NODE).with_filter(flt):
+        t = n.tags
+        if t.get("place") in ("town", "village", "suburb", "neighbourhood", "hamlet") and build_data.ko_name(t):
+            out.append((build_data.ko_name(t), n.location.lon, n.location.lat))
+    return out
+
+
+def kp_units():
+    """북: OSM 시·군·구역 안을 인구 격자 묶음 중심의 보로노이로 나눈다."""
+    zones = build_data.build_zones(countries=("KP",))
+    places = kp_places()
+    pl_xy = np.array([(x, y) for _, x, y in places]) if places else np.zeros((0, 2))
+    with rasterio.open(KP_POP) as src:
+        arr = src.read(1).astype("float64")
+        arr[~np.isfinite(arr) | (arr < 0)] = 0
+        ids = rasterio.features.rasterize(((z["geom"], i + 1) for i, z in enumerate(zones)),
+                                          out_shape=arr.shape, transform=src.transform, fill=0, dtype="int32")
+        rows, cols = np.nonzero(ids > 0)
+        xs, ys = rasterio.transform.xy(src.transform, rows, cols)
+        xs = np.asarray(xs); ys = np.asarray(ys)
+        pops = arr[rows, cols] + 1.0   # 빈 땅도 조금은 가중해 산간에도 구역이 생기게 한다
+        zid = ids[rows, cols]
+    units = []
+    for i, z in enumerate(zones):
+        g = shapely.make_valid(z["geom"])
+        m = zid == i + 1
+        a = area_km2(g)
+        if m.sum() < 2:
+            units.append(unit_kp(z, g, z["name"]))
+            continue
+        w = pops[m]
+        k = int(np.clip(round(w.sum() / KP_POP_PER_UNIT + a / KP_AREA_PER_UNIT), 1, KP_MAX_UNITS))
+        k = min(k, int(m.sum()))
+        if k == 1:
+            units.append(unit_kp(z, g, z["name"]))
+            continue
+        scale = np.array([math.cos(math.radians(g.centroid.y)), 1.0])
+        xy = np.column_stack([xs[m], ys[m]])
+        centers, _ = weighted_kmeans(xy * scale, w, k)
+        centers = centers / scale
+        seeds = shapely.MultiPoint([tuple(c) for c in centers])
+        cells = shapely.voronoi_polygons(seeds, extend_to=g.buffer(0.05))
+        used = set()
+        for cell in getattr(cells, "geoms", [cells]):
+            part = cell.intersection(g)
+            if part.is_empty or part.area <= 0:
+                continue
+            part = shapely.make_valid(part)
+            c = part.representative_point()
+            units.append(unit_kp(z, part, nearest_name(places, pl_xy, c.x, c.y, part, used) or z["name"]))
+    log("KP zones", len(zones), "units", len(units))
+    return units
+
+
+def unit_kp(z, g, name):
+    return {"name": name, "code": "", "country": "KP", "province": z["province"], "zone": z["name"], "geom": g}
+
+
+def nearest_name(places, pl_xy, x, y, part, used):
+    """구역 안(없으면 가장 가까운)의 지명. 같은 시군에서 이미 쓴 이름은 피한다."""
+    if not len(pl_xy):
+        return None
+    d = np.hypot((pl_xy[:, 0] - x) * math.cos(math.radians(y)), pl_xy[:, 1] - y)
+    for k in np.argsort(d)[:12]:
+        name = places[k][0]
+        if name in used:
+            continue
+        inside = part.contains(shapely.Point(pl_xy[k]))
+        if inside or d[k] * KM_PER_DEG < 3:
+            used.add(name)
+            return name
+    return None
+
+
+def simplify_coverage(geoms, tol):
+    arr = np.array(geoms, dtype=object)
+    try:
+        return list(shapely.coverage_simplify(arr, tol))
+    except shapely.errors.GEOSException as e:
+        log("coverage_simplify failed, falling back:", e)
+        return [g.simplify(tol, preserve_topology=True) for g in geoms]
+
+
+def to_fc(rows, props):
+    feats = []
+    for i, (r, g) in enumerate(rows):
+        g = shapely.set_precision(g, 0.0001)
+        if g.is_empty:
+            continue
+        feats.append({"type": "Feature", "id": i, "properties": props(i, r), "geometry": mapping(g)})
+    return {"type": "FeatureCollection", "attribution": ATTRIBUTION, "features": feats}
+
+
+def main():
+    units = kr_units() + kp_units()
+    # 존(시군구) 묶기: 순서는 남 → 북, 이름순
+    groups = defaultdict(list)
+    for u in units:
+        groups[(u["country"], u["province"], u["zone"])].append(u)
+    keys = sorted(groups, key=lambda k: (k[0] != "KR", k[1], k[2]))
+    zones = []
+    for zi, key in enumerate(keys):
+        for u in groups[key]:
+            u["zone_id"] = zi
+        zones.append({"country": key[0], "province": key[1], "name": key[2],
+                      "geom": shapely.make_valid(unary_union([u["geom"] for u in groups[key]]))})
+    units.sort(key=lambda u: (u["zone_id"], u["name"]))
+    for i, u in enumerate(units):
+        u["id"] = i
+
+    # 커버리지 단순화: 남은 한 번에, 북은 시군마다 (OSM 시군 경계끼리 조금 겹칠 수 있어서)
+    simple = [None] * len(units)
+    kr = [u for u in units if u["country"] == "KR"]
+    for u, g in zip(kr, simplify_coverage([u["geom"] for u in kr], TOL_UNIT)):
+        simple[u["id"]] = g
+    for zi, z in enumerate(zones):
+        if z["country"] != "KP":
+            continue
+        us = [u for u in units if u["zone_id"] == zi]
+        for u, g in zip(us, simplify_coverage([u["geom"] for u in us], TOL_UNIT)):
+            simple[u["id"]] = g
+    by_zone = defaultdict(list)
+    for u in units:
+        by_zone[u["zone_id"]].append(simple[u["id"]])
+    sgg_simple = [shapely.make_valid(unary_union(by_zone[zi])) for zi in range(len(zones))]
+    sgg_simple = simplify_coverage(sgg_simple, TOL_SGG)
+    for z, g in zip(zones, sgg_simple):
+        z["geom_simple"] = g
+    sido = defaultdict(list)
+    for z, g in zip(zones, sgg_simple):
+        sido[(z["country"], z["province"])].append(g)
+    sido_rows = [(k, shapely.make_valid(unary_union(v))) for k, v in sido.items()]
+    sido_geoms = simplify_coverage([g for _, g in sido_rows], TOL_SIDO)
+
+    OUT.mkdir(parents=True, exist_ok=True)
+    pickle.dump({
+        "units": [{k: (v.wkb if k == "geom" else v) for k, v in u.items()} for u in units],
+        "zones": [{k: (v.wkb if k in ("geom", "geom_simple") else v) for k, v in z.items()} for z in zones],
+    }, (RAW / "admin_master.pkl").open("wb"))
+    write(OUT / "units.geojson", to_fc([(u, simple[u["id"]]) for u in units],
+          lambda i, u: {"id": u["id"], "name": u["name"], "zone": u["zone_id"], "country": u["country"]}))
+    write(OUT / "sgg.geojson", to_fc(list(zip(zones, sgg_simple)),
+          lambda i, z: {"id": i, "name": z["name"], "province": z["province"], "country": z["country"]}))
+    write(OUT / "sido.geojson", to_fc([(k, g) for (k, _), g in zip(sido_rows, sido_geoms)],
+          lambda i, k: {"name": k[1], "country": k[0]}))
+    log("zones", len(zones), "KR", sum(z["country"] == "KR" for z in zones), "KP", sum(z["country"] == "KP" for z in zones))
+
+
+def write(path, fc):
+    path.write_text(json.dumps(fc, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    log(path.name, len(fc["features"]), round(path.stat().st_size / 1e6, 2), "MB")
+
+
+if __name__ == "__main__":
+    main()

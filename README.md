@@ -41,6 +41,7 @@ python tools/serve.py 8000
 python -m venv .venv
 .venv/Scripts/python -m pip install -r pipeline/requirements.txt
 bash pipeline/download.sh
+.venv/Scripts/python -X utf8 pipeline/build_admin.py
 .venv/Scripts/python -X utf8 pipeline/build_data.py
 .venv/Scripts/python -X utf8 pipeline/build_grid.py
 ```
@@ -64,9 +65,13 @@ docs/model.md           모델과 가정값 설명
 
 ## 데이터 출처와 라이선스
 
+- 남측 행정동 경계: 통계청 통계지리정보서비스(SGIS, https://sgis.kostat.go.kr)에서 공공누리 제1유형으로 개방한 행정동 경계를 가공한 것입니다.
+  - 가공: [vuski/admdongkor](https://github.com/vuski/admdongkor), CC BY 4.0
+  - `data/admin/`의 남측 경계도 같은 조건을 따릅니다.
+
 - 도로·철도·행정구역·지명: © [OpenStreetMap](https://www.openstreetmap.org/copyright) 기여자, ODbL 1.0.
   - `data/`의 파생 데이터도 ODbL을 따릅니다.
-- 인구 격자: [WorldPop](https://www.worldpop.org/) 2020 1km UN-adjusted, CC BY 4.0
+- 인구 격자: [WorldPop](https://www.worldpop.org/) 2025 (R2025A) 1km constrained UN-adjusted, CC BY 4.0
 - 배경 지도: [OpenFreeMap](https://openfreemap.org/) (OpenMapTiles, OpenStreetMap)
 
 소득·HDI 초기값과 공사비 단가는 게임용 가정값입니다. 근거와 한계는 [docs/model.md](docs/model.md)에 정리했습니다.

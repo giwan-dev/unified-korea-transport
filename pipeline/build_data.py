@@ -142,9 +142,10 @@ def load_admin(country: str, levels=("4", "6")):
     return areas
 
 
-def build_zones():
+def build_zones(countries=("KR", "KP")):
+    """OSM 시군구 경계. admin_master.pkl이 없을 때와 북측 보로노이 구역을 만들 때 쓴다."""
     zones = []
-    for c in ("KR", "KP"):
+    for c in countries:
         areas = load_admin(c)
         provinces = [a for a in areas if a["level"] == 4 and a["name"] in PROVINCES[c]]
         log(c, "provinces", sorted(p["name"] for p in provinces))
