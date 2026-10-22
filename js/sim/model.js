@@ -4,6 +4,10 @@ import { P } from './params.js';
 
 const KM_PER_DEG = 111.32;
 
+const DENS_DX = 0.0113, DENS_DY = 0.009;   // 약 1km
+function densCell(x, y) { return [Math.floor(x / DENS_DX), Math.floor(y / DENS_DY)]; }
+function densKey(x, y) { const [i, j] = densCell(x, y); return `${i}:${j}`; }
+
 export class Model {
   /**
    * @param {object[]} zones data/zones.json의 존 속성 배열 (subs: 소구역 [경도, 위도, 인구비중, 면적])
@@ -131,6 +135,12 @@ export class Model {
         this.freeTime[i] = (l.len / l.speed) * 60;
         let cap = l.lanes * P.roadCapPerLaneHour[l.cls] * P.dailyFactor;
         if (!l.paved) cap *= P.unpavedCapFactor;
+        // 도심 일반도로: 계산망에 없는 이면도로·병행 도로와 OSM에 빠진 차로 수를 밀도만큼 보탠다
+        if (l.cls !== 'motorway' && l.cls !== 'ferry') {
+          const [ax, ay] = net.nodes[l.a], [bx, by] = net.nodes[l.b];
+          const d = this.densityAt((ax + bx) / 2, (ay + by) / 2);
+          cap *= 1 + Math.min(P.urbanCapMax, Math.max(0, (d - P.urbanDensityFrom) / P.urbanDensityStep));
+        }
         this.capacity[i] = cap;
       } else if (l.mode === 2) {
         this.freeTime[i] = (l.len / l.speed) * 60;
@@ -225,6 +235,21 @@ export class Model {
       const s = grid[c * 4 + 3], k = fill[s]++;
       this.cellX[k] = grid[c * 4]; this.cellY[k] = grid[c * 4 + 1]; this.cellPop[k] = grid[c * 4 + 2];
     }
+    // 약 1km 칸별 인구 (도심 도로 용량 보정용)
+    this.densBins = new Map();
+    for (let c = 0; c < n; c++) {
+      const key = densKey(grid[c * 4], grid[c * 4 + 1]);
+      this.densBins.set(key, (this.densBins.get(key) || 0) + grid[c * 4 + 2]);
+    }
+  }
+
+  /** 지점 주변 3×3km 평균 인구 밀도 (명/km²) */
+  densityAt(x, y) {
+    if (!this.densBins) return 0;
+    const [i, j] = densCell(x, y);
+    let sum = 0;
+    for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) sum += this.densBins.get(`${i + di}:${j + dj}`) || 0;
+    return sum / 9;
   }
 
   /** 소구역의 격자들에 대해 f(경도, 위도)의 인구 가중 평균. 격자가 없으면 중심점 하나로 본다 */

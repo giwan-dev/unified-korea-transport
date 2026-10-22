@@ -9,6 +9,10 @@ export const P = {
   bprBeta: 4,
   bprMaxRatio: 6,
   unpavedCapFactor: 0.6,
+  // 도심 일반도로 용량 보정: 주변 인구 밀도가 urbanDensityFrom을 넘으면 urbanDensityStep마다 용량 +100% (최대 +urbanCapMax배)
+  urbanDensityFrom: 1000,
+  urbanDensityStep: 4000,
+  urbanCapMax: 2,
   accessSpeedKmh: 30,         // 존 중심 → 접근 노드
   accessDetour: 1.3,
 
@@ -23,7 +27,7 @@ export const P = {
   feederSpeedKmh: 22,         // 버스·승용차 연계
   feederPenaltyMin: 10,       // 연계교통 대기·환승
   roadTerminalMin: 3,
-  roadConnectors: 3,          // 소구역당 도로 접속 노드 수
+  roadConnectors: 6,          // 소구역당 도로 접속 노드 수
   waitScale: 3160,            // 역 대기시간 = waitScale / √(일 이용객): 10만 명이면 10분
   waitMinMin: 8,
   waitMaxMin: 90,
