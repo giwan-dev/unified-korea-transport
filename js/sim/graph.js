@@ -38,17 +38,25 @@ export class Graph {
   }
 
   /**
-   * 단일 출발점 최단경로. 결과는 this.dist / this.predEdge / this.order(확정 순서)에 담긴다.
-   * @param {number} source
+   * 최단경로. 결과는 this.dist / this.predEdge / this.order(확정 순서)에 담긴다.
+   * @param {number|number[]} source 출발 노드 (여러 개면 init으로 출발 비용을 준다)
    * @param {Float64Array} linkCost 링크별 비용(분)
+   * @param {number[]} [init] 출발 노드별 초기 비용
    */
-  shortestPaths(source, linkCost) {
+  shortestPaths(source, linkCost, init) {
     const { dist, predEdge, order, heap, offset, target, edgeLink } = this;
     dist.fill(Infinity);
     predEdge.fill(-1);
     heap.clear();
-    dist[source] = 0;
-    heap.push(source, 0);
+    if (Array.isArray(source)) {
+      source.forEach((s, k) => {
+        const c = init ? init[k] : 0;
+        if (c < dist[s]) { dist[s] = c; heap.pushOrDecrease(s, c); }
+      });
+    } else {
+      dist[source] = 0;
+      heap.push(source, 0);
+    }
     let k = 0;
     while (heap.size > 0) {
       const u = heap.pop();

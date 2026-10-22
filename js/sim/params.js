@@ -17,6 +17,16 @@ export const P = {
   railWaitMin: { hsr: 20, conv: 35, kpConv: 60 },
   railNonACPenalty: 1.15,     // 비전철·직류 구간: 기관차 교체·디젤 운행 지체
   stationRadiusKm: 25,
+  stationCandidates: 4,       // 소구역마다 고려하는 역 수
+  walkMaxKm: 1.5,             // 이보다 가까운 격자는 역까지 걸어간다
+  walkSpeedKmh: 4.5,
+  feederSpeedKmh: 22,         // 버스·승용차 연계
+  feederPenaltyMin: 10,       // 연계교통 대기·환승
+  roadTerminalMin: 3,
+  roadConnectors: 3,          // 소구역당 도로 접속 노드 수
+  waitScale: 3160,            // 역 대기시간 = waitScale / √(일 이용객): 10만 명이면 10분
+  waitMinMin: 8,
+  waitMaxMin: 90,
 
   // --- 수요
   vot: 250,                   // 원/분 (약 15,000원/시)

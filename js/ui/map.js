@@ -9,6 +9,7 @@ const FALLBACK_STYLE = {
 
 export const METRICS = {
   none: { label: '표시 안 함' },
+  density: { label: '인구 밀도 (1km 격자)' },
   pop: { label: '인구', ramp: ['#f7f4ea', '#f2c48d', '#d9682e', '#8f2318'], stops: [0, 100000, 400000, 1000000], fmt: (v) => `${Math.round(v / 1000).toLocaleString()}천` },
   popChange: { label: '인구 변화 (시작 대비)', ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-0.3, -0.1, 0, 0.1, 0.3], fmt: (v) => `${(v * 100).toFixed(0)}%` },
   hdi: { label: '인간개발지수 (HDI)', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [0.55, 0.65, 0.75, 0.85, 0.95], fmt: (v) => v.toFixed(2) },
@@ -52,6 +53,19 @@ export function addLayers(map, zonesFC, linksFC) {
     paint: { 'line-color': '#1f5fbf', 'line-width': ['case', ['boolean', ['feature-state', 'sel'], false], 2.5, 0] },
   });
 
+  map.addSource('grid', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({
+    id: 'grid-heat', type: 'heatmap', source: 'grid', layout: { visibility: 'none' },
+    paint: {
+      'heatmap-weight': ['interpolate', ['linear'], ['get', 'p'], 0, 0, 30000, 1],
+      'heatmap-radius': ['interpolate', ['exponential', 2], ['zoom'], 5, 2, 10, 40, 13, 300],
+      'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 5, 0.6, 10, 1.2],
+      'heatmap-opacity': 0.75,
+      'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'],
+        0, 'rgba(255,255,255,0)', 0.15, '#fde7b0', 0.4, '#f6a24a', 0.7, '#d9472b', 1, '#7a1414'],
+    },
+  }, below);
+
   map.addSource('links', { type: 'geojson', data: linksFC, promoteId: 'id' });
   const vcColor = ['interpolate', ['linear'], ['coalesce', ['feature-state', 'vc'], 0],
     0, '#3f9e63', 0.6, '#c5c23a', 0.85, '#e8962c', 1.0, '#d9452f', 1.3, '#7d1d16'];
@@ -74,7 +88,7 @@ export function addLayers(map, zonesFC, linksFC) {
   });
   // 공사 중인 신설 노선은 회색 점선
   map.addLayer({
-    id: 'building', type: 'line', source: 'links', filter: ['==', ['get', 'building'], 1],
+    id: 'links-building', type: 'line', source: 'links', filter: ['==', ['get', 'building'], 1],
     paint: { 'line-color': '#8a8f96', 'line-width': 3, 'line-dasharray': [2, 1.5] },
   });
   map.addLayer({

@@ -12,7 +12,7 @@ const $ = (s) => document.querySelector(s);
 const CLASS_LABEL = { motorway: '고속도로', trunk: '간선국도', primary: '주요 도로', secondary: '지방 도로', hsr: '고속철도', conv: '일반철도' };
 const POLICY_LABEL = { free: '자유 이주', limited: '이주 제한 (허가제)', closed: '이주 통제' };
 
-let map, base, zonesFC, zoneProps, places, namer, worker;
+let map, base, zonesFC, zoneProps, places, grid, namer, worker;
 let state, result = null, prevSummary = null, requests = [];
 let metric = 'pop';
 let selection = null;      // {type:'link'|'zone'|'node', id}
@@ -23,12 +23,13 @@ let wholeRoute = false;    // 개량을 같은 이름 노선 전체에 적용
 init().catch((e) => { console.error(e); alert('불러오기 실패: ' + e.message); });
 
 async function init() {
-  const [z, n, p] = await Promise.all([
+  const [z, n, p, g] = await Promise.all([
     fetch('data/zones.geojson').then((r) => r.json()),
     fetch('data/network.json').then((r) => r.json()),
     fetch('data/places.json').then((r) => r.json()),
+    fetch('data/grid.bin').then((r) => r.arrayBuffer()),
   ]);
-  zonesFC = z; base = n; places = p;
+  zonesFC = z; base = n; places = p; grid = new Float32Array(g);
   zoneProps = zonesFC.features.map((f) => f.properties);
   state = load() || newGame('normal');
 
@@ -39,7 +40,7 @@ async function init() {
     else onWorker(ev);
   };
   worker.postMessage({
-    type: 'init', zones: zoneProps, net: effectiveNetwork(base, state),
+    type: 'init', zones: zoneProps, grid: grid.buffer.slice(0), net: effectiveNetwork(base, state),
     ctx: ctx(), snapshot: state.snapshot,
   });
   setBusy(true, '데이터 준비 중', 0);
@@ -206,7 +207,21 @@ function refreshPoints() {
   map.getSource('points').setData({ type: 'FeatureCollection', features });
 }
 
+/** 인구 밀도 격자 레이어 (처음 켤 때 한 번 만든다) */
+function showDensity(on) {
+  map.setLayoutProperty('grid-heat', 'visibility', on ? 'visible' : 'none');
+  if (!on || map.__gridLoaded) return;
+  const features = [];
+  for (let k = 0; k < grid.length; k += 4) {
+    if (grid[k + 2] < 200) continue;
+    features.push({ type: 'Feature', properties: { p: grid[k + 2] }, geometry: { type: 'Point', coordinates: [grid[k], grid[k + 1]] } });
+  }
+  map.getSource('grid').setData({ type: 'FeatureCollection', features });
+  map.__gridLoaded = true;
+}
+
 function paintZones() {
+  showDensity(metric === 'density');
   if (!result) return;
   const z = result.zones;
   const accRef = median(Array.from(z.access));
@@ -217,7 +232,7 @@ function paintZones() {
     else if (metric === 'hdi') v = z.hdi[i];
     else if (metric === 'income') v = z.income[i];
     else if (metric === 'access') v = z.access[i] / accRef;
-    map.setFeatureState({ source: 'zones', id: i }, { color: metric === 'none' ? null : colorFor(metric, v) });
+    map.setFeatureState({ source: 'zones', id: i }, { color: colorFor(metric, v) });
   }
 }
 
@@ -229,7 +244,7 @@ function bindMap() {
     const box = [[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]];
     const pt = map.queryRenderedFeatures(box, { layers: ['points'] })[0];
     if (pt) return select({ type: 'node', id: pt.properties.node });
-    const ln = map.queryRenderedFeatures(box, { layers: ['rails', 'roads', 'building'] })[0];
+    const ln = map.queryRenderedFeatures(box, { layers: ['rails', 'roads', 'links-building'] })[0];
     if (ln) return select({ type: 'link', id: ln.properties.id });
     const zn = map.queryRenderedFeatures(e.point, { layers: ['zones-fill'] })[0];
     if (zn) return select({ type: 'zone', id: zn.id });
@@ -739,8 +754,16 @@ function nodePanel(id) {
   const n = nodeNames().get(id);
   if (!n) return header('노드');
   const kindLabel = { station: '역', IC: 'IC', JCT: 'JCT' }[n.kind];
+  let riders = '';
+  if (n.kind === 'station' && result) {
+    const k = result.stations.node.indexOf(id);
+    riders = k >= 0
+      ? `<table class="kv"><tr><td>일 승하차 (지역 간 통행)</td><td>${Math.round(result.stations.riders[k]).toLocaleString()}명</td></tr></table>`
+      : '<p class="hint">아직 운행하지 않는 역입니다.</p>';
+  }
   return `${header(n.name)}
     <p class="hint">${kindLabel}${n.isNew ? (state.names[id]?.auto ? ' · 자동 이름' : ' · 직접 지은 이름') : ' · 기존 시설 (OSM)'}</p>
+    ${riders}
     <div class="name-row"><input type="text" id="node-name" value="${esc(n.name)}">
       <button class="small primary" id="node-save">이름 변경</button>
       <button class="small" id="node-auto" title="자동 이름">↻</button></div>`;

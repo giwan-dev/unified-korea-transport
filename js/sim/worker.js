@@ -10,8 +10,9 @@ function post(type, payload, transfer = []) {
 function results(totals) {
   const links = model.linkResults();
   const zones = model.zoneResults();
+  const stations = model.stationResults();
   post('result', {
-    links, zones, totals, summary: model.summary(), snapshot: model.snapshot(),
+    links, zones, stations, totals, summary: model.summary(), snapshot: model.snapshot(),
   }, [links.vol.buffer, links.vc.buffer, links.speed.buffer]);
 }
 
@@ -19,7 +20,7 @@ self.onmessage = (ev) => {
   const msg = ev.data;
   try {
     if (msg.type === 'init') {
-      model = new Model(msg.zones);
+      model = new Model(msg.zones, new Float32Array(msg.grid));
       model.setNetwork(msg.net);
       if (msg.snapshot) {
         model.restore(msg.snapshot);

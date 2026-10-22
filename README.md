@@ -36,6 +36,7 @@ python -m venv .venv
 .venv/Scripts/python -m pip install -r pipeline/requirements.txt
 bash pipeline/download.sh
 .venv/Scripts/python -X utf8 pipeline/build_data.py
+.venv/Scripts/python -X utf8 pipeline/build_grid.py
 ```
 
 (macOS·Linux에서는 `.venv/bin/python`)

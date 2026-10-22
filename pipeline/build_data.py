@@ -243,6 +243,7 @@ class NetHandler:
         self.segs = []          # (mode, cls, cellA, cellB, attrs)
         self.cellpts = defaultdict(lambda: [0.0, 0.0, 0])
         self.stations = []      # (name, lon, lat)
+        self.metro_stations = []  # 도시철도·경전철 역
         self.junctions = []     # (name, lon, lat)
         self.places = []        # (name, kind, lon, lat)
 
@@ -259,9 +260,14 @@ class NetHandler:
         if not t:
             return
         loc = n.location
-        # 도시철도·경전철 역은 본선망에 없으므로 뺀다
-        if t.get("railway") in ("station", "halt") and ko_name(t) and t.get("station") not in (
-                "subway", "light_rail", "monorail") and t.get("subway") != "yes":
+        # 도시철도·경전철 전용역은 본선망에 없으므로 뺀다. 동대구·용산처럼 일반열차가 서는 역(train=yes)은 둔다
+        urban_only = t.get("train") != "yes" and (
+            t.get("station") in ("subway", "light_rail", "monorail") or t.get("subway") == "yes")
+        is_station = t.get("railway") in ("station", "halt") and ko_name(t)
+        if is_station and (t.get("station") in ("subway", "light_rail", "monorail")
+                           or t.get("subway") == "yes" or t.get("light_rail") == "yes"):
+            self.metro_stations.append((ko_name(t), loc.lon, loc.lat))
+        if is_station and not urban_only:
             self.stations.append((ko_name(t), loc.lon, loc.lat))
         elif t.get("highway") == "motorway_junction" and ko_name(t):
             self.junctions.append((ko_name(t), loc.lon, loc.lat))
@@ -295,6 +301,9 @@ class NetHandler:
                 "power": ("AC" if volt and volt >= 15000 else "DC") if elec else "none",
                 "name": ko_name(t), "maxspeed": _int(t.get("maxspeed")),
             }
+        elif rw in ("subway", "light_rail") and t.get("service") is None:
+            mode, cls = "metro", "metro"
+            attrs = {"tracks": 2, "oneway": False, "power": "AC", "name": ko_name(t), "maxspeed": None}
         else:
             return
         if w.id in self.seen_ways:
@@ -328,7 +337,7 @@ ROAD_DEFAULTS = {
     "primary": (2, 55, 40),
     "secondary": (2, 45, 30),
 }
-CLASS_RANK = {"motorway": 4, "trunk": 3, "primary": 2, "secondary": 1, "hsr": 5, "conv": 1}
+CLASS_RANK = {"motorway": 4, "trunk": 3, "primary": 2, "secondary": 1, "hsr": 5, "conv": 1, "metro": 0}
 
 
 def build_network(zones):
@@ -384,9 +393,11 @@ def build_network(zones):
     rail_cells = {k[1] for k in edges if k[0] == "rail"} | {k[2] for k in edges if k[0] == "rail"}
     road_cells = {k[1] for k in edges if k[0] == "road"} | {k[2] for k in edges if k[0] == "road"}
     keep = set()
+    metro_cells = {k[1] for k in edges if k[0] == "metro"} | {k[2] for k in edges if k[0] == "metro"}
     stations = _snap_points([s for h in handlers.values() for s in h.stations], rail_cells, 2)
     junctions = _snap_points([j for h in handlers.values() for j in h.junctions], road_cells, 1)
-    keep |= {c for _, c in stations} | {c for _, c in junctions}
+    metro_stations = _snap_points([s for h in handlers.values() for s in h.metro_stations], metro_cells, 1)
+    keep |= {c for _, c in stations} | {c for _, c in junctions} | {c for _, c in metro_stations}
 
     # 존 접근 셀: 인구중심에서 가장 가까운 도로 셀(간선 우선)과 철도 셀
     road_major = {k[1] for k, e in edges.items() if k[0] == "road" and e["cls"] != "secondary"} | \
@@ -402,18 +413,21 @@ def build_network(zones):
     node_index = {}
     nodes = []
 
-    def nid(cell):
-        if cell not in node_index:
+    # 도시철도 노드는 같은 격자의 도로·철도 노드와 따로 둔다 (역에서만 타고 내리도록)
+    def nid(cell, metro=False):
+        key = ("m", cell) if metro else cell
+        if key not in node_index:
             cp = cellpts[cell]
-            node_index[cell] = len(nodes)
+            node_index[key] = len(nodes)
             nodes.append([round(cp[0] / cp[2], 4), round(cp[1] / cp[2], 4)])
-        return node_index[cell]
+        return node_index[key]
 
     out_links = []
     for L in links:
         e = L["attrs"]
         country = zone_country(L["cells"][len(L["cells"]) // 2]) or zone_country(L["cells"][0])             or zone_country(L["cells"][-1]) or "KR"
-        a, b = nid(L["cells"][0]), nid(L["cells"][-1])
+        metro = e["mode"] == "metro"
+        a, b = nid(L["cells"][0], metro), nid(L["cells"][-1], metro)
         geom = []
         for c in L["cells"]:
             cp = cellpts[c]
@@ -429,6 +443,10 @@ def build_network(zones):
                 speed *= 0.6
             out_links.append({"mode": 0, "cls": e["cls"], "a": a, "b": b, "len": round(length, 2),
                               "lanes": lanes, "speed": round(speed), "paved": int(e["paved"]),
+                              "name": name, "kp": int(country == "KP"), "geom": geom})
+        elif metro:
+            out_links.append({"mode": 2, "cls": "metro", "a": a, "b": b, "len": round(length, 2),
+                              "tracks": 2, "speed": 35, "power": "AC",
                               "name": name, "kp": int(country == "KP"), "geom": geom})
         else:
             if e["cls"] == "hsr":
@@ -446,6 +464,8 @@ def build_network(zones):
 
     out_stations = _dedupe_named([(n, node_index[c]) for n, c in stations if c in node_index])
     out_junctions = _dedupe_named([(n, node_index[c]) for n, c in junctions if c in node_index])
+    out_metro = _dedupe_named([(n, node_index[("m", c)]) for n, c in metro_stations if ("m", c) in node_index])
+    log("metro links", sum(1 for l in out_links if l["mode"] == 2), "metro stations", len(out_metro))
 
     for z in zones:
         z["road_node"] = node_index[z["road_cell"]]
@@ -459,7 +479,7 @@ def build_network(zones):
                 seen.add(k)
                 places.append(p)
     return {"nodes": nodes, "links": out_links, "stations": out_stations,
-            "junctions": out_junctions}, places
+            "metro_stations": out_metro, "junctions": out_junctions}, places
 
 
 def _dedupe_named(items):
