@@ -355,8 +355,12 @@ export class Model {
       const vc = this.capacity[i] > 0 ? this.volume[i] / this.capacity[i] : 0;
       if (L[i].mode === 0) {
         const r = Math.min(1 + P.bprAlpha * vc ** P.bprBeta, P.bprMaxRatio);
+        // 지체는 짧은 구간(다리 진입부·교차로)에도 최소 bprMinBaseMin분 기준으로 붙인다.
+        // 그냥 곱하면 50m 구간은 V/C가 10이어도 몇 초밖에 늦어지지 않아 교통이 한 곳에 몰린다
+        const t0 = this.freeTime[i];
+        const t = t0 + Math.max(t0, P.bprMinBaseMin) * (r - 1);
         // 운전자는 같은 시간이면 고속도로를 고른다 (신호·교차로·안전에 대한 체감 차이)
-        this.cost[i] = this.freeTime[i] * r * (P.roadPerceived[L[i].cls] ?? 1);
+        this.cost[i] = t * (P.roadPerceived[L[i].cls] ?? 1);
       } else {
         this.cost[i] = this.freeTime[i] * (1 + 0.5 * Math.max(0, vc - 1));
       }
@@ -463,7 +467,8 @@ export class Model {
     const tmass = new Float64Array(Z);
     for (let j = 0; j < Z; j++) tmass[j] = ((this.tour[j] + this.tourKP[j] * integration) * P.tourismMass) / 1e4;
     const iters = warm ? P.msaIterationsWarm : P.msaIterations;
-    const offset = warm ? 1 : 0;   // 지난해 교통량을 첫 반복으로 친다
+    // 지난해 교통량을 앞선 반복 몇 번 분으로 친다 (한 번의 전량배정이 혼잡을 다시 한곳에 몰지 않도록 1/4씩 섞는다)
+    const offset = warm ? P.warmMsaOffset : 0;
     const pick = [];
     const lam = P.logitLambda;
     const A = this.airports.length;

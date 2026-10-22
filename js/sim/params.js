@@ -8,6 +8,7 @@ export const P = {
   bprAlpha: 0.15,
   bprBeta: 4,
   bprMaxRatio: 6,
+  bprMinBaseMin: 1,           // 혼잡 지체의 최소 기준 시간 (분): 짧은 병목 구간도 막히면 실제로 늦어진다
   unpavedCapFactor: 0.6,
   // 도심 일반도로 용량 보정: 주변 인구 밀도가 urbanDensityFrom을 넘으면 urbanDensityStep마다 용량 +100% (최대 +urbanCapMax배)
   urbanDensityFrom: 1000,
@@ -54,8 +55,9 @@ export const P = {
   railCalibQuantile: 0.95,
   calibrationRounds: 5,
   railASCStep: 25,            // 보정 반복마다 철도 상수 조정 폭(분)
-  msaIterations: 3,
-  msaIterationsWarm: 1,       // 해마다 지난해 결과에서 이어 배정할 때 (지난해 교통량과 반씩 섞는다)
+  msaIterations: 5,
+  msaIterationsWarm: 1,       // 해마다 지난해 결과에서 이어 배정할 때
+  warmMsaOffset: 3,           // 그때 새 배정을 1/(1+3)만 섞는다
 
   // --- 대중교통 (버스 + 도시철도)
   busTimeFactor: 1.15,        // 같은 도로에서 승용차 대비 버스 주행시간
