@@ -311,6 +311,7 @@ class NetHandler:
         self.modefirst = {}     # (수단, 칸) → 그 칸에서 처음 만난 실제 선 위의 점 (노드 자리 후보)
         self.station_ids = {}   # OSM 노드 id → 역 이름 (선로 위에 찍힌 역을 그 선로 칸에 바로 붙이려고)
         self.rail_ref = {}      # 철도 OSM 노드 id → (칸, {노선 이름}): 이름이 다른 선로가 실제로 만나는 곳을 찾으려고
+        self.metro_ref = {}     # 도시철도도 같은 방식 (노선 = route 이름)
         self.on_track = {}      # 역 이름·좌표 → (칸, 노선 이름, 등급): 선로 웨이에 들어 있는 역
         self.stations = []      # (name, lon, lat)
         self.metro_stations = []  # 도시철도·경전철 역
@@ -326,7 +327,8 @@ class NetHandler:
             name = _route_name(name)
             colour = r.tags.get("colour") or ""
             for m in r.members:
-                if m.type == "w" and m.ref not in self.metro_routes:
+                # 한 선로가 여러 운행 노선(일반·급행)에 들면 가장 짧은 이름(기본 노선)을 쓴다
+                if m.type == "w" and (m.ref not in self.metro_routes or len(name) < len(self.metro_routes[m.ref][0])):
                     self.metro_routes[m.ref] = (name, colour)
         fp = osmium.FileProcessor(str(pbf), osmium.osm.NODE | osmium.osm.WAY)             .with_locations().with_filter(osmium.filter.KeyFilter("highway", "railway", "place", "construction:railway"))
         for obj in fp:
@@ -423,6 +425,14 @@ class NetHandler:
             return
         # 도로·철도·도시철도는 노드를 따로 둔다: 건널목처럼 서로 닿는 점도 그 수단 안에서만 교차점으로 센다
         g = MODE_KEY[mode]
+        if mode == "metro":
+            line_name = attrs.get("route") or attrs.get("name") or ""
+            for ref, (lon, lat) in zip(refs, pts):
+                rr = self.metro_ref.get(ref)
+                if rr is None:
+                    self.metro_ref[ref] = (cell_of(lon, lat), {line_name})
+                else:
+                    rr[1].add(line_name)
         if mode == "rail":
             line_name = _rail_name(attrs.get("name") or "")
             for ref, (lon, lat) in zip(refs, pts):
@@ -476,11 +486,16 @@ def _rail_name(name):
 
 
 def _route_name(name):
-    """'수도권 전철 2호선: 성수 → 신도림' 같은 방향 표기를 떼어 노선 이름만 남긴다"""
+    """'수도권 전철 2호선: 성수 → 신도림' 같은 방향 표기와 '급행'·'일반' 같은 운행 종별을 떼어 노선 이름만 남긴다
+    (같은 선로를 쓰는 '9호선'과 '9호선 급행'이 다른 노선으로 갈리면 선로가 두 줄로 남는다)"""
     for sep in (":", "(", " - "):
         if sep in name:
             name = name.split(sep)[0]
-    return name.strip()
+    name = name.strip()
+    for suf in (" 급행", " 일반", " 완행", " 직통", " 특급", "급행"):
+        if name.endswith(suf) and len(name) > len(suf) + 2:
+            name = name[: -len(suf)].strip()
+    return name
 
 
 def _int(v):
@@ -571,6 +586,7 @@ def build_network(zones):
     log("cell edges inside zones", len(edges))
     edges = merge_dual_carriageways(edges, modepts, junction)
     edges = merge_parallel_rail(edges, modepts, junction)
+    edges = merge_parallel_metro(edges, modepts, junction)
 
     # 역·IC는 단순화 시 보존해야 하므로 먼저 셀에 붙인다.
     rail_cells = {k[1] for k in edges if k[0] == "rail"} | {k[2] for k in edges if k[0] == "rail"}
@@ -669,7 +685,13 @@ def build_network(zones):
     stations += shared
     log("metro-tagged stations on main-line tracks", len(shared))
     # 단순화 때 남길 칸은 수단마다 따로: 도로 접근점·IC가 철도를 끊거나 역이 도로를 끊지 않게
-    keep |= {("rail", c, ln) for _, c in stations for ln in station_lines[c]} | {("road", c) for _, c in junctions} | {("metro", c) for _, c in metro_stations}
+    # 도시철도도 노선마다 노드를 따로: 같은 칸을 지나는 다른 노선끼리 서로 끊지 않게 (역에서만 환승으로 묶는다)
+    mlines_at = defaultdict(set)
+    for k in edges:
+        if k[0] == "metro":
+            ln = k[3].split("@")[0]
+            mlines_at[k[1]].add(ln); mlines_at[k[2]].add(ln)
+    keep |= {("rail", c, ln) for _, c in stations for ln in station_lines[c]} | {("road", c) for _, c in junctions}         | {("metro", c, ln) for _, c in metro_stations for ln in mlines_at[c]}
 
     # 철도 노드 묶음: (칸, 노선)마다 따로 두고, 실제로 이어진 곳만 하나로 묶는다
     # - 이름이 다른 선로 웨이가 같은 OSM 노드를 쓰는 곳 (분기·합류)
@@ -695,6 +717,27 @@ def build_network(zones):
         h.rail_ref = None
     for c, lines in station_lines.items():
         runion(c, sorted(lines))
+    metro_group = {}
+
+    def mfind(k):
+        while metro_group.get(k, k) != k:
+            metro_group[k] = metro_group.get(metro_group[k], metro_group[k])
+            k = metro_group[k]
+        return k
+
+    def munion(c, names):
+        names = sorted(n for n in names if n in mlines_at[c])
+        for n in names[1:]:
+            a, b = mfind((c, names[0])), mfind((c, n))
+            if a != b:
+                metro_group[a] = b
+    for h in handlers.values():
+        for c, names in h.metro_ref.values():
+            if len(names) > 1:
+                munion(c, names)
+        h.metro_ref = None
+    for _, c in metro_stations:
+        munion(c, mlines_at[c])
 
     # 존 접근 셀: 인구중심에서 가장 가까운 도로 셀(간선 우선)과 철도 셀
     road_major = {k[1] for k, e in edges.items() if k[0] == "road" and e["cls"] != "secondary"} | \
@@ -714,7 +757,7 @@ def build_network(zones):
     # (섞으면 철도가 도로 교차점 쪽으로 꺾여 그려지고, 역에서만 타고 내리는 규칙도 깨진다)
     def nid(cell, mode, line=""):
         g = MODE_KEY[mode]
-        key = cell if g == "d" else ("r", cell, rfind((cell, line))) if g == "r" else (g, cell)
+        key = cell if g == "d" else ("r", cell, rfind((cell, line))) if g == "r" else ("m", cell, mfind((cell, line)))
         if key not in node_index:
             node_index[key] = len(nodes)
             # 자리: 실제 교차점 > 선로 위 역 > 그 칸에서 만난 실제 선 위의 점 (칸 평균점은 선 밖이라 노선이 쥐젖처럼 튀어나온다)
@@ -768,6 +811,7 @@ def build_network(zones):
                               "tracks": min(tracks, 4), "speed": speed, "power": e["power"],
                               "name": name, "kp": int(country == "KP"), "geom": geom, "open": e.get("opening", 0)})
 
+    out_links = drop_parallel_duplicates(out_links)
     heal_gaps(nodes, out_links)
     # 이웃 칸에 둔 다른 노선 승강장과 본래 역 노드를 짧은 환승 선로로 잇는다 (오송: 충북선 ↔ 경부고속선)
     def station_node(c):
@@ -795,7 +839,13 @@ def build_network(zones):
                 out_stations.append((n, node_index[k]))
     out_stations = _dedupe_named(out_stations)
     out_junctions = _dedupe_named([(n, node_index[c]) for n, c in junctions if c in node_index])
-    out_metro = _dedupe_named([(n, node_index[("m", c)]) for n, c in metro_stations if ("m", c) in node_index])
+    out_metro = []
+    for n, c in metro_stations:
+        for ln in sorted(mlines_at[c]):
+            k = ("m", c, mfind((c, ln)))
+            if k in node_index:
+                out_metro.append((n, node_index[k]))
+    out_metro = _dedupe_named(out_metro)
     log("metro links", sum(1 for l in out_links if l["mode"] == 2), "metro stations", len(out_metro))
 
     for z in zones:
@@ -823,6 +873,18 @@ def line_geom(line, pa, pb, tol=0.00006):
         pts.pop(0)
     while pts and near(pts[-1], pb):
         pts.pop()
+    # 노드가 선에서 조금 비켜 있으면(왕복 차도를 합친 칸 등) 선이 노드까지 갔다 되돌아오며 쥐젖처럼 튀어나온다.
+    # 노드 → 첫 점 → 둘째 점이 120°보다 날카롭게 꺾이면 첫 점을 뺀다 (끝도 같은 방법)
+    def sharp(a, b, c):
+        v1 = (a[0] - b[0], a[1] - b[1]); v2 = (c[0] - b[0], c[1] - b[1])
+        n = math.hypot(*v1) * math.hypot(*v2)
+        return n > 0 and (v1[0] * v2[0] + v1[1] * v2[1]) / n > -0.5
+    while len(pts) >= 2 and sharp(pa, pts[0], pts[1]):
+        pts.pop(0)
+    while len(pts) >= 2 and sharp(pb, pts[-1], pts[-2]):
+        pts.pop()
+    if len(pts) == 1 and sharp(pa, pts[0], pb):
+        pts = []
     out = [tuple(pa)] + pts + [tuple(pb)]
     return [round(v, 5) for xy in out for v in xy]
 
@@ -839,6 +901,23 @@ def draw_geom(pieces, tol=0.00015):
         if out:
             out += [float("nan"), float("nan")]
         out += [round(v, 5) for xy in ln.simplify(tol).coords for v in xy]
+    return out
+
+
+def drop_parallel_duplicates(links):
+    """같은 노선이 같은 두 노드 사이에 두 번 놓이면(상·하행 선로를 따로 그린 OSM) 하나만 남긴다.
+    둘 다 두면 노선이 두 줄로 그려지고, 배정은 한쪽만 써서 다른 쪽은 늘 이용객 0이 된다."""
+    best = {}
+    for i, l in enumerate(links):
+        if l["mode"] == 0 or l["a"] == l["b"]:
+            continue
+        k = (l["mode"], l["name"], min(l["a"], l["b"]), max(l["a"], l["b"]), l.get("open", 0))
+        j = best.get(k)
+        if j is None or l["len"] < links[j]["len"]:
+            best[k] = i
+    keep = set(best.values())
+    out = [l for i, l in enumerate(links) if l["mode"] == 0 or l["a"] == l["b"] or i in keep]
+    log("parallel duplicate links dropped", len(links) - len(out))
     return out
 
 
@@ -1057,7 +1136,7 @@ def _ref_station_lines(ref):
 
 
 PLACEHOLDER = re.compile(r"\d{2,}$")
-PREFIXES = ("KTX", "SRT", "SR", "지하", "ITX")
+PREFIXES = ("KTX", "SRT", "SR", "지하", "ITX", "지티엑스", "GTX")
 
 
 def _ref_canon(ref):
@@ -1200,6 +1279,13 @@ def merge_parallel_rail(edges, modepts, junction):
     return _merge_parallel(edges, modepts, junction, "rail", label, RAIL_MERGE_DEG, city_only=False)
 
 
+def merge_parallel_metro(edges, modepts, junction):
+    """도시철도도 상·하행 선로가 따로 그려져 이웃 칸에 놓이면 한 줄로 (같은 노선끼리만)"""
+    def label(e):
+        return e.get("route", "").split("@")[0] or None
+    return _merge_parallel(edges, modepts, junction, "metro", label, RAIL_MERGE_DEG, city_only=False)
+
+
 def _merge_parallel(edges, modepts, junction, mode_name, label_of, max_deg, city_only):
     from scipy.spatial import cKDTree
     g = MODE_KEY[mode_name]
@@ -1274,7 +1360,7 @@ def _contract(edges, keep):
     링크마다 지나는 셀(chain)과 엣지 순서(seq: (key, 정방향 여부))를 함께 돌려준다."""
     # 철도는 노선마다 따로 이웃을 센다: 나란한 다른 노선이 같은 칸을 지나도 그 칸에서 끊지 않는다
     def lk(key):
-        return key[3].split("@")[0] if key[0] == "rail" else ""
+        return key[3].split("@")[0] if key[0] in ("rail", "metro") else ""
     adj = defaultdict(list)
     for key, e in edges.items():
         mode, a, b = key[0], key[1], key[2]

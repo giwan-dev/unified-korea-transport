@@ -41,7 +41,7 @@ def norm_line(name: str) -> str:
     return n
 
 
-PREFIXES = ("SRT", "SR", "KTX", "ITX", "지하")
+PREFIXES = ("SRT", "SR", "KTX", "ITX", "지티엑스", "GTX", "지하")
 
 
 def norm_station(name: str) -> str:
