@@ -280,6 +280,7 @@ function applyResult(res) {
   }
   paintZones();
   paintAir(res.air);
+  refreshPoints();   // 역 중요도는 이용객으로 정한다
 
   requests = updateCongestion(base, state, vc, stepped || !state.history.length);
   const prevHappy = happiness ? avgHappiness() : null;
@@ -445,7 +446,7 @@ function linksFC() {
     const parts = smoothParts(l, i);
     return {
       type: 'Feature', id: i,
-      properties: { id: i, mode: eff.mode, cls: eff.cls, building: building.has(i) || (i < base.links.length && linkPending(base, state, i)) ? 1 : 0, colour: eff.colour || '', ext: eff.ext ? 1 : 0 },
+      properties: { id: i, mode: eff.mode, cls: eff.cls, minor: eff.mode === 0 && eff.cls === 'secondary' && !eff.kp ? 1 : 0, building: building.has(i) || (i < base.links.length && linkPending(base, state, i)) ? 1 : 0, colour: eff.colour || '', ext: eff.ext ? 1 : 0 },
       geometry: parts.length > 1 ? { type: 'MultiLineString', coordinates: parts } : { type: 'LineString', coordinates: parts[0] },
     };
   });
@@ -529,12 +530,26 @@ function nodeNames() {
   return out;
 }
 
+/** 점의 중요도: 0 도시·새 시설, 1 큰 역(고속철도역·이용 많은 역), 2 일반 역·JCT·휴게소, 3 IC·도시철도역 */
+function pointRank(node, v, hsrNodes, riders) {
+  if (v.kind === 'city' || v.isNew) return 0;
+  if (v.kind === 'station') {
+    if (v.metro) return 3;
+    return hsrNodes.has(node) || (riders.get(node) || 0) >= 8000 ? 1 : 2;
+  }
+  if (v.kind === 'JCT' || v.kind === 'rest') return 2;
+  return 3;
+}
+
 function refreshPoints() {
   const features = [];
+  const hsrNodes = new Set();
+  for (const l of allLinks()) if (l.mode === 1 && l.cls === 'hsr') { hsrNodes.add(l.a); hsrNodes.add(l.b); }
+  const riders = stationRiders();
   for (const [node, v] of nodeNames()) {
     const c = v.coord || nodeCoord(node);
     if (!c) continue;
-    features.push({ type: 'Feature', properties: { node, ...v }, geometry: { type: 'Point', coordinates: c } });
+    features.push({ type: 'Feature', properties: { node, ...v, rank: pointRank(node, v, hsrNodes, riders) }, geometry: { type: 'Point', coordinates: c } });
   }
   map.getSource('points').setData({ type: 'FeatureCollection', features });
 }
@@ -612,7 +627,7 @@ function bindMap() {
     if (ap) return select({ type: 'airport', id: ap.properties.id });
     const pt = map.queryRenderedFeatures(box, { layers: ['points'] })[0];
     if (pt) return select({ type: 'node', id: pt.properties.node });
-    const ln = map.queryRenderedFeatures(box, { layers: ['rails', 'metro', 'roads', 'ferries', 'ext-links', 'links-building'] })[0];
+    const ln = map.queryRenderedFeatures(box, { layers: ['rails', 'metro', 'roads', 'roads-minor', 'ferries', 'ext-links', 'links-building'] })[0];
     if (ln) return select({ type: 'link', id: ln.properties.id });
     if (METRICS[metric]?.sub) {
       const sb = map.queryRenderedFeatures(e.point, { layers: ['subs-fill'] })[0];
@@ -624,7 +639,7 @@ function bindMap() {
   });
   map.on('dblclick', (e) => { if (draft) { e.preventDefault(); } });
   enableBoxSelect();
-  for (const l of ['roads', 'rails', 'metro', 'points']) {
+  for (const l of ['roads', 'roads-minor', 'rails', 'metro', 'points']) {
     map.on('mouseenter', l, () => { if (!draft) map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', l, () => { if (!draft) map.getCanvas().style.cursor = ''; });
   }
@@ -667,7 +682,7 @@ function enableBoxSelect() {
 
 /** 화면 좌표 사각형 안의 구간들을 고른다 (QA·키보드 없이도 쓸 수 있게 따로 둔다) */
 function selectBox(bbox) {
-  const ids = [...new Set(map.queryRenderedFeatures(bbox, { layers: ['roads', 'rails', 'metro'] }).map((f) => f.properties.id))];
+  const ids = [...new Set(map.queryRenderedFeatures(bbox, { layers: ['roads', 'roads-minor', 'rails', 'metro'] }).map((f) => f.properties.id))];
   if (ids.length) select({ type: 'multi', ids });
 }
 
@@ -748,7 +763,7 @@ function placeAirport(lngLat) {
 /** 누른 곳에서 가까운 같은 수단 구간 위의 점 (화면 거리 maxPx 안) */
 function nearestOnLink(lngLat, mode, maxPx) {
   const p = map.project(lngLat);
-  const layers = mode === 0 ? ['roads'] : mode === 1 ? ['rails'] : ['metro'];
+  const layers = mode === 0 ? ['roads', 'roads-minor'] : mode === 1 ? ['rails'] : ['metro'];
   const box = [[p.x - maxPx, p.y - maxPx], [p.x + maxPx, p.y + maxPx]];
   const work = linksUnderWork(state);
   let best = null;

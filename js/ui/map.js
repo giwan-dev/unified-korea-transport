@@ -163,6 +163,12 @@ function firstSymbolId(map) {
   return map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
 }
 
+// 도로 굵기: 많이 확대하면 굵게 (선이 끊겨 보이지 않도록)
+const ROAD_WIDTH = ['interpolate', ['linear'], ['zoom'],
+  5, ['match', ['get', 'cls'], 'motorway', 2, 'trunk', 1.2, 'primary', 0.7, 0.4],
+  10, ['match', ['get', 'cls'], 'motorway', 6, 'trunk', 4, 'primary', 2.5, 1.5],
+  14, ['match', ['get', 'cls'], 'motorway', 11, 'trunk', 8, 'primary', 6, 4]];
+
 export function addLayers(map, zonesFC, linksFC, subsFC) {
   const below = firstSymbolId(map);
   map.addSource('zones', { type: 'geojson', data: zonesFC });
@@ -215,14 +221,17 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   // 혼잡도 0~10: 1을 넘는 곳도 심한 정도가 구분되도록 1·2·4·7·10에서 점점 짙어진다
   const vcColor = ['interpolate', ['linear'], ['coalesce', ['feature-state', 'vc'], 0], ...VC_STOPS.flat()];
   map.addLayer({
-    id: 'roads', type: 'line', source: 'links', filter: ['all', ['==', ['get', 'mode'], 0], ['==', ['get', 'building'], 0], ['!=', ['get', 'cls'], 'ferry'], ['!=', ['get', 'ext'], 1]],
+    id: 'roads', type: 'line', source: 'links',
+    filter: ['all', ['==', ['get', 'mode'], 0], ['==', ['get', 'building'], 0], ['!=', ['get', 'cls'], 'ferry'], ['!=', ['get', 'ext'], 1], ['!=', ['get', 'minor'], 1]],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': vcColor,
-      'line-width': ['interpolate', ['linear'], ['zoom'],
-        5, ['match', ['get', 'cls'], 'motorway', 2, 'trunk', 1.2, 'primary', 0.7, 0.4],
-        10, ['match', ['get', 'cls'], 'motorway', 6, 'trunk', 4, 'primary', 2.5, 1.5]],
-    },
+    paint: { 'line-color': vcColor, 'line-width': ROAD_WIDTH },
+  });
+  // 대도시 안의 촘촘한 2차 도로: 확대했을 때만 그린다
+  map.addLayer({
+    id: 'roads-minor', type: 'line', source: 'links', minzoom: 10,
+    filter: ['all', ['==', ['get', 'mode'], 0], ['==', ['get', 'building'], 0], ['==', ['get', 'minor'], 1]],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': vcColor, 'line-width': ROAD_WIDTH },
   });
   map.addLayer({
     id: 'rails', type: 'line', source: 'links', filter: ['all', ['==', ['get', 'mode'], 1], ['==', ['get', 'building'], 0], ['!=', ['get', 'ext'], 1]],
@@ -262,7 +271,8 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addSource('points', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({
     id: 'points', type: 'circle', source: 'points',
-    filter: ['any', ['==', ['get', 'isNew'], 1], ['==', ['get', 'kind'], 'city'], ['>=', ['zoom'], ['case', ['==', ['get', 'metro'], 1], 11, ['==', ['get', 'kind'], 'station'], 9, 10]]],
+    // 중요도(rank 0~3)에 따라 확대할수록 더 많이: 0 도시·새 시설, 1 큰 역, 2 일반 역·JCT, 3 IC·도시철도역
+    filter: ['>=', ['zoom'], ['match', ['get', 'rank'], 0, 0, 1, 6.5, 2, 9, 10.5]],
     paint: {
       'circle-radius': ['match', ['get', 'kind'], 'city', 6, 'station', 4, 'rest', 4, 3],
       'circle-color': ['match', ['get', 'kind'], 'city', '#f2c14e', 'station', '#ffffff', 'rest', '#2f8f5b', '#1d232b'],
@@ -272,7 +282,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   });
   map.addLayer({
     id: 'point-labels', type: 'symbol', source: 'points',
-    filter: ['any', ['==', ['get', 'isNew'], 1], ['==', ['get', 'kind'], 'city'], ['>=', ['zoom'], ['case', ['==', ['get', 'metro'], 1], 12, ['==', ['get', 'kind'], 'station'], 10, 11]]],
+    filter: ['>=', ['zoom'], ['match', ['get', 'rank'], 0, 0, 1, 8, 2, 10, 11.5]],
     layout: {
       'text-field': ['get', 'name'], 'text-size': ['case', ['==', ['get', 'isNew'], 1], 13, 11],
       'text-offset': [0, 1.0], 'text-anchor': 'top', 'text-font': FONT,
