@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>연도 계산 벤치</title>
+  <style>body { font: 14px system-ui, sans-serif; margin: 24px; } pre { background: #f4f4f4; padding: 12px; }</style>
+</head>
+<body>
+  <h1>해마다 도는 계산 시간 재기</h1>
+  <p>기준 연도(data/baseline.*)에서 한 해를 넘기는 계산(advanceYear + 이어 배정)을 메인 스레드에서 돌리고 부분별 시간을 잽니다.</p>
+  <pre id="log"></pre>
+  <script type="module">
+    import { effectiveNetwork, newGame, initAirRoutes } from '../js/game/state.js';
+    import { seedServices } from '../js/game/services.js';
+    import { loadNetwork } from '../js/data/netpack.js';
+    import { extendWorld, urbanLanes } from '../js/game/world.js';
+    import { Model } from '../js/sim/model.js';
+    import { Graph } from '../js/sim/graph.js';
+    const log = (s) => { document.querySelector('#log').textContent += s + '\n'; };
+    const [zones, net, grid, bjson, bbin] = await Promise.all([
+      fetch('../data/zones.json').then((r) => r.json()),
+      loadNetwork('../data/'),
+      fetch('../data/grid.bin').then((r) => r.arrayBuffer()),
+      fetch('../data/baseline.json').then((r) => r.json()),
+      fetch('../data/baseline.bin').then((r) => r.arrayBuffer()),
+    ]);
+    const world = await fetch('../data/air_sea.json').then((r) => r.json());
+    extendWorld(net, zones, world);
+    urbanLanes(net, grid);
+    const state = newGame('normal');
+    initAirRoutes(state, world.routes || []);
+    seedServices(state, net);
+
+    // 부분별 시간: 메서드를 감싸 누적한다
+    const T = {};
+    const wrap = (proto, name, label = name) => {
+      const f = proto[name];
+      proto[name] = function (...a) { const t = performance.now(); const r = f.apply(this, a); T[label] = (T[label] || 0) + performance.now() - t; return r; };
+    };
+    for (const m of ['railCost', 'airCost', 'stationMatrix', 'updateCosts', 'advanceYear', 'airPaxFromOD']) wrap(Model.prototype, m);
+    wrap(Graph.prototype, 'shortestPaths', 'dijkstra');
+    wrap(Graph.prototype, 'loadTree', 'loadTree');
+
+    const model = new Model(zones, new Float32Array(grid));
+    model.setNetwork(effectiveNetwork(net, state));
+    log(`baseline ${model.importBaseline(bjson, bbin) ? '읽음' : '못 읽음 (데이터 버전 다름)'}`);
+    const ctx = { integration: state.integration, policy: state.policy };
+    const runs = Number(new URLSearchParams(location.search).get('runs') || 2);
+    for (let k = 0; k < runs; k++) {
+      for (const key of Object.keys(T)) delete T[key];
+      const t0 = performance.now();
+      model.advanceYear(ctx.integration, ctx.policy);
+      model.assign(ctx.integration, null, true);
+      const total = performance.now() - t0;
+      log(`${k + 1}회: 전체 ${(total / 1000).toFixed(2)}초 · ` + Object.entries(T).sort((a, b) => b[1] - a[1]).map(([n, v]) => `${n} ${(v / 1000).toFixed(2)}초`).join(' · '));
+    }
+    document.title = '완료';
+  </script>
+</body>
+</html>

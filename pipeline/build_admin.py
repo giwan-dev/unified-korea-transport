@@ -55,7 +55,8 @@ ATTRIBUTION = ("행정동 경계: 통계청 SGIS(공공누리 제1유형) 가공
                "북측 경계·지명: © OpenStreetMap 기여자 (ODbL).")
 
 
-MERGE_ZONES = {("KR", "인천광역시", "옹진군"): ("KP", "황해남도", "옹진군")}
+# 남북으로 갈린 같은 군을 한 존으로 합칠 때 쓴다: {(나라, 도, 군): (나라, 도, 군)}. 지금은 옹진군도 남북을 따로 둔다
+MERGE_ZONES = {}
 
 
 def log(*a):
@@ -271,8 +272,7 @@ def to_fc(rows, props):
 
 def main():
     units = kr_units() + kp_units()
-    # 남북으로 갈린 같은 군은 한 존으로: 인천 옹진군(백령·대청·연평)은 분단 전 황해도 옹진군의 일부였다.
-    # 넓이·인구가 큰 북측 옹진군(황해남도)에 붙이고, 존에 남측 인구 격자도 함께 세도록 also를 단다
+    # MERGE_ZONES에 적힌 군은 한 존으로 묶고, 존에 다른 쪽 인구 격자도 함께 세도록 also를 단다
     for u in units:
         key = (u["country"], u["province"], u["zone"])
         if key in MERGE_ZONES:

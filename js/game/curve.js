@@ -32,6 +32,28 @@ export function smoothSegments(pts, stepKm = 1) {
   return out;
 }
 
+/**
+ * 꺾인 선을 모든 점을 지나는 부드러운 곡선으로 (구심 Catmull-Rom). 화면에 그릴 때만 쓴다.
+ * @param {number[][]} pts [[경도, 위도], ...] (양 끝은 노드)
+ * @param {number[]|null} before 앞 노드 너머 점 (이어지는 구간의 점: 노드에서 꺾이지 않고 이어지게). 없으면 반사점
+ * @param {number[]|null} after 뒤 노드 너머 점
+ * @param {number} stepKm 곡선을 나누는 간격
+ */
+export function splineLine(pts, before = null, after = null, stepKm = 0.12) {
+  if (pts.length < 2 || (pts.length === 2 && !before && !after)) return pts;
+  const out = [pts[0]];
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const p1 = pts[i], p2 = pts[i + 1];
+    const p0 = i ? pts[i - 1] : before || reflect(p2, p1);
+    const p3 = pts[i + 2] || after || reflect(p1, p2);
+    const km = kmBetween(p1[0], p1[1], p2[0], p2[1]);
+    const n = Math.min(12, Math.max(1, Math.ceil(km / stepKm)));
+    for (let k = 1; k < n; k++) out.push(catmullRom(p0, p1, p2, p3, k / n));
+    out.push(p2);
+  }
+  return out;
+}
+
 export function polylineKm(line) {
   let d = 0;
   for (let i = 0; i + 1 < line.length; i++) d += kmBetween(line[i][0], line[i][1], line[i + 1][0], line[i + 1][1]);

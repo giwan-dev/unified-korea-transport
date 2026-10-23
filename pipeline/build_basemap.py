@@ -122,8 +122,8 @@ def main():
     for f in sido:
         p = shape(f["geometry"]).representative_point()
         labels.append(feat(p, {"name": short_sido(f["properties"]["name"]), "rank": 1}))
-    # 남북으로 갈린 같은 시군(옹진군)은 build_data.py가 한 존으로 합치므로 라벨도 하나만
-    merged = {"옹진군"}
+    # build_admin.py의 MERGE_ZONES로 합친 시군은 라벨도 하나만 (지금은 없음)
+    merged = set()
     for f in sgg:
         nm = f["properties"]["name"]
         if nm in merged:

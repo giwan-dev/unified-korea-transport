@@ -273,9 +273,14 @@ export const EXISTING_SERVICES = [
   { name: '서해선 광역 (대곡–원시)', kind: 'commuter', type: 'commuter', sets: 10, lines: ['서해선'], from: '대곡', to: '원시' },
   { name: '서해선 일반 (서화성–홍성)', kind: 'local', type: 'intercity', sets: 6, lines: ['서해선'], from: '서화성', to: '홍성' },
   { name: '중부내륙선 KTX-이음 (판교–문경)', kind: 'express', type: 'semi', sets: 6, lines: ['경강선', '중부내륙선'], from: '판교', to: '문경' },
+  // GTX-A: 수서–동탄은 수서평택고속선 선로를 함께 쓴다 (2024.3 개통). 운정–서울은 2024.12 개통
+  { name: 'GTX-A (수서–동탄)', kind: 'express', type: 'intercity', sets: 6, lines: ['수도권광역급행철도에이선', '수서평택고속선'], stops: ['수서', '성남', '구성', '동탄'] },
+  { name: 'GTX-A (운정–서울)', kind: 'express', type: 'intercity', sets: 8, lines: ['수도권광역급행철도에이선'], stops: ['운정', '킨텍스', '대곡', '연신내', '서울'] },
   // 선로가 열리면(원시–서화성 연결, OSM 개통 예정 2030) 그해부터 다니는 계통
   { name: '서해선 광역 직통 (대곡–서화성)', kind: 'commuter', type: 'commuter', sets: 12, lines: ['서해선'], from: '대곡', to: '서화성', wait: true },
   { name: '서해선 직통 (대곡–홍성)', kind: 'express', type: 'intercity', sets: 6, lines: ['서해선'], from: '대곡', to: '홍성', wait: true },
+  // 서울–삼성–수서 구간이 열리면 GTX-A 전 구간 직통
+  { name: 'GTX-A (운정–동탄)', kind: 'express', type: 'intercity', sets: 16, lines: ['수도권광역급행철도에이선', '수서평택고속선'], stops: ['운정', '킨텍스', '대곡', '연신내', '서울', '삼성', '수서', '성남', '구성', '동탄'], wait: true },
 ];
 
 /** 계통 하나를 지금 선로로 짠다. strict면 정해진 노선 선로만으로 이어질 때만 (다른 노선으로 돌아가면 null) */
@@ -302,6 +307,8 @@ function existingService(s, links, stations, stationSet, strict) {
   if (stops.length < 2) return null;
   const plan = planService(links, stationSet, stops, s.kind, new Set(s.lines), s.type);
   if (!plan) return null;
+  // 기다리는 계통은 제 노선 선로가 다 열려야 다닌다 (다른 노선으로 돌아가는 길로 먼저 다니지 않게)
+  if (strict && plan.segs.some((sg) => sg.via.some((i) => links[i].name && !s.lines.includes(links[i].name) && !links[i].name.endsWith(' 환승')))) return null;
   return { name: s.name, kind: s.kind, line: s.lines[0], lines: s.lines, cls: 'conv', stops, type: s.type, sets: s.sets,
     runMin: plan.runMin, km: plan.km, segs: plan.segs, id: `svc-${s.name}`, trains: tripsPerDay(s.sets, plan.runMin), built: true, existing: true };
 }
