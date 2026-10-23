@@ -68,7 +68,7 @@ def norm_station(name: str) -> str:
 
 
 def load(raw: Path):
-    """→ {"stations": [(이름, {노선…}, 경도, 위도, 상태)], "paths": [(노선, 나라, [(경도, 위도)…])]}"""
+    """→ {"stations": [(이름, {노선…}, 경도, 위도, 상태)], "paths": [(노선, 나라, [(경도, 위도)…], 구분)]}"""
     kmz = find_kmz(raw)
     if not kmz:
         return None
@@ -93,7 +93,7 @@ def load(raw: Path):
                     if OPERATOR.search(line):
                         line = name if name.endswith("선") else ""
                     if line:
-                        paths.append((line, path[3], pts))
+                        paths.append((line, path[3], pts, path[5]))   # path[5]: 국철·도시철도·전용선·궤도선 등 구분
                 elif len(path) > 3 and path[1] == "Point" and path[2] == "영업시설" and path[3] in OPEN:
                     # Point/영업시설/<상태>/<노선>: 역은 노선마다 한 번씩 나온다
                     if NOT_STATION.search(name) or " " in name.strip():   # 공백이 든 이름은 호텔·버스 정류장
@@ -108,4 +108,12 @@ def load(raw: Path):
                         stations[key] = [norm_station(name), lines, pts[0][0], pts[0][1], path[3]]
     walk(root, [])
     out = [(n, {norm_line(x) for x in ls}, lon, lat, st) for n, ls, lon, lat, st in stations.values()]
-    return {"stations": out, "paths": [(norm_line(n), c, p) for n, c, p in paths], "file": kmz.name}
+    return {"stations": out, "paths": [(norm_line(n), c, p, k) for n, c, p, k in paths], "file": kmz.name}
+
+
+URBAN = ("도시철도", "궤도선")
+
+
+def mainline_paths(ref):
+    """철도 DB 선로 가운데 일반철도(국철·전용선 등)만: 도시철도 이름이 그 밑을 지나는 일반철도에 붙지 않게"""
+    return [(n, c, p) for n, c, p, k in ref["paths"] if k not in URBAN]

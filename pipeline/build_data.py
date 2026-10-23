@@ -601,6 +601,21 @@ def build_network(zones):
             for nm in e["names"]:
                 rail_names[k[1]].add(railref.norm_line(nm)); rail_names[k[2]].add(railref.norm_line(nm))
     ref = railref.load(RAW)
+    # 칸마다 철도 DB 선로의 노선 이름도 붙인다: DB와 OSM이 같은 선로를 다르게 부르는 곳(북측 평부선 = DB 경의선)에서도 역을 그 선로에 붙이도록
+    if ref:
+        from scipy.spatial import cKDTree
+        pts, pnames = [], []
+        for nm, _, line in railref.mainline_paths(ref):
+            for i, q in enumerate(line):
+                pts.append([q[0] * 0.8, q[1]]); pnames.append(nm)
+                if i:
+                    r0 = line[i - 1]
+                    pts.append([(q[0] + r0[0]) * 0.4, (q[1] + r0[1]) / 2]); pnames.append(nm)
+        ptree = cKDTree(np.array(pts))
+        for c in list(rail_names):
+            cp = modepts.get(("r", c)) or cellpts[c]
+            for i in ptree.query_ball_point([cp[0] / cp[2] * 0.8, cp[1] / cp[2]], 0.003):
+                rail_names[c].add(pnames[i])
     ref_lines = _ref_station_lines(ref)
     known_lines = {railref.norm_line(n) for v in rail_names.values() for n in v} \
         | {railref.norm_line(k[3].split("@")[0]) for k in edges if k[0] == "metro"}
@@ -965,11 +980,14 @@ def heal_rail_gaps(nodes, links, station_nodes, max_km=0.45):
     for k, n in enumerate(ids):
         if deg[n] != 1 or n in station_nodes:
             continue
-        for d, j in zip(*tree.query(pts[k], k=6)):
-            m = ids[j]
-            if m == n or m in nb[n] or d > max_km:
+        l0 = src[n]
+        # 같은 노선 선로면 1.5km까지 (공사 중 구간이 앞뒤 선로와 조금 떨어져 그려진 곳: 서해선 원시–서화성), 다른 노선은 max_km까지
+        same = [(d, ids[j]) for d, j in zip(*tree.query(pts[k], k=24)) if d <= 1.5 and ids[j] != n and ids[j] not in nb[n]
+                and l0["name"] and src[ids[j]]["name"] == l0["name"]]
+        cands = same[:1] or [(d, ids[j]) for d, j in zip(*tree.query(pts[k], k=6)) if d <= max_km]
+        for d, m in cands:
+            if m == n or m in nb[n]:
                 continue
-            l0 = src[n]
             links.append({"mode": 1, "cls": l0["cls"], "a": n, "b": m, "len": round(max(d, 0.05), 2), "tracks": l0["tracks"],
                           "speed": min(l0["speed"], 60), "power": l0["power"], "name": l0["name"], "kp": l0["kp"],
                           "geom": nodes[n] + nodes[m], "open": l0.get("open", 0)})
@@ -1003,7 +1021,7 @@ def name_unnamed_rail(links, ref=None):
     if ref:
         from scipy.spatial import cKDTree
         pts, names = [], []
-        for nm, _, line in ref["paths"]:
+        for nm, _, line in railref.mainline_paths(ref):
             for i, p in enumerate(line):
                 pts.append([p[0] * 0.8, p[1]]); names.append(nm)
                 if i:   # 꼭짓점 사이가 멀면 가운데 점도 넣는다
