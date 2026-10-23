@@ -1421,7 +1421,7 @@ function bindRestore(el) {
 // ------------------------------------------------------------ 운행 계통 (특급·급행·보통)
 
 let svcEdit = null;   // 편집 중인 계통 {line, cls, kind, name, trains, nodes: 노선 위 역 순서, stops: Set, id}
-const SERVICE_DAY_MIN = 1080;
+const SERVICE_DAY_MIN = 1440;   // 24시간 운행
 
 function railStationSet() {
   const s = new Set(base.stations.map(([, n]) => n));
@@ -1435,13 +1435,37 @@ function stationRiders() {
   return m;
 }
 
-/** 등급별 기본 정차역: 보통은 모든 역, 급행은 이용객 상위 절반, 특급은 상위 4분의 1 (양 끝은 늘 정차) */
+/**
+ * 등급별 기본 정차역: 보통은 모든 역, 급행·특급은 큰 역만 (양 끝은 늘 정차).
+ * 지역 간 승하차 순위와 역세권 인구(반경 3km) 순위를 더한 점수로 큰 역부터 고르되,
+ * 이미 고른 역과 너무 가까우면(특급 25km, 급행 8km) 건너뛴다. 정차역 수는 노선 길이로 정한다 (특급 약 45km, 급행 약 15km마다 한 역).
+ * 그래서 대전·동대구처럼 큰 도시 역은 서고 수도권 역이 몰리지 않는다
+ */
 function defaultStops(nodes, kind) {
   if (kind === 'local') return new Set(nodes);
   const r = stationRiders();
-  const vals = nodes.map((n) => r.get(n) || 0).sort((a, b) => b - a);
-  const cut = vals[Math.floor((vals.length - 1) * (kind === 'express' ? 0.5 : 0.25))] ?? 0;
-  return new Set(nodes.filter((n, i) => i === 0 || i === nodes.length - 1 || (cut > 0 && (r.get(n) || 0) >= cut)));
+  const spacing = kind === 'express' ? 8 : 25, perKm = kind === 'express' ? 15 : 45;
+  const coord = new Map(nodes.map((n) => [n, nodeCoord(n)]));
+  const pop = new Map(nodes.map((n) => { const c = coord.get(n); return [n, c ? popWithin(c[0], c[1], 3) : 0]; }));
+  const rank = (score) => {
+    const sorted = [...nodes].sort((a, b) => score(b) - score(a));
+    return new Map(sorted.map((n, i) => [n, 1 - i / nodes.length]));
+  };
+  const rr = rank((n) => r.get(n) || 0), rp = rank((n) => pop.get(n));
+  const order = [...nodes].sort((a, b) => (rr.get(b) + rp.get(b)) - (rr.get(a) + rp.get(a)));
+  let km = 0;
+  for (let i = 1; i < nodes.length; i++) {
+    const a = coord.get(nodes[i - 1]), b = coord.get(nodes[i]);
+    if (a && b) km += kmBetween(a[0], a[1], b[0], b[1]);
+  }
+  const target = Math.min(nodes.length, Math.max(3, Math.round(km / perKm) + 1));
+  const chosen = [nodes[0], nodes[nodes.length - 1]];
+  const far = (n) => chosen.every((m) => { const a = coord.get(n), b = coord.get(m); return !a || !b || kmBetween(a[0], a[1], b[0], b[1]) >= spacing; });
+  for (const n of order) {
+    if (chosen.length >= target) break;
+    if (!chosen.includes(n) && far(n)) chosen.push(n);
+  }
+  return new Set(chosen);
 }
 
 function openServiceEditor(line, cls, id = null) {
@@ -1605,6 +1629,13 @@ function airRatio(aps, a, b, pax, freq) {
 
 // ------------------------------------------------------------ 노선 모식도
 
+/** 보통(자동) 열차의 하루 운행 횟수: 노선 최대 구간 이용객을 승차율 65%로 실을 만큼 (최소 운행 횟수 ~ 300회) */
+function autoLocalTrains(line, cls, peak) {
+  const c = cls === 'metro' ? 'metro' : cls === 'hsr' ? 'hsr' : 'conv';
+  if (peak == null) peak = lineEconomics().find((x) => x.name === line)?.peak || 0;
+  return Math.min(300, Math.max(OPERATING.minTrains[c], 2 * Math.round(peak / (2 * OPERATING.paxPerTrain[c] * OPERATING.loadFactor))));
+}
+
 /** 운행 중 계통별 구간(정차역 사이) 이용객 (시뮬레이션 결과의 가상 링크 순서대로) */
 function svcSegVols() {
   const out = new Map(), sv = result?.links.svcVol;
@@ -1659,13 +1690,11 @@ function openLineDiagram(id) {
       segVC: v ? segVC : null,
       label: `${SERVICE_KINDS[s.kind].label} · ${s.trains}회/일 · ${stops.size}역${s.built ? '' : ' · 제작 중'}` });
   }
-  // 기본 운행: 모든 역에 서는 열차. 운행 횟수는 이용객을 승차율 65%로 실을 만큼으로 어림한다
-  const cls = mode === 2 ? 'metro' : l0.cls === 'hsr' ? 'hsr' : 'conv';
-  const peak = Math.max(0, ...segs.map((s) => s.vol));
-  const baseTrains = Math.min(300, Math.max(OPERATING.minTrains[cls], Math.round(peak / (OPERATING.paxPerTrain[cls] * OPERATING.loadFactor))));
+  // 보통(자동): 모든 노선에 저절로 다니는 모든 역 정차 열차. 운행 횟수는 이용객을 승차율 65%로 실을 만큼
+  const baseTrains = autoLocalTrains(line, mode === 2 ? 'metro' : l0.cls, Math.max(0, ...segs.map((s) => s.vol)));
   const all = new Set(nodes.map((_, i) => i));
-  rows.push({ name: '기본 운행', kind: 'base', first: 0, last: nodes.length - 1, stops: all, trains: baseTrains,
-    times: timesFor(0, nodes.length - 1, all, 1), segVC: null, label: `모든 역 · 약 ${baseTrains}회/일` });
+  rows.push({ name: `${l0.cls === 'hsr' ? '고속' : '보통'} (자동)`, kind: 'base', first: 0, last: nodes.length - 1, stops: all, trains: baseTrains,
+    times: timesFor(0, nodes.length - 1, all, 1), segVC: null, label: `모든 역 · 24시간 · ${baseTrains}회/일` });
   showLineDiagram($('#linediagram'), {
     title: `${line} · ${km.toFixed(0)}km · ${nodes.length}역`, stations, segs, rows,
     onStation: (i) => { flyToNode(stations[i].node); select({ type: 'node', id: stations[i].node }); },
@@ -1957,7 +1986,7 @@ function stationPanel(id, n) {
   }
   const modeLabel = (l) => (l.mode === 2 ? '도시철도' : CLASS_LABEL[l.cls]);
   const svcRow = (s, stop) => `<tr><td>${esc(s.name)} <span class="m">${SERVICE_KINDS[s.kind].label}${s.built ? '' : ' · 차량 제작 중'}</span></td>
-    <td>${stop ? `하루 ${s.trains}회 · 약 ${Math.round(1080 / Math.max(1, s.trains / 2))}분 간격` : '통과'}</td></tr>`;
+    <td>${stop ? `하루 ${s.trains}회 · 약 ${Math.round(SERVICE_DAY_MIN / Math.max(1, s.trains / 2))}분 간격` : '통과'}</td></tr>`;
   return `
     <h4>노선</h4>
     <table class="kv">${lines.map((l) => `<tr><td>${esc(l.name)} <span class="m">${modeLabel(l)}</span>
@@ -1970,9 +1999,10 @@ function stationPanel(id, n) {
     </table>
     ${riders == null ? `<p class="hint">${lines.some((l) => l.mode === 2) ? '도시철도역은 시군구 사이 통행만 셈해 역별 승하차는 따로 내지 않습니다. 노선 통과 인원을 보세요.' : '아직 운행하지 않는 역입니다.'}</p>` : ''}
     <h4>운행 계통</h4>
-    ${stopping.length || passing.length ? `<table class="kv">${stopping.map((s) => svcRow(s, true)).join('')}${passing.map((s) => svcRow(s, false)).join('')}</table>
-      ${svcTrains ? `<p class="hint">이 역에 서는 계통 열차 하루 ${svcTrains}회 (계통 없는 기본 운행 열차는 모든 역에 섭니다)</p>` : ''}`
-      : '<p class="hint">따로 짠 운행 계통이 없습니다. 기본 운행 열차가 모든 역에 섭니다. 철도 구간을 눌러 특급·급행 계통을 짤 수 있습니다.</p>'}
+    <table class="kv">${lines.filter((l) => l.named).map((l) => { const t = autoLocalTrains(l.name, l.mode === 2 ? 'metro' : l.cls);
+      return `<tr><td>${esc(l.name)} ${l.cls === 'hsr' ? '고속' : '보통'} <span class="m">자동 · 24시간</span></td><td>하루 ${t}회 · 약 ${Math.max(1, Math.round(SERVICE_DAY_MIN / Math.max(1, t / 2)))}분 간격</td></tr>`; }).join('')}
+      ${stopping.map((s) => svcRow(s, true)).join('')}${passing.map((s) => svcRow(s, false)).join('')}</table>
+    ${svcTrains ? `<p class="hint">이 역에 서는 특급·급행 등 계통 열차 하루 ${svcTrains}회</p>` : '<p class="hint">보통 열차는 모든 노선에 저절로 다닙니다. 철도 구간을 눌러 특급·급행 계통을 짤 수 있습니다.</p>'}
     <h4>환승</h4>
     ${lines.filter((l) => l.named).length > 1 ? `<p class="hint">같은 역 환승: ${lines.filter((l) => l.named).map((l) => esc(l.name)).join(', ')}</p>` : ''}
     ${near.length ? `<table class="kv">${near.map((x) => `<tr><td><a href="#" data-st-goto="${x.node}">${esc(x.name)}</a>

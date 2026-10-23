@@ -9,7 +9,7 @@ export const SERVICE_KINDS = {
   express: { label: '급행', setCost: 200, fareFactor: 1.1 },
   local: { label: '보통', setCost: 150, fareFactor: 1.0 },
 };
-const SERVICE_DAY_MIN = 1080;   // 하루 운행 시간 (05~23시)
+const SERVICE_DAY_MIN = 1440;   // 하루 운행 시간: 24시간 운행
 const TURNAROUND_MIN = 20;      // 종착역 회차
 
 /** 운영비·수입 단가 (게임용 가정값, 원) */
@@ -81,6 +81,20 @@ export function lineStations({ links, nodes }, stationSet, name, mode = 1) {
     else chain = p.slice().reverse().concat(chain);
   }
   const out = chain.filter((v) => stationSet.has(v));
+  // 노선 이름이 끝에서 바뀌는 경우(경부선 → 부산역의 '경부본선') 2km 안의 종착역을 붙인다
+  const inChain = new Set(out);
+  const nearestStation = (end) => {
+    let best = null, bd = 2;
+    for (const st of stationSet) {
+      if (inChain.has(st) || !nodes[st]) continue;
+      const d = gap(end, st);
+      if (d < bd) { bd = d; best = st; }
+    }
+    return best;
+  };
+  const head = nearestStation(chain[0]), tail = nearestStation(chain[chain.length - 1]);
+  if (head != null && (!out.length || gap(chain[0], head) < gap(chain[0], out[0]) + 0.01) && !stationSet.has(chain[0])) out.unshift(head);
+  if (tail != null && tail !== head && !stationSet.has(chain[chain.length - 1])) out.push(tail);
   return out.filter((v, k) => out.indexOf(v) === k);
 }
 

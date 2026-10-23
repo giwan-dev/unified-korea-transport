@@ -2,7 +2,7 @@
 
 const VC_COLORS = [[0, '#3f9e63'], [0.6, '#c5c23a'], [1, '#f0a030'], [2, '#e0582c'], [4, '#c21f2f'], [7, '#7e1048']];
 const KIND_COLOR = { limited: '#c0392b', express: '#d68910', local: '#2471a3', base: '#566573' };
-const DAY_START = 5 * 60, DAY_END = 23 * 60;   // 05:00~23:00 운행
+const DAY = 1440;   // 24시간 운행 (자정을 넘겨도 열차가 이어 다닌다)
 
 function vcColor(v) {
   let c = VC_COLORS[0][1];
@@ -76,7 +76,7 @@ export function showLineDiagram(el, d, onClose) {
   });
 
   el.innerHTML = `<div class="ld-head"><b>${esc(d.title)}</b>
-      <span class="ld-clock" id="ld-clock">05:00</span>
+      <span class="ld-clock" id="ld-clock">07:00</span>
       <button class="small" id="ld-play">⏸</button>
       <select id="ld-speed"><option value="1">1분/0.1초</option><option value="5" selected>5분/0.1초</option><option value="15">15분/0.1초</option></select>
       <span class="ld-legend">● 정차 │ 통과 · ▶ 하행 ◀ 상행 · 선 색 = 혼잡도</span>
@@ -86,7 +86,7 @@ export function showLineDiagram(el, d, onClose) {
   el.querySelector('#ld-close').onclick = () => { stopLineDiagram(); el.hidden = true; onClose?.(); };
   if (d.onStation) el.querySelectorAll('[data-st]').forEach((t) => { t.onclick = () => d.onStation(+t.dataset.st); });
 
-  // 열차 위치: 계통마다 하루 운행을 05~23시에 고르게 나누고, 역별 도착 시각을 따라 움직인다
+  // 열차 위치: 계통마다 하루 운행을 24시간에 고르게 나누고, 역별 도착 시각을 따라 움직인다
   const groups = [...el.querySelectorAll('.ld-trains')];
   let clock = 7 * 60, playing = true;
   const kmAtTime = (r, t) => {
@@ -110,20 +110,20 @@ export function showLineDiagram(el, d, onClose) {
       const run = r.times[r.last] - r.times[r.first];
       if (!r.trains) return;
       const perDir = Math.max(1, Math.round(r.trains / 2));
-      const headway = (DAY_END - DAY_START) / perDir;
+      const headway = DAY / perDir;
+      // 출발 뒤 지난 분 (전날 늦게 떠난 열차도 자정을 넘겨 이어서 달린다)
+      const since = (dep) => ((clock - dep) % DAY + DAY) % DAY;
       let html = '';
       for (let n = 0; n < perDir; n++) {
-        const dep = DAY_START + n * headway;
-        const e = clock - dep;
-        if (e < 0 || e > run) continue;
+        const e = since(n * headway);
+        if (e > run) continue;
         // 하행: 첫 역 → 끝 역 (선 위쪽), 상행: 반대 (선 아래쪽, 반 간격 어긋나게)
         const xd = xAtKm(kmAtTime(r, r.times[r.first] + e));
         html += `<path d="M${xd - 5},${y - 12} L${xd + 5},${y - 8} L${xd - 5},${y - 4} Z" fill="${col}"/>`;
       }
       for (let n = 0; n < perDir; n++) {
-        const dep = DAY_START + (n + 0.5) * headway;
-        const e = clock - dep;
-        if (e < 0 || e > run) continue;
+        const e = since((n + 0.5) * headway);
+        if (e > run) continue;
         const km = d.stations[r.last].km - (kmAtTime(r, r.times[r.first] + e) - d.stations[r.first].km);
         const xu = xAtKm(km);
         html += `<path d="M${xu + 5},${y + 4} L${xu - 5},${y + 8} L${xu + 5},${y + 12} Z" fill="${col}"/>`;
@@ -135,7 +135,7 @@ export function showLineDiagram(el, d, onClose) {
   timer = setInterval(() => {
     if (!playing) return;
     clock += +el.querySelector('#ld-speed').value;
-    if (clock > DAY_END + 60) clock = DAY_START;
+    if (clock >= DAY) clock -= DAY;
     draw();
   }, 100);
   el.querySelector('#ld-play').onclick = (ev) => { playing = !playing; ev.target.textContent = playing ? '⏸' : '▶'; };
