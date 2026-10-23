@@ -24,6 +24,7 @@ import { autoLineName, cityStem, makeForeignTest } from './game/lines.js';
 import { saveSim, loadSim, clearSim } from './game/simstore.js';
 import { SERVICE_KINDS, TRAIN_TYPES, OPERATING, lineStations, planService, railPath, tripsPerDay, setCost, canRun, defaultTrainType, serviceBuyCost, startService, updateService, removeService, seedServices, openWaitingServices } from './game/services.js';
 import { showLineDiagram, stopLineDiagram } from './ui/linediagram.js';
+import { addPlansLayer, showPlanLine } from './ui/plansmap.js';
 import { addRailKindLayer, railKindLegend, railStd, syncRailKind } from './ui/railkind.js';
 import { P } from './sim/params.js';
 import { PPP_TYPES, PPP_DEFAULTS, initPPP, tollKind, linkToll, annualRevenue, evaluatePPP } from './game/ppp.js';
@@ -135,6 +136,7 @@ async function init() {
     map = m;
     addLayers(map, zonesFC, linksFC(), { type: 'FeatureCollection', features: [] });
     addRailKindLayer(map);
+    addPlansLayer(map);
     setNameResolver((level, id, original) => placeName(state, level, id, original));
     refreshNames(map);
     subsReady.then(() => map.getSource('subs').setData(subsFC));
@@ -676,6 +678,8 @@ function bindMap() {
     if (draft?.type === 'airport') { placeAirport(e.lngLat); return; }
     if (draft) { addDraftPoint(e.lngLat); return; }
     const box = [[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]];
+    const pl = shownPlan ? map.queryRenderedFeatures(box, { layers: ['plans-line'] })[0] : null;
+    if (pl) { openPlan(pl.properties.id); return; }
     const ap = map.queryRenderedFeatures(box, { layers: ['airports'] })[0];
     if (ap) return select({ type: 'airport', id: ap.properties.id });
     const pt = map.queryRenderedFeatures(box, { layers: ['points'] })[0];
@@ -692,7 +696,7 @@ function bindMap() {
   });
   map.on('dblclick', (e) => { if (draft) { e.preventDefault(); } });
   enableBoxSelect();
-  for (const l of ['roads', 'roads-minor', 'rails', 'metro', 'points']) {
+  for (const l of ['roads', 'roads-minor', 'rails', 'metro', 'points', 'plans-line']) {
     map.on('mouseenter', l, () => { if (!draft) map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', l, () => { if (!draft) map.getCanvas().style.cursor = ''; });
   }
@@ -1146,6 +1150,19 @@ function switchTab(tab) {
   if (!$('#selection').hidden) $('#selection .close')?.click();
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
   document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('on', p.dataset.panel === tab));
+  if (tab !== 'build') showPlan(null);
+}
+
+/** 계획 노선 하나만 지도에 점선으로 (null이면 지운다). 건설 탭 목록에서 계획을 누를 때 */
+let shownPlan = null;
+function showPlan(id) {
+  if (!map) return;
+  shownPlan = id;
+  const line = showPlanLine(map, id ? plans.find((p) => p.id === id) : null);
+  document.querySelectorAll('[data-plan-show]').forEach((el) => { el.style.textDecoration = el.dataset.planShow === id ? 'underline' : ''; });
+  if (!line) return;
+  const xs = line.map((c) => c[0]), ys = line.map((c) => c[1]);
+  map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: 80, maxZoom: 11 });
 }
 
 // ---- 접는 묶음: 패널의 소제목(h4, 설정은 h3)마다 그 아래 내용을 <details>로 묶는다. 펼침 상태는 이 브라우저에 남긴다
@@ -1328,6 +1345,8 @@ function renderBuild() {
     <div class="list">${historic.map((t) => restoreRow(t)).join('')}</div>` : '';
   el.innerHTML = `<div class="tools">${tools}</div>${body}${draft ? '' : plansHTML() + megaHTML() + restore}`;
   if (!draft) bindMega(el);
+  el.querySelectorAll('[data-plan-show]').forEach((b) => { b.onclick = () => showPlan(shownPlan === b.dataset.planShow ? null : b.dataset.planShow); });
+  if (draft) showPlan(null);
   el.querySelectorAll('[data-plan]').forEach((b) => { b.onclick = () => openPlan(b.dataset.plan); });
   el.querySelectorAll('.svc-pick-b').forEach((b) => { b.onclick = startServicePick; });
   el.querySelectorAll('[data-padd]').forEach((b) => { b.onclick = () => startPointAdd(b.dataset.padd); });
@@ -2351,13 +2370,13 @@ function plansHTML() {
   const started = new Set(state.projects.map((p) => p.plan).filter(Boolean));
   const groups = [...new Set(plans.map((p) => p.group))];
   return `<h4>계획 사업</h4>
-    <p class="hint">국가·광역 교통계획에 나온 노선입니다. 누르면 경유지가 찍힌 채로 그리기가 열리고, 사업비를 확인한 뒤 착공합니다 (경로는 고칠 수 있습니다).</p>
+    <p class="hint">국가·광역 교통계획(제4·5차 국가철도망 구축계획, 제3차 국가도로망 종합계획 등)에 나온 노선입니다. 계획 이름을 누르면 지도에 그 노선이 점선으로 보이고, 그 선이나 "열기"를 누르면 경유지가 찍힌 채로 그리기가 열립니다. 사업비를 확인한 뒤 착공합니다 (경로는 고칠 수 있습니다).</p>
     ${groups.map((g) => `<div class="m" style="margin:6px 0 2px">${esc(g)}</div><div class="list">${plans.filter((p) => p.group === g).map((p) => {
       let km = 0;
       for (let i = 1; i < p.points.length; i++) km += kmBetween(p.points[i - 1][1], p.points[i - 1][2], p.points[i][1], p.points[i][2]);
       const spec = NEW_BUILDS[p.type];
       return `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
-        <span>${esc(p.name)} <span class="m">${spec.label.replace(/ 신설.*$/, '')} · 약 ${Math.round(km * 1.1)}km · ${formatWon(km * 1.1 * spec.perKm)}</span></span>
+        <span data-plan-show="${p.id}" style="cursor:pointer;${shownPlan === p.id ? 'text-decoration:underline' : ''}" title="지도에 노선 보기">${esc(p.name)} <span class="m">${spec.label.replace(/ 신설.*$/, '')} · 약 ${Math.round(km * 1.1)}km · ${formatWon(km * 1.1 * spec.perKm)}${p.source ? ` · ${esc(p.source)}` : ''}</span></span>
         <button class="small" data-plan="${p.id}" ${started.has(p.id) ? 'disabled' : ''}>${started.has(p.id) ? '착공함' : '열기'}</button></div></div>`;
     }).join('')}</div>`).join('')}`;
 }
