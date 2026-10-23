@@ -57,6 +57,14 @@ PROVINCES = {
 # 네트워크 단순화 격자 크기(도). 약 500m. 왕복 분리 차로·복선 선로를 한 링크로 합치되
 # 교차로·분기점 위치는 500m 안쪽으로 맞춘다. 화면에는 실제 웨이 도형을 따로 그린다.
 GRID = 0.005
+# 인구 50만 이상 도시 안에서는 약 200m 격자로 교차로를 따로 살린다 (실제 OSM 교차점 노드 좌표를 쓴다).
+# 칸 번호는 0.001도 단위의 정수로 통일한다: 바깥은 5칸(0.005도), 도시 안은 2칸(0.002도)씩 건너뛴다.
+UNIT = 0.001
+COARSE, FINE = 5, 2
+CITY_MIN_POP = 500_000
+CITY_CELLS = set()      # 도시 안인 바깥 격자 칸 (round(lon/GRID), round(lat/GRID))
+# 도시 안에서만 넣는 낮은 등급 도로: 남측 2차 도로(secondary). 3차 도로는 넣지 않는다
+CITY_ONLY_ROADS = {}   # 3차 도로(tertiary)까지 넣으면 계산망이 2.5배가 되어 해마다 계산이 너무 느려진다
 
 ROAD_CLASSES = ["motorway", "trunk", "primary", "secondary"]
 ROAD_LINKS = {"motorway_link": "motorway", "trunk_link": "trunk", "primary_link": "primary", "secondary_link": "secondary"}
@@ -246,7 +254,44 @@ def add_population(zones):
 
 
 def cell_of(lon, lat):
-    return (round(lon / GRID), round(lat / GRID))
+    if (round(lon / GRID), round(lat / GRID)) in CITY_CELLS:
+        s = FINE * UNIT
+        return (FINE * round(lon / s), FINE * round(lat / s))
+    return (COARSE * round(lon / GRID), COARSE * round(lat / GRID))
+
+
+def in_city(lon, lat):
+    return (round(lon / GRID), round(lat / GRID)) in CITY_CELLS
+
+
+def mark_cities(zones):
+    """인구 50만 이상 도시(특별·광역시는 자치구를 합쳐서, 그 밖은 시 하나)의 바깥 격자 칸을 CITY_CELLS에 넣는다"""
+    groups = defaultdict(list)
+    for z in zones:
+        prov = z.get("province") or ""
+        metro = prov.endswith(("특별시", "광역시", "직할시")) or prov in ("평양시", "남포시")
+        if metro:
+            # 광역시의 군(기장군·달성군 등)은 시가지가 아니므로 뺀다
+            if not z["name"].endswith(("구", "구역")):
+                continue
+            groups[prov].append(z)
+        else:
+            groups[z["name"]].append(z)
+    cities = []
+    for name, zs in groups.items():
+        pop = sum(z.get("pop", 0) for z in zs)
+        if pop < CITY_MIN_POP:
+            continue
+        cities.append((name, pop))
+        geom = unary_union([z["geom"] for z in zs])
+        x0, y0, x1, y1 = geom.bounds
+        shapely.prepare(geom)
+        for i in range(int(x0 / GRID) - 1, int(x1 / GRID) + 2):
+            for j in range(int(y0 / GRID) - 1, int(y1 / GRID) + 2):
+                if geom.intersects(shapely.box((i - 0.5) * GRID, (j - 0.5) * GRID, (i + 0.5) * GRID, (j + 0.5) * GRID)):
+                    CITY_CELLS.add((i, j))
+    log("big cities", len(cities), ", ".join(f"{n} {p // 10000}만" for n, p in sorted(cities, key=lambda x: -x[1])))
+    log("city grid cells", len(CITY_CELLS))
 
 
 class NetHandler:
@@ -313,17 +358,24 @@ class NetHandler:
         elif rw == "construction" and t.get("construction") in ("rail", "subway", "light_rail"):
             rw = t.get("construction")
             opening = _opening_year(t, 2030)
-        if hw in ROAD_CLASSES or hw in ROAD_LINKS:
-            if hw == "secondary" and self.country == "KR":
-                return
-            mode, cls = "road", ROAD_LINKS.get(hw, hw)
+        city_road = hw in CITY_ONLY_ROADS or (hw in ("secondary", "secondary_link") and self.country == "KR")
+        if hw in ROAD_CLASSES or hw in ROAD_LINKS or hw in CITY_ONLY_ROADS:
+            # 남측 2차 도로와 3차 도로는 대도시 안에서만 넣는다 (웨이 가운데 점 기준)
+            if city_road:
+                try:
+                    mid = w.nodes[len(w.nodes) // 2]
+                    if not in_city(mid.lon, mid.lat):
+                        return
+                except osmium.InvalidLocationError:
+                    return
+            mode, cls = "road", CITY_ONLY_ROADS.get(hw) or ROAD_LINKS.get(hw, hw)
             oneway = t.get("oneway") in ("yes", "1") or hw == "motorway"
             lanes = _int(t.get("lanes"))
             attrs = {
                 "opening": opening,
                 "oneway": oneway, "lanes": lanes,
                 "paved": t.get("surface") not in ("unpaved", "dirt", "gravel", "ground", "compacted"),
-                "name": ko_name(t), "ref": t.get("ref"), "ramp": hw in ROAD_LINKS,
+                "name": ko_name(t), "ref": t.get("ref"), "ramp": hw in ROAD_LINKS or hw == "tertiary_link",
             }
         elif rw == "rail" and t.get("service") is None and t.get("usage") in (None, "main", "branch"):
             mode = "rail"
@@ -412,6 +464,7 @@ CLASS_RANK = {"motorway": 4, "trunk": 3, "primary": 2, "secondary": 1, "hsr": 5,
 
 
 def build_network(zones):
+    mark_cities(zones)
     handlers = {}
     seen_ways = set()
     for c in ("KR", "KP"):
@@ -696,12 +749,14 @@ def _cell_country_lookup(zones, cellpts):
 
 
 def _snap_points(points, cells, radius):
+    """radius: 바깥 격자(500m) 칸 수. 칸 번호가 0.001도 단위라 그만큼 넓혀 찾는다"""
     out = []
+    r = radius * COARSE
     for name, lon, lat in points:
         cx, cy = cell_of(lon, lat)
         best, bd = None, 1e9
-        for dx in range(-radius, radius + 1):
-            for dy in range(-radius, radius + 1):
+        for dx in range(-r, r + 1):
+            for dy in range(-r, r + 1):
                 c = (cx + dx, cy + dy)
                 if c in cells:
                     d = dx * dx + dy * dy
