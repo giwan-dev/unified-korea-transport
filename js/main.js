@@ -5,7 +5,7 @@ import {
   newGame, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
   updateCongestion, defaultFix, updateApproval, canAfford, isKP, linksUnderWork, UPGRADES, NEW_BUILDS, upgradeCost,
   placeName, setPlaceName, startRestoreName, RENAME, startAirport, startAirportExpand, renameLine, splitLink,
-  fundFor, settleRail, railDividend, railEquity, mergeRail, OP_FACTORS, initOngoing, linkPending, setProjectPace, PACES,
+  fundFor, settlePPP, settleRail, railDividend, railEquity, mergeRail, OP_FACTORS, initOngoing, linkPending, setProjectPace, PACES,
   initAirRoutes, updateAirRoutes, startOpenRoute, closeRoute, AIR,
 } from './game/state.js';
 import { AIRPORT } from './game/catalog.js';
@@ -20,6 +20,7 @@ import { saveSim, loadSim, clearSim } from './game/simstore.js';
 import { SERVICE_KINDS, TRAIN_TYPES, OPERATING, lineStations, planService, railPath, tripsPerDay, setCost, canRun, defaultTrainType, serviceBuyCost, startService, updateService, removeService } from './game/services.js';
 import { showLineDiagram, stopLineDiagram } from './ui/linediagram.js';
 import { P } from './sim/params.js';
+import { PPP_TYPES, PPP_DEFAULTS, initPPP, tollKind, linkToll, annualRevenue, evaluatePPP } from './game/ppp.js';
 import {
   PARTIES, initLocal, regionOf, hasAutonomy, leanP, runElection, bumpApproval, governorTitle, mayorTitle, isMetroCity,
   HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST,
@@ -86,6 +87,7 @@ async function init() {
   initAirRoutes(state, world.routes || []);
   initRail(state);
   initLocal(state);
+  initPPP(state);
   if (!Object.keys(state.local.offices).length) holdElection('all', '지방선거 (게임 시작 시점)');
   // OSM 공사 중 노선 → 진행 중 사업 (이름 없는 구간은 가까운 시군 이름으로)
   initOngoing(base, state, (l) => {
@@ -289,6 +291,8 @@ function applyResult(res) {
     settleRail(state, operatorEconomics());
     // 지방선거·단체장 SOC 제안
     localYear(lastDone);
+    // 민자사업 정산 (최소운영수입보장·임대료)
+    pppYear();
     lastDone = [];
     // 주민 행복도가 오르면 지지율도 오른다
     updateAirRoutes(state, res.air, airportName);
@@ -329,7 +333,8 @@ function nextYear() {
   else refreshLinks();
   pendingStep = true;
   setBusy(true, `${state.year}년 계산 중`, 0);
-  worker.postMessage({ type: 'step', net: effectiveNetwork(base, state), ctx: ctx() });
+  const opened = done.some((p) => p.kind === 'new');   // 플레이어가 놓은 새 노선 (이어받은 공사는 해마다 열려서 뺀다)
+  worker.postMessage({ type: 'step', net: effectiveNetwork(base, state), ctx: ctx(), opened });
 }
 
 function autoApprove() {
@@ -959,7 +964,9 @@ function commitDraft() {
   const names = {};
   draft.points.forEach((p, i) => { if (p.name && !p.existing) names[i] = { name: p.name, kind: p.kind, auto: p.auto !== false }; });
   const dc = draftCost();
-  if (NEW_BUILDS[draft.type].mode !== 1 && !canAfford(state, dc.cost, dc.years)) { alert('예산과 차입 한도가 부족합니다.'); return; }
+  const pp = pppPlan();
+  if (pp === false) { alert('민자사업은 먼저 수요 예측·민간 수익성 검토를 하고, 민간이 참여할 수 있어야 착공할 수 있습니다.'); return; }
+  if (!pp && NEW_BUILDS[draft.type].mode !== 1 && !canAfford(state, dc.cost, dc.years)) { alert('예산과 차입 한도가 부족합니다.'); return; }
   const lineName = draftLineName();
   let split = false;
   for (const p of draft.points) {
@@ -968,9 +975,15 @@ function commitDraft() {
     split = true;
   }
   const restAreas = restPositions(smoothSegments(draft.points)).map(([lon, lat]) => ({ lon, lat, name: namer.suggest(lon, lat, 'rest') }));
-  const r = startNewBuild(base, state, { type: draft.type, points: draft.points, names, lineName, extendOf: draft.extendOf, plan: draft.plan, segFactor: dc.segFactor, extraCost: dc.extraCost, restAreas });
+  const r = startNewBuild(base, state, { type: draft.type, points: draft.points, names, lineName, extendOf: draft.extendOf, plan: draft.plan,
+    ppp: pp ? { type: pp.type, subsidy: pp.subsidy, toll: pp.toll } : null, segFactor: dc.segFactor, extraCost: dc.extraCost, restAreas });
   if (split) refreshLinks();
   if (!r.ok) { alert(r.reason); return; }
+  if (pp) {
+    const proj = state.projects[state.projects.length - 1];
+    proj.label = `[민자 ${pp.type.toUpperCase()}] ${proj.label}`;
+    addContract(proj, pp, lineName || NEW_BUILDS[draft.type].label);
+  }
   draft.points.forEach((p) => { p.reserved = false; });
   draft = null;
   map.getCanvas().style.cursor = '';
@@ -1116,7 +1129,8 @@ function renderBuild() {
         ${draftCost().mids ? `<tr><td>중간 ${spec.mode === 0 ? 'IC' : '역'} ${draftCost().mids}곳</td><td>${formatWon(draftCost().mids * (spec.mode === 0 ? MID_COST.road : MID_COST.rail))}</td></tr>` : ''}
         ${draftCost().rests ? `<tr><td>휴게소 ${draftCost().rests}곳 (약 ${REST.spacingKm}km마다)</td><td>${formatWon(draftCost().rests * REST.cost)}</td></tr>` : ''}
       </table>
-      ${draftOp ? fundSelect([draftOp]) : ''}
+      ${pppSection()}
+      ${draftOp && (draft.ppp?.type || 'gov') === 'gov' ? fundSelect([draftOp]) : ''}
       <div class="name-row"><label><input type="checkbox" id="snap-node" ${snap.node ? 'checked' : ''}> 노드에 붙이기</label>
         <label><input type="checkbox" id="snap-line" ${snap.line ? 'checked' : ''}> 선 위에 붙이기 (중간 ${spec.mode === 0 ? 'IC' : '역'})</label></div>
       <p class="hint">노란 점(◆)은 중국·러시아·일본 거점 도시입니다. 끝점을 거점에 붙이면 국제 노선이 됩니다.
@@ -1140,6 +1154,7 @@ function renderBuild() {
     $('#draft-prev').onclick = previewDraft;
     $('#snap-node').onchange = (e) => { snap.node = e.target.checked; };
     bindFund(el, renderBuild);
+    bindPPP(el);
     $('#snap-line').onchange = (e) => { snap.line = e.target.checked; };
     const ln = $('#line-name');
     if (ln) ln.onchange = () => { draft.lineName = ln.value.trim() || draft.lineName; draft.lineNameEdited = true; };
@@ -1199,7 +1214,8 @@ function renderProjects() {
   const row = (p) => {
     const prog = Math.min(1, p.paid / Math.max(1, p.cost));
     const pace = p.pace || 1;
-    const by = p.fund && p.fund !== 'gov' ? ` · ${opBadge(state, state.rail.merged ? 'merged' : p.fund)} 자체 재원` : '';
+    const by = p.fund === 'ppp' ? ` · 민자 (정부 보조 ${Math.round((p.govShare || 0) * 100)}%)`
+      : p.fund && p.fund !== 'gov' ? ` · ${opBadge(state, state.rail.merged ? 'merged' : p.fund)} 자체 재원` : '';
     return `<div class="item"><div class="t">${esc(p.label)}</div>
       <div class="m">${formatWon(p.cost)} · 연 ${formatWon(Math.min(p.annual, p.cost - p.paid))} · ${p.doneYear}년 ${p.kind === 'osm' ? '개통' : '완공'} 예정${by}</div>
       <div class="progress"><div style="width:${Math.round(prog * 100)}%"></div></div>
@@ -1214,6 +1230,7 @@ function renderProjects() {
     <div class="list">${ongoing.map(row).join('') || '<p class="hint">없습니다.</p>'}</div>
     <h3 style="margin-top:16px">새로 벌인 사업 (${mine.length})</h3>
     <div class="list">${mine.map(row).join('') || '<p class="hint">진행 중인 사업이 없습니다.</p>'}</div>
+    ${pppTableHTML()}
     <h3 style="margin-top:16px">완공 (${state.projects.length - building.length})</h3>
     <div class="list">${done.map((p) => `<div class="item"><div class="t">${esc(p.label)}</div><div class="m">${p.doneYear}년 완공 · ${formatWon(p.cost)}</div></div>`).join('') || '<p class="hint">아직 없습니다.</p>'}</div>`;
   el.querySelectorAll('[data-pace]').forEach((b) => {
@@ -2527,7 +2544,7 @@ function onPreview(m) {
       ${row('정체 도로 (V/C>1)', `${res.congB.toFixed(0)} → ${res.congA.toFixed(0)} km`)}
     </table>
     ${top.length ? `<div class="m">혼잡이 줄어드는 곳: ${top.map(([, n, b, a]) => `${esc(n)} (V/C ${b.toFixed(2)}→${a.toFixed(2)})`).join(' · ')}</div>` : ''}
-    ${extra.html ? extra.html(res) : ''}
+    ${extra.html ? extra.html({ ...res, touched }, A, clone) : ''}
     <p class="hint">실제 효과는 해마다 조금씩 나타나고, 인구·소득 변화에 따라 달라집니다.</p>`);
 }
 let lastPreview = null;
@@ -2646,6 +2663,113 @@ function metroIntraRevenue(line) {
   let s = 0;
   for (const [n, lines] of at) if (lines.has(line)) s += metroStationEst(n) / lines.size;
   return (s / 2) * METRO_TRIP_KM * OPERATING.fareKm.metro * 365;   // 승하차 2번이 1통행
+}
+
+// ------------------------------------------------------------ 재정사업·민자사업
+
+function pppSig(p) { return JSON.stringify([draft?.points.map((x) => [x.lon, x.lat]), draft?.type, p]); }
+
+/** 그리기 패널: 사업 방식과 민자 조건 */
+function pppSection() {
+  if (!draft || draft.type === 'airport') return '';
+  const p = (draft.ppp ||= { type: 'gov', ...PPP_DEFAULTS });
+  const opts = Object.entries(PPP_TYPES).map(([k, v]) => `<option value="${k}" ${k === p.type ? 'selected' : ''}>${v.label}</option>`).join('');
+  if (p.type === 'gov') return `<div class="name-row"><span class="kind">방식</span><select id="ppp-type">${opts}</select></div>`;
+  const ev = draft.pppEval && draft.pppEval.sig === pppSig(p) ? draft.pppEval : null;
+  const sel = (id, vals, cur, fmt) => `<select id="${id}">${vals.map((v) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${fmt(v)}</option>`).join('')}</select>`;
+  return `<div class="name-row"><span class="kind">방식</span><select id="ppp-type">${opts}</select></div>
+    <div class="ppp-grid">
+      <label>운영 기간 ${sel('ppp-years', [20, 30, 40], p.years, (v) => `${v}년`)}</label>
+      <label>민간 목표 수익률 ${sel('ppp-target', [0.04, 0.05, 0.06, 0.07, 0.08], p.target, (v) => `${Math.round(v * 100)}%`)}</label>
+      ${p.type === 'bto' ? `<label>통행료·운임 (재정 대비) ${sel('ppp-toll', [1, 1.2, 1.3, 1.5, 1.8, 2], p.tollMult, (v) => `${v}배`)}</label>
+      <label>최소운영수입보장 ${sel('ppp-mrg', [0, 0.5, 0.7, 0.9], p.mrg, (v) => (v ? `예측의 ${Math.round(v * 100)}%` : '없음'))}</label>` : ''}
+      <label>정부 건설보조금 ${sel('ppp-subsidy', [0, 0.1, 0.2, 0.3, 0.4, 0.5], p.subsidy, (v) => `${Math.round(v * 100)}%`)}</label>
+    </div>
+    <button class="small" id="ppp-eval" ${draft.points.length < 2 ? 'disabled' : ''}>수요 예측·민간 수익성 검토 (약 40초)</button>
+    ${ev ? `<table class="kv" style="margin-top:6px">
+      <tr><td>예측 이용 (개통 첫해)</td><td>${Math.round(ev.useKm).toLocaleString()} ${ev.kind === 'road' ? '대·km' : '인·km'}/일</td></tr>
+      <tr><td>민간 투자비 · 연 운영비</td><td>${formatWon(ev.ev.privateCapex)} · ${formatWon(ev.ev.opex)}</td></tr>
+      ${p.type === 'bto' ? `<tr><td>첫해 통행료·운임 수입</td><td>${formatWon(ev.ev.rev1)}</td></tr>
+        ${p.mrg ? `<tr><td>최소운영수입보장 기준</td><td>연 ${formatWon(ev.ev.mrgFloor)}</td></tr>` : ''}`
+        : `<tr><td>정부 연 임대료 (${p.years}년)</td><td>${formatWon(ev.ev.lease)}</td></tr>`}
+      <tr><td>민간 수익률 (IRR)</td><td class="${ev.ev.viable ? 'pos' : 'neg'}">${(ev.ev.irr * 100).toFixed(1)}% (목표 ${Math.round(p.target * 100)}%)</td></tr>
+      </table><p class="hint ${ev.ev.viable ? '' : 'neg'}">${ev.ev.viable ? '민간 사업자가 참여합니다. 착공하면 정부는 건설보조금만 냅니다.' : '수익률이 목표에 못 미쳐 민간이 참여하지 않습니다. 보조금·통행료·최소운영수입보장을 올리거나 운영 기간을 늘려 보세요.'}</p>`
+      : '<p class="hint">민자로 하려면 먼저 수요를 예측하고 민간 수익성을 검토하세요. 조건을 바꾸면 다시 검토해야 합니다.</p>'}`;
+}
+
+function bindPPP(el) {
+  const p = draft?.ppp;
+  if (!p) return;
+  const on = (id, f) => { const x = el.querySelector(id); if (x) x.onchange = () => { f(x.value); renderBuild(); }; };
+  on('#ppp-type', (v) => { p.type = v; });
+  on('#ppp-years', (v) => { p.years = +v; });
+  on('#ppp-target', (v) => { p.target = +v; });
+  on('#ppp-toll', (v) => { p.tollMult = +v; });
+  on('#ppp-mrg', (v) => { p.mrg = +v; });
+  on('#ppp-subsidy', (v) => { p.subsidy = +v; });
+  el.querySelector('#ppp-eval')?.addEventListener('click', evaluateDraftPPP);
+}
+
+/** 민자 검토: 통행료를 붙인 채로 다 지었다고 치고 배정해 이용을 예측하고, 민간 수익률을 셈한다 */
+function evaluateDraftPPP() {
+  const p = draft.ppp, spec = NEW_BUILDS[draft.type];
+  const kind = tollKind({ mode: spec.mode, cls: spec.attrs.cls });
+  const dc = draftCost();
+  const pts = draft.points.map((x) => ({ ...x, split: null }));
+  const sig = pppSig(p);
+  runPreview(`${draftLineName() || spec.label} 수요 예측 (${PPP_TYPES[p.type].label})`, (c) => {
+    const r = startNewBuild(base, c, { type: draft.type, points: pts, names: {}, lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost,
+      ppp: { type: p.type, subsidy: p.subsidy, toll: linkToll(kind, p.type, p.tollMult) } });
+    if (!r.ok) throw new Error(r.reason);
+    return buildNow(c, c.projects[c.projects.length - 1]);
+  }, {
+    html: (res, A, clone) => {
+      const useKm = res.touched.filter((i) => i < A.vol.length).reduce((s, i) => s + A.vol[i] * linkAt(base, clone, i).len, 0);
+      const ev = evaluatePPP(p, { cost: dc.cost, years: spec.years, km: dc.km, kind, useKm });
+      if (draft) { draft.pppEval = { sig, ev, useKm, kind }; renderBuild(); }
+      return `<p class="${ev.viable ? 'pos' : 'neg'}">민간 수익률 ${(ev.irr * 100).toFixed(1)}% → ${ev.viable ? '민간 참여 가능' : '민간 참여 불가'}</p>`;
+    },
+  });
+}
+
+/** 착공할 때 민자 계약을 맺는다 */
+function pppPlan() {
+  const p = draft.ppp;
+  if (!p || p.type === 'gov') return null;
+  const ev = draft.pppEval && draft.pppEval.sig === pppSig(p) ? draft.pppEval : null;
+  if (!ev || !ev.ev.viable) return false;
+  const spec = NEW_BUILDS[draft.type];
+  return { type: p.type, subsidy: p.subsidy, toll: linkToll(tollKind({ mode: spec.mode, cls: spec.attrs.cls }), p.type, p.tollMult), ev };
+}
+
+function addContract(proj, pp, name) {
+  const p = draft.ppp;
+  initPPP(state).push({
+    id: crypto.randomUUID(), project: proj.id, name, params: { ...p }, kind: pp.ev.kind,
+    links: proj.links, newLinkIdx: proj.links.map((i) => i - base.links.length), km: draftCost().km,
+    forecast: { useKm: pp.ev.useKm }, eval: { rev1: pp.ev.ev.rev1, lease: pp.ev.ev.lease, irr: pp.ev.ev.irr },
+    cum: { rev: 0, mrg: 0, lease: 0 }, hist: [],
+  });
+}
+
+/** 해마다 민자 정산 (실제 이용은 그해 배정 결과) */
+function pppYear() {
+  const uses = {};
+  for (const c of state.ppp || []) uses[c.id] = c.links.filter((i) => i < result.links.vol.length).reduce((s, i) => s + result.links.vol[i] * linkAt(base, state, i).len, 0);
+  settlePPP(state, uses, (c, use) => annualRevenue(use, c.kind, c.params.type === 'bto' ? c.params.tollMult : 1) / 1e8);
+}
+
+function pppTableHTML() {
+  const list = state.ppp || [];
+  if (!list.length) return '';
+  return `<h3 style="margin-top:16px">민자사업 (${list.length})</h3>
+    <table class="cmp"><tr><th>사업</th><th>방식</th><th>예측 대비 이용</th><th>정부 지급 누계</th></tr>${list.map((c) => {
+      const last = c.hist[c.hist.length - 1];
+      const ratio = last ? last.use / Math.max(1, c.forecast.useKm) : null;
+      return `<tr><td>${esc(c.name)} <span class="m">${c.ended ? `${c.ended}년 귀속` : c.hist.length ? `운영 ${c.hist.length}/${c.params.years}년` : '건설 중'}</span></td>
+        <td>${c.params.type.toUpperCase()}</td><td class="${ratio != null && ratio < 0.8 ? 'neg' : ''}">${ratio == null ? '–' : `${Math.round(ratio * 100)}%`}</td>
+        <td>${formatWon(c.cum.mrg + c.cum.lease)}${c.params.type === 'bto' && c.cum.mrg ? ' (MRG)' : c.params.type === 'btl' ? ' (임대료)' : ''}</td></tr>`;
+    }).join('')}</table>`;
 }
 
 function header(title) {

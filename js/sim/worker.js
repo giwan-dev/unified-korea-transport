@@ -66,7 +66,8 @@ self.onmessage = (ev) => {
       lastNet = msg.net;
       // 지난 1년의 교통 조건으로 경제·인구를 갱신한 뒤 새 해의 통행을 배정한다
       model.advanceYear(msg.ctx.integration, msg.ctx.policy);
-      results(model.assign(msg.ctx.integration, progress('통행배정'), true));
+      // 새 노선이 개통한 해에는 지난해 교통량과 반씩 섞어 이용이 빨리 자리 잡게 한다
+      results(model.assign(msg.ctx.integration, progress('통행배정'), true, msg.opened ? 1 : null));
     } else if (msg.type === 'preview') {
       // 착공 전 효과 미리보기: 지금 상태를 저장해 두고, 지금 네트워크(대조)와 다 지은 네트워크로 같은 방식의 통행배정을 각각 해 본 뒤 되돌린다.
       // 새 노선이 제 몫을 받도록 지난해 교통량과 반씩 섞는다. 두 결과의 차이가 사업 효과다

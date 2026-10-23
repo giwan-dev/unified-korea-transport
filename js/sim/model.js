@@ -365,6 +365,8 @@ export class Model {
       } else {
         this.cost[i] = this.freeTime[i] * (1 + 0.5 * Math.max(0, vc - 1));
       }
+      // 민자 구간의 통행료·추가 운임 (원/km): 시간 가치로 바꿔 더한다
+      if (L[i].toll) this.cost[i] += (L[i].len * L[i].toll) / P.vot;
       // 버스는 같은 도로를 승용차보다 느리게 달리고, 일반 도로에서는 정류장마다 선다 (고속버스는 고속도로에서 서지 않음)
       if (this.costT) {
         const l = L[i];

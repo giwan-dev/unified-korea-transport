@@ -221,6 +221,8 @@ export function fundFor(state, links) {
 /** 운영사 자체 재원 사업: 잔액이 모자라면 모자란 만큼 정부 SOC 예산이 보탠다 (잔액은 0 밑으로 내려가지 않는다) */
 function payProject(state, p, amount) {
   if (!p.fund || p.fund === 'gov') { pay(state, amount); return; }
+  // 민자사업: 정부는 건설보조금 몫만 낸다
+  if (p.fund === 'ppp') { pay(state, amount * (p.govShare ?? 0)); return; }
   const op = fundOp(state, p.fund), o = railOps(state)[op];
   const own = Math.min(amount, Math.max(0, o.cash));
   o.cash -= own;
@@ -281,6 +283,37 @@ export function mergeRail(state, name) {
 
 export { OP_FACTORS };
 
+// ------------------------------------------------------------ 민자사업 정산
+
+/**
+ * 해마다 민자사업을 정산한다. uses: 계약 id → 실제 하루 이용(대·km 또는 인·km), revenueOf(계약, 이용) → 억원/년.
+ * BTO: 실제 수입이 최소운영수입보장(MRG) 기준에 못 미치면 정부가 차액을 낸다. BTL: 정부가 임대료를 낸다.
+ * 운영 기간이 끝나면 정부로 귀속되어 추가 통행료가 없어진다.
+ */
+export function settlePPP(state, uses, revenueOf) {
+  for (const c of state.ppp || []) {
+    const proj = state.projects.find((p) => p.id === c.project);
+    if (!proj || proj.status !== 'done' || c.ended) continue;
+    c.opStart ||= state.year;
+    if (state.year >= c.opStart + c.params.years) {
+      c.ended = state.year;
+      for (const k of c.newLinkIdx) if (state.newLinks[k]) state.newLinks[k].toll = 0;
+      state.log.unshift(`${state.year}년 민자사업 귀속: ${c.name} (운영 기간 ${c.params.years}년 끝, 정부 소유로)`);
+      continue;
+    }
+    const use = uses[c.id] || 0, rev = revenueOf(c, use);
+    let mrg = 0, lease = 0;
+    // 개통 초기에는 수요가 자리 잡는 중이라 보장 기준을 낮춰 둔다 (1년차 60%, 해마다 +20%p)
+    const ramp = Math.min(1, 0.6 + 0.2 * (state.year - c.opStart));
+    if (c.params.type === 'bto' && c.params.mrg > 0) mrg = Math.max(0, c.eval.rev1 * c.params.mrg * ramp - rev);
+    if (c.params.type === 'btl') lease = c.eval.lease;
+    if (mrg + lease > 0) pay(state, mrg + lease);
+    c.cum.rev += rev; c.cum.mrg += mrg; c.cum.lease += lease;
+    c.hist.push({ year: state.year, use, rev, mrg, lease });
+    if (mrg > 0) state.log.unshift(`${state.year}년 ${c.name} 최소운영수입보장 지급: ${formatWon(mrg)} (예측 대비 수요 ${Math.round((use / Math.max(1, c.forecast.useKm)) * 100)}%)`);
+  }
+}
+
 export function startProject(state, p, { quiet = false } = {}) {
   p.annual = Math.round(p.cost / p.years);
   p.paid = p.annual;
@@ -290,7 +323,7 @@ export function startProject(state, p, { quiet = false } = {}) {
   p.fund ||= 'gov';
   payProject(state, p, p.annual);
   state.projects.push(p);
-  const by = p.fund === 'gov' ? '' : ` · ${opName(state, fundOp(state, p.fund))} 자체 재원`;
+  const by = p.fund === 'gov' ? '' : p.fund === 'ppp' ? ` · 민자 (정부 보조 ${Math.round((p.govShare || 0) * 100)}%)` : ` · ${opName(state, fundOp(state, p.fund))} 자체 재원`;
   if (!quiet) state.log.unshift(`${state.year}년 착공: ${p.label} (${formatWon(p.cost)}, ${p.years}년${by})`);
 }
 
@@ -478,8 +511,9 @@ export function startNewBuild(base, state, plan) {
     });
   }
   total += plan.extraCost || 0;   // 중간 IC·역·휴게소 설치비
-  const fund = fundFor(state, links);
-  if (!canAfford(state, total, spec.years, fund)) {
+  const fund = plan.ppp ? 'ppp' : fundFor(state, links);
+  if (plan.ppp) for (const l of links) l.toll = plan.ppp.toll || 0;
+  if (!canAfford(state, total * (plan.ppp ? plan.ppp.subsidy : 1), spec.years, plan.ppp ? 'gov' : fund)) {
     state.newNodes.length -= plan.points.filter((p) => p.node == null).length;
     return { ok: false, reason: fund === 'gov' ? '예산과 차입 한도가 부족합니다.' : '운영사 잔액이 부족합니다.' };
   }
@@ -496,7 +530,7 @@ export function startNewBuild(base, state, plan) {
   startProject(state, {
     id: crypto.randomUUID(), kind: 'new', type: plan.type, links: links.map((l) => l.id), extension: !!plan.extendOf,
     stations: spec.mode >= 1 ? nodeIds.filter((_, i) => plan.names[i]?.kind === 'station') : [],
-    cost: total, years: spec.years, label, fund, plan: plan.plan,
+    cost: total, years: spec.years, label, fund, plan: plan.plan, govShare: plan.ppp ? plan.ppp.subsidy : undefined,
   });
   return { ok: true };
 }
