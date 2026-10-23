@@ -1248,6 +1248,7 @@ function renderRequests() {
     };
   });
   el.querySelectorAll('[data-goto]').forEach((b) => { b.onclick = () => gotoLinks(requests[+b.dataset.goto].links); });
+  bindProposals(el);
   el.querySelectorAll('[data-dismiss]').forEach((b) => {
     b.onclick = () => {
       const r = requests[+b.dataset.dismiss];
