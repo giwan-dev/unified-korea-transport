@@ -77,7 +77,7 @@ python tools/serve.py 8000
   - 역 순서와 구간별 혼잡도(V/C 색), 운행 계통별 정차역(●)과 통과역(│), 계통 열차의 혼잡도를 보여 줍니다.
   - 열차는 24시간 다닙니다. 시계를 따라 계통별 열차(▶ 하행, ◀ 상행)가 시간표대로 움직이며, 재생 속도를 바꾸거나 멈출 수 있습니다.
   - 모든 노선에는 모든 역에 서는 보통 열차(고속선은 고속 열차)가 이용객만큼 저절로 다닙니다.
-- **철도 운영사**: 남측 철도는 코레일(KORAIL), 북측 철도는 KPRail이 맡습니다(배지는 게임에서 만든 것). 통계 탭의 "국제 열차 운행 현황"에서 국경 철도별 이용·열차와 중국국가철로·JR·러시아철도(게임에서 그린 배지)를 봅니다.
+- **철도 운영사**: 남측 철도는 코레일(KORAIL, 실제 로고), 북측 철도는 KPRail(게임 속 가상 회사, 게임에서 그린 표시)이 맡습니다. 통계 탭의 "국제 열차 운행 현황"에서 국경 철도별 이용·열차와 중국국가철로·JR·러시아철도 로고를 봅니다(로고 출처는 아래 데이터 출처).
 - **열차 이름**: KTX·KTX-산천·KTX-이음·SRT·ITX-새마을·ITX-마음·새마을호·무궁화호·누리로, 국외는 신칸센 노조미·히카리·고다마, 复兴号·和谐号, 로시야호·라스토치카. 저절로 다니는 기본 열차는 무궁화호(고속선은 KTX)입니다. 노선도에서 열차에 마우스를 올리면 "부산발 서울행 KTX"처럼 나옵니다.
 - **지도 표시**: 개량 전 북측 철도(직류 3kV·비전철)는 붉은 점선으로 보이고, 교류 25kV로 전철화하면 남측 규격 철도로 보입니다. 범례에서 "지도에 열차 위치 보기"를 켜면 화면 안 열차가 움직입니다(부하가 커서 켤 때 묻습니다).
   - 통계 탭에서 회사별 연 수입·비용·영업이익·영업계수·잔액을 봅니다. 북측 운임은 남북 통합도만큼 오릅니다.
@@ -162,6 +162,9 @@ docs/model.md           모델과 가정값 설명
 - 인구 격자: [WorldPop](https://www.worldpop.org/) 2025 (R2025A) 1km constrained UN-adjusted, CC BY 4.0
 - 배경지도의 주변국 육지·하천 중심선·호수·도시: [Natural Earth](https://www.naturalearthdata.com/) (공공 영역). 강·호수의 물 면은 OpenStreetMap
 - 라벨 글꼴의 숫자·영문 글리프: [OpenFreeMap](https://openfreemap.org/) 글꼴 서버 (한글은 브라우저 글꼴)
+- 철도 운영사 로고 (`assets/brand/`): 위키미디어 공용의 공용 영역(PD) 파일을 그대로 씁니다.
+  - 코레일 [Korail logo.svg](https://commons.wikimedia.org/wiki/File:Korail_logo.svg), 중국국가철로 [China Railways.svg](https://commons.wikimedia.org/wiki/File:China_Railways.svg), JR [JR logo (kyushu).svg](https://commons.wikimedia.org/wiki/File:JR_logo_(kyushu).svg), 러시아철도 [Russian Railways Logo.svg](https://commons.wikimedia.org/wiki/File:Russian_Railways_Logo.svg)
+  - 코레일·중국국가철로·JR·러시아철도 로고는 각 회사의 상표입니다. 이 게임은 비상업 팬 프로젝트이며, 운영사를 알아보게 하는 데에만 씁니다. KPRail·통합 철도공사 표시는 게임에서 그린 것입니다.
 - 공항·항구·국외 도시 좌표와 용량, 옛 지명 대조표, 관광지 방문객 수(`data/air_sea.json`, `data/historic_names.json`, `data/tourism.json`)는 공개 자료를 바탕으로 직접 정리한 값이며 확인이 필요합니다.
 
 소득·HDI 초기값과 공사비 단가는 게임용 가정값입니다. 근거와 한계는 [docs/model.md](docs/model.md)에 정리했습니다.

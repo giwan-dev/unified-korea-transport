@@ -2502,7 +2502,7 @@ function intlTrainsHTML() {
   if (!rows.length) return '';
   return `<h3 style="margin-top:16px">국제 열차 운행 현황</h3>
     <table class="cmp"><tr><th>구간</th><th>열차</th><th>이용 (일)</th><th>운영사</th></tr>${rows.join('')}</table>
-    <p class="hint">국경 너머 구간은 상대국 철도(중국국가철로·JR·러시아철도)가 맡고, 국내 구간은 코레일·KPRail(합병 뒤 통합 공사)이 맡아 직통 운행합니다. 배지는 게임에서 그린 표시입니다.</p>`;
+    <p class="hint">국경 너머 구간은 상대국 철도(중국국가철로·JR·러시아철도)가 맡고, 국내 구간은 코레일·KPRail(합병 뒤 통합 공사)이 맡아 직통 운행합니다. 로고는 각 회사의 상표이며 비상업 팬 프로젝트에서 식별용으로만 씁니다.</p>`;
 }
 
 function bindRailStats(el) {

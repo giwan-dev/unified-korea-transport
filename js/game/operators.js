@@ -1,5 +1,5 @@
 // 철도 운영사: 남측 코레일, 북측 KPRail (합병하면 하나의 통합 공사).
-// 배지·색은 게임에서 만든 것이며 실제 회사의 상표가 아니다.
+// 코레일 로고는 실제 로고(위키미디어 공용, 상표)이고, KPRail·통합 공사는 게임 속 가상 회사라 게임에서 그린 표시다.
 
 export const OPERATORS = {
   korail: { name: '코레일', en: 'KORAIL', color: '#163E7A', logo: 'assets/brand/korail.svg' },
@@ -46,7 +46,7 @@ export function opBadge(state, op) {
   return `<span class="op-badge" style="background:${o.color}" title="${o.name}">${op === 'merged' ? o.name : o.en}</span>`;
 }
 
-// 국외 철도 운영사 (국제 열차 운행 현황): 게임에서 그린 표시이며 실제 회사의 상표가 아니다.
+// 국외 철도 운영사 (국제 열차 운행 현황): 로고는 위키미디어 공용의 공용 영역 파일이며 각 회사의 상표다 (비상업 식별용).
 export const FOREIGN_OPERATORS = {
   CN: { name: '중국국가철로', en: 'China Railway', color: '#B22222', logo: 'assets/brand/cr.svg' },
   JP: { name: 'JR', en: 'JR', color: '#1E7B4A', logo: 'assets/brand/jr.svg' },
@@ -55,5 +55,5 @@ export const FOREIGN_OPERATORS = {
 
 export function foreignOpBadge(country) {
   const o = FOREIGN_OPERATORS[country];
-  return o ? `<span class="op-badge" style="background:${o.color}" title="${o.name} (게임 표시)">${o.en}</span>` : '';
+  return o ? `<span class="op-badge" style="background:${o.color}" title="${o.name}">${o.en}</span>` : '';
 }
