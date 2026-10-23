@@ -5,8 +5,8 @@ const GLYPHS = 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf';
 const FONT = ['Noto Sans Regular'];
 
 const PALETTE = {
-  light: { road: '#cfcac0', water: '#cddbe4', world: '#e8e5de', land: '#f5f3ee', sido: '#8f8a80', sgg: '#c8c3b8', unit: '#d9d5cb', mdl: '#c23b32', river: '#a9c2d2', label: '#3a3f45', halo: '#ffffff', foreign: '#7a7f86' },
-  dark: { road: '#3a4048', water: '#0e1820', world: '#191d21', land: '#22272d', sido: '#5d646c', sgg: '#3a4048', unit: '#30353c', mdl: '#e0645a', river: '#27404f', label: '#d6dadf', halo: '#14181c', foreign: '#8a9097' },
+  light: { road: '#fbf8f2', water: '#cddbe4', world: '#e8e5de', land: '#f5f3ee', sido: '#8f8a80', sgg: '#c8c3b8', unit: '#d9d5cb', mdl: '#c23b32', river: '#a9c2d2', label: '#3a3f45', halo: '#ffffff', foreign: '#7a7f86' },
+  dark: { road: '#4a515a', water: '#0e1820', world: '#191d21', land: '#22272d', sido: '#5d646c', sgg: '#3a4048', unit: '#30353c', mdl: '#e0645a', river: '#27404f', label: '#d6dadf', halo: '#14181c', foreign: '#8a9097' },
 };
 
 function baseStyle() {
@@ -35,9 +35,9 @@ function baseStyle() {
       { id: 'bg-unit', type: 'line', source: 'units', minzoom: 9, paint: { 'line-color': c.unit, 'line-width': 0.6 } },
       // OSM 도로 (계산망에 없는 2차 도로까지 실제 모양으로). 계산 구간은 이 위에 혼잡도 색으로 겹친다
       { id: 'bg-roads', type: 'line', source: 'osmroads', minzoom: 9,
-        filter: ['any', ['<', ['get', 'c'], 3], ['>=', ['zoom'], 11]],
+        filter: ['any', ['<', ['get', 'c'], 3], ['all', ['==', ['get', 'c'], 3], ['>=', ['zoom'], 11]], ['>=', ['zoom'], 12]],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: { 'line-color': c.road, 'line-width': ['interpolate', ['linear'], ['zoom'], 9, ['match', ['get', 'c'], 0, 1.4, 1, 1.1, 0.8], 13, ['match', ['get', 'c'], 0, 5, 1, 4, 2, 3, 2]] } },
+        paint: { 'line-color': c.road, 'line-width': ['interpolate', ['linear'], ['zoom'], 9, ['match', ['get', 'c'], 0, 1.4, 1, 1.1, 0.8], 13, ['match', ['get', 'c'], 0, 5, 1, 4, 2, 3, 3, 2, 1.4]] } },
       { id: 'bg-sido', type: 'line', source: 'sido', paint: { 'line-color': c.sido, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.8, 10, 1.6] } },
       { id: 'bg-mdl', type: 'line', source: 'lines', paint: { 'line-color': c.mdl, 'line-width': 1.6, 'line-dasharray': [3, 2] } },
       { id: 'lb-unit', type: 'symbol', source: 'unitLabels', minzoom: 11,
@@ -117,7 +117,8 @@ function enableRoads(map) {
     if (map.getZoom() < 8.5) return;
     if (!index) index = await fetch('data/base/roads/index.json').then((r) => (r.ok ? r.json() : [])).catch(() => []);
     const b = map.getBounds();
-    const need = index.filter(({ bbox: [x0, y0, x1, y1], file }) => !loaded.has(file)
+    // 3차 도로 파일(minzoom 12)은 많이 확대했을 때만 받는다
+    const need = index.filter(({ bbox: [x0, y0, x1, y1], file, minzoom }) => !loaded.has(file) && map.getZoom() >= (minzoom || 8.5)
       && x1 >= b.getWest() && x0 <= b.getEast() && y1 >= b.getSouth() && y0 <= b.getNorth());
     if (!need.length) return;
     await Promise.all(need.map(async (e) => {
@@ -257,6 +258,9 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addSource('links', { type: 'geojson', data: linksFC, promoteId: 'id' });
   // 혼잡도 0~10: 1을 넘는 곳도 심한 정도가 구분되도록 1·2·4·7·10에서 점점 짙어진다
   const vcColor = ['interpolate', ['linear'], ['coalesce', ['feature-state', 'vc'], 0], ...VC_STOPS.flat()];
+  // 배경 OSM 도로(골목·이면도로)는 인구 색칠 위, 계산망 도로 아래에 그린다 (색칠 밑에 있으면 도심 도로망이 안 보인다)
+  // (지금 맨 위로 올리면 뒤에 더하는 계산망·역 레이어가 그 위에 그려진다)
+  if (map.getLayer('bg-roads')) map.moveLayer('bg-roads');
   map.addLayer({
     id: 'roads', type: 'line', source: 'links',
     filter: ['all', ['==', ['get', 'mode'], 0], ['==', ['get', 'building'], 0], ['!=', ['get', 'cls'], 'ferry'], ['!=', ['get', 'ext'], 1], ['!=', ['get', 'minor'], 1]],
