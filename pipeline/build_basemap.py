@@ -30,8 +30,19 @@ ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
 ADMIN = ROOT / "data" / "admin"
 OUT = ROOT / "data" / "base"
-BBOX = box(116, 28, 148, 48)   # 한반도와 중국 동북·연해주·일본 서부
+BBOX = box(116, 21.5, 148, 48)   # 한반도와 중국 동북·연해주·일본·대만
 PREC = 0.0005
+# 주변국 큰 도시 라벨의 한국어 이름 (Natural Earth simple에는 영문 이름만 있다)
+FOREIGN_KO = {"Beijing": "베이징", "Shanghai": "상하이", "Tianjin": "톈진", "Shenyang": "선양", "Dalian": "다롄", "Qingdao": "칭다오",
+              "Harbin": "하얼빈", "Changchun": "창춘", "Jilin": "지린", "Anshan": "안산", "Fushun": "푸순", "Benxi": "번시", "Dandong": "단둥",
+              "Yanji": "옌지", "Yantai": "옌타이", "Weifang": "웨이팡", "Jinan": "지난", "Nanjing": "난징", "Hangzhou": "항저우", "Suzhou": "쑤저우",
+              "Wuxi": "우시", "Ningbo": "닝보", "Hefei": "허페이", "Xuzhou": "쉬저우", "Tangshan": "탕산", "Qinhuangdao": "친황다오",
+              "Vladivostok": "블라디보스토크", "Khabarovsk": "하바롭스크", "Tokyo": "도쿄", "Yokohama": "요코하마", "Kawasaki": "가와사키",
+              "Osaka": "오사카", "Kōbe": "고베", "Kyoto": "교토", "Nagoya": "나고야", "Fukuoka": "후쿠오카", "Kitakyūshū": "기타큐슈",
+              "Hiroshima": "히로시마", "Okayama": "오카야마", "Sendai": "센다이", "Sapporo": "삿포로", "Hamamatsu": "하마마쓰",
+              "Niigata": "니가타", "Kumamoto": "구마모토", "Kagoshima": "가고시마", "Shizuoka": "시즈오카", "Naha": "나하",
+              "Taipei": "타이베이", "Kaohsiung": "가오슝", "Taichung": "타이중", "Tainan": "타이난", "Taoyuan": "타오위안",
+              "Fuzhou": "푸저우", "Xiamen": "샤먼", "Wenzhou": "원저우", "Daqing": "다칭", "Mudangiang": "무단장", "Jiamusi": "자무쓰"}
 
 
 def log(*a):
@@ -80,7 +91,8 @@ def main():
         g = r.geometry.intersection(BBOX).simplify(0.01, preserve_topology=True)
         if g.is_empty:
             continue
-        world.append(feat(g, {"name": r.get("NAME_KO") or r["NAME"], "iso": r["ADM0_A3"]}))
+        name = {"TWN": "대만(중화민국)"}.get(r["ADM0_A3"]) or r.get("NAME_KO") or r["NAME"]
+        world.append(feat(g, {"name": name, "iso": r["ADM0_A3"]}))
     write(OUT / "world.geojson", fc(world, "Natural Earth (public domain)"))
 
     # 하천·호수
@@ -110,15 +122,24 @@ def main():
     for f in sido:
         p = shape(f["geometry"]).representative_point()
         labels.append(feat(p, {"name": short_sido(f["properties"]["name"]), "rank": 1}))
+    # 남북으로 갈린 같은 시군(옹진군)은 build_data.py가 한 존으로 합치므로 라벨도 하나만
+    merged = {"옹진군"}
     for f in sgg:
-        p = shape(f["geometry"]).representative_point()
-        labels.append(feat(p, {"name": f["properties"]["name"], "rank": 2, "zone": f["properties"]["id"]}))
+        nm = f["properties"]["name"]
+        if nm in merged:
+            parts = [g for g in sgg if g["properties"]["name"] == nm]
+            if f is not max(parts, key=lambda g: shape(g["geometry"]).area):
+                continue
+            p = unary_union([shape(g["geometry"]) for g in parts]).representative_point()
+        else:
+            p = shape(f["geometry"]).representative_point()
+        labels.append(feat(p, {"name": nm, "rank": 2, "zone": f["properties"]["id"]}))
     places = ne("ne_10m_populated_places_simple")
     places = places[places.intersects(BBOX) & ~places.intersects(korea.buffer(0.05))]
     for _, r in places.iterrows():
         if (r.get("pop_max") or 0) < 800_000:
             continue
-        labels.append(feat(r.geometry, {"name": r.get("name") or "", "rank": 1 if r["pop_max"] > 5e6 else 2, "foreign": 1}))
+        labels.append(feat(r.geometry, {"name": FOREIGN_KO.get(r.get("name"), r.get("name") or ""), "rank": 1 if r["pop_max"] > 5e6 else 2, "foreign": 1}))
     write(OUT / "labels.geojson", fc(labels))
 
     # 읍면동: 시도별 파일 + 범위 색인 (build_admin.py를 다시 돌려 units.geojson이 새로 생겼을 때만)

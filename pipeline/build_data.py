@@ -226,7 +226,8 @@ def add_population(zones):
             arr[arr < 0] = 0
             if src.nodata is not None:
                 arr[arr == src.nodata] = 0
-            zs = [z for z in zones if z["country"] == c]
+            # 남북에 걸친 존(옹진군: also에 다른 나라)은 두 인구 격자를 모두 더한다
+            zs = [z for z in zones if z["country"] == c or c in z.get("also", ())]
             ids = rasterio.features.rasterize(
                 ((mapping(z["geom"]), i + 1) for i, z in enumerate(zs)),
                 out_shape=arr.shape, transform=src.transform, fill=0, dtype="int32",
@@ -246,6 +247,13 @@ def add_population(zones):
             log(c, "raster total", round(arr.sum()), "assigned", round(sums[1:].sum()))
             for i, z in enumerate(zs):
                 s = sums[i + 1]
+                if z.get("pop"):   # 앞 격자에서 센 인구가 있으면 무게중심을 합친다
+                    p0 = z["pop"]
+                    if s > 0:
+                        z["cx"] = (z["cx"] * p0 + wx[i + 1]) / (p0 + s)
+                        z["cy"] = (z["cy"] * p0 + wy[i + 1]) / (p0 + s)
+                    z["pop"] = float(p0 + s)
+                    continue
                 z["pop"] = float(s)
                 if s > 0:
                     z["cx"], z["cy"] = wx[i + 1] / s, wy[i + 1] / s
@@ -2116,6 +2124,7 @@ def write_outputs(zones, net, places):
             "type": "Feature", "id": i,
             "properties": {
                 "id": i, "name": z["name"], "province": z["province"], "country": z["country"],
+                **({"also": list(z["also"])} if z.get("also") else {}),
                 "pop": round(z["pop"]), "area": round(_area_km2(z["geom"]), 1),
                 "cx": round(z["cx"], 4), "cy": round(z["cy"], 4), "road_node": z["road_node"],
             },
@@ -2147,7 +2156,7 @@ def master_zones():
         return None
     import pickle
     m = pickle.load(path.open("rb"))
-    zones = [{"name": z["name"], "province": z["province"], "country": z["country"],
+    zones = [{"name": z["name"], "province": z["province"], "country": z["country"], "also": z.get("also", ()),
               "geom": wkb.loads(z["geom"]), "geom_simple": wkb.loads(z["geom_simple"])} for z in m["zones"]]
     log("zones from admin_master", len(zones))
     return zones

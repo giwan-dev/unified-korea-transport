@@ -17,7 +17,9 @@ function baseStyle() {
     glyphs: GLYPHS,
     sources: {
       world: { type: 'geojson', data: 'data/base/world.geojson' },
-      sido: { type: 'geojson', data: 'data/admin/sido.geojson' },
+      sgg: { type: 'geojson', data: 'data/admin/sgg.geojson' },
+      edges: { type: 'geojson', data: 'data/admin/edges.geojson' },
+      regionLabels: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
       water: { type: 'geojson', data: 'data/base/water.geojson' },
       lines: { type: 'geojson', data: 'data/base/lines.geojson' },
       labels: { type: 'geojson', data: 'data/base/labels.geojson' },
@@ -28,17 +30,22 @@ function baseStyle() {
     layers: [
       { id: 'bg-water', type: 'background', paint: { 'background-color': c.water } },
       { id: 'bg-world', type: 'fill', source: 'world', paint: { 'fill-color': c.world } },
-      { id: 'bg-land', type: 'fill', source: 'sido', paint: { 'fill-color': c.land } },
+      // 육지 면은 시군구 도형으로: 해안선(시군구 경계선 조각)과 같은 도형이라 어긋나지 않는다
+      { id: 'bg-land', type: 'fill', source: 'sgg', paint: { 'fill-color': c.land, 'fill-antialias': false } },
       { id: 'bg-lake', type: 'fill', source: 'water', filter: ['==', ['get', 'kind'], 'lake'], paint: { 'fill-color': c.water } },
       { id: 'bg-river', type: 'line', source: 'water', filter: ['==', ['get', 'kind'], 'river'],
         paint: { 'line-color': c.river, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.6, 10, 2] } },
       { id: 'bg-unit', type: 'line', source: 'units', minzoom: 9, paint: { 'line-color': c.unit, 'line-width': 0.6 } },
-      // OSM 도로 (계산망에 없는 2차 도로까지 실제 모양으로). 계산 구간은 이 위에 혼잡도 색으로 겹친다
-      { id: 'bg-roads', type: 'line', source: 'osmroads', minzoom: 9,
-        filter: ['any', ['<', ['get', 'c'], 3], ['all', ['==', ['get', 'c'], 3], ['>=', ['zoom'], 11]], ['>=', ['zoom'], 12]],
+      // OSM 배경 도로는 계산망에 없는 3차 도로(c 4)만: 고속도로·일반국도·간선·2차 도로(c 0~3)는 계산망이
+      // 혼잡도 색으로 그리므로 배경에 또 깔면 두 줄로 겹쳐 보인다
+      { id: 'bg-roads', type: 'line', source: 'osmroads', minzoom: 12,
+        filter: ['>=', ['get', 'c'], 4],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-color': c.road, 'line-width': ['interpolate', ['linear'], ['zoom'], 9, ['match', ['get', 'c'], 0, 1.4, 1, 1.1, 0.8], 13, ['match', ['get', 'c'], 0, 5, 1, 4, 2, 3, 3, 2, 1.4]] } },
-      { id: 'bg-sido', type: 'line', source: 'sido', paint: { 'line-color': c.sido, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.8, 10, 1.6] } },
+      // 해안·국경선(가늘게)과 광역 단체 경계(굵게). 광역 경계는 setRegions가 지금 행정구역(개편·광역시 승격 반영)으로 고른다
+      { id: 'bg-coast', type: 'line', source: 'edges', filter: ['==', ['get', 'b'], -1], paint: { 'line-color': c.sido, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.5, 10, 1] } },
+      { id: 'bg-sido', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1],
+        layout: { 'line-join': 'round' }, paint: { 'line-color': c.sido, 'line-opacity': 0.85, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.6, 10, 3.2] } },
       { id: 'bg-mdl', type: 'line', source: 'lines', paint: { 'line-color': c.mdl, 'line-width': 1.6, 'line-dasharray': [3, 2] } },
       { id: 'lb-unit', type: 'symbol', source: 'unitLabels', minzoom: 11,
         layout: { 'symbol-placement': 'point', 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 10 },
@@ -46,7 +53,10 @@ function baseStyle() {
       { id: 'lb-sgg', type: 'symbol', source: 'labels', minzoom: 7, filter: ['==', ['get', 'rank'], 2],
         layout: { 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 11 },
         paint: { 'text-color': ['case', ['has', 'foreign'], c.foreign, c.label], 'text-halo-color': c.halo, 'text-halo-width': 1.2 } },
-      { id: 'lb-sido', type: 'symbol', source: 'labels', maxzoom: 9, filter: ['==', ['get', 'rank'], 1],
+      { id: 'lb-region', type: 'symbol', source: 'regionLabels', maxzoom: 9,
+        layout: { 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 13, 'text-letter-spacing': 0.05 },
+        paint: { 'text-color': c.label, 'text-halo-color': c.halo, 'text-halo-width': 1.5 } },
+      { id: 'lb-sido', type: 'symbol', source: 'labels', maxzoom: 9, filter: ['all', ['==', ['get', 'rank'], 1], ['has', 'foreign']],
         layout: { 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 13, 'text-letter-spacing': 0.05 },
         paint: { 'text-color': ['case', ['has', 'foreign'], c.foreign, c.label], 'text-halo-color': c.halo, 'text-halo-width': 1.5 } },
     ],
@@ -59,6 +69,45 @@ let labelData = null;
 const unitFiles = new Map();
 
 export function setNameResolver(fn) { nameResolver = fn; }
+
+let regionKey = '';
+/**
+ * 광역 단체 경계와 이름을 지금 행정구역으로 다시 그린다.
+ * @param {string[]} regionOfZone 존 id → 광역 단체 이름 (북측 도 복원·광역시 승격 반영)
+ * @param {string[]} countryOfZone 존 id → 'KR' | 'KP' (남북 사이는 군사분계선이 따로 그려진다)
+ * @param {(name:string)=>string} short 라벨용 짧은 이름
+ */
+export function setRegions(map, regionOfZone, countryOfZone, zoneCenter, short = (n) => n) {
+  const key = regionOfZone.join('|');
+  if (key === regionKey || !map.getLayer('bg-sido')) return;
+  regionKey = key;
+  fetchEdges().then((edges) => {
+    const ids = [];
+    for (const f of edges) {
+      const { i, a, b } = f.properties;
+      if (b < 0 || regionOfZone[a] === regionOfZone[b] || countryOfZone[a] !== countryOfZone[b]) continue;
+      ids.push(i);
+    }
+    map.setFilter('bg-sido', ['in', ['get', 'i'], ['literal', ids]]);
+  });
+  // 이름 자리: 단체에 속한 존 중심들의 가운데에 가장 가까운 존 중심 (바다·다른 도 위에 뜨지 않게)
+  const groups = new Map();
+  regionOfZone.forEach((r, z) => { if (r) { if (!groups.has(r)) groups.set(r, []); groups.get(r).push(zoneCenter(z)); } });
+  const features = [];
+  for (const [name, pts] of groups) {
+    const mx = pts.reduce((s, p) => s + p[0], 0) / pts.length, my = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+    let best = pts[0], bd = Infinity;
+    for (const p of pts) { const d = (p[0] - mx) ** 2 + (p[1] - my) ** 2; if (d < bd) { bd = d; best = p; } }
+    features.push({ type: 'Feature', properties: { name: short(name) }, geometry: { type: 'Point', coordinates: best } });
+  }
+  map.getSource('regionLabels')?.setData({ type: 'FeatureCollection', features });
+}
+
+let edgeData = null;
+function fetchEdges() {
+  edgeData ||= fetch('data/admin/edges.geojson').then((r) => r.json()).then((d) => d.features);
+  return edgeData;
+}
 
 function renamed(features, level, idKey) {
   return features.map((f) => {
@@ -118,7 +167,8 @@ function enableRoads(map) {
     if (!index) index = await fetch('data/base/roads/index.json').then((r) => (r.ok ? r.json() : [])).catch(() => []);
     const b = map.getBounds();
     // 3차 도로 파일(minzoom 12)은 많이 확대했을 때만 받는다
-    const need = index.filter(({ bbox: [x0, y0, x1, y1], file, minzoom }) => !loaded.has(file) && map.getZoom() >= (minzoom || 8.5)
+    // 간선(c 0~3) 파일은 계산망과 겹치므로 받지 않고 3차 도로 파일(minzoom 있음)만 받는다
+    const need = index.filter(({ bbox: [x0, y0, x1, y1], file, minzoom }) => minzoom && !loaded.has(file) && map.getZoom() >= minzoom
       && x1 >= b.getWest() && x0 <= b.getEast() && y1 >= b.getSouth() && y0 <= b.getNorth());
     if (!need.length) return;
     await Promise.all(need.map(async (e) => {
@@ -333,6 +383,13 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     paint: { 'text-color': '#1d232b', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 },
   });
 
+  // 국외 거점 도시 위에 나라 국기
+  addFlagImages(map);
+  map.addLayer({
+    id: 'point-flags', type: 'symbol', source: 'points', filter: ['has', 'country'],
+    layout: { 'icon-image': ['concat', 'flag-', ['get', 'country']], 'icon-anchor': 'bottom', 'icon-offset': [0, -7], 'icon-allow-overlap': true },
+  });
+
   // 항공: 노선(호)과 공항(원 크기 = 하루 여객)
   map.addSource('airroutes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({
@@ -370,6 +427,30 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     paint: { 'line-color': '#1f5fbf', 'line-width': 3, 'line-dasharray': [1.5, 1] } });
   map.addLayer({ id: 'draft-pts', type: 'circle', source: 'draft', filter: ['==', ['geometry-type'], 'Point'],
     paint: { 'circle-radius': 5, 'circle-color': '#1f5fbf', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
+}
+
+/** 국기 그림(24×16)을 지도 이미지로 넣는다: 중국·러시아·일본·대만(중화민국) */
+function addFlagImages(map) {
+  const W = 24, H = 16;
+  const draw = {
+    JP: (g) => { g.fillStyle = '#fff'; g.fillRect(0, 0, W, H); g.fillStyle = '#bc002d'; g.beginPath(); g.arc(W / 2, H / 2, 4.8, 0, 7); g.fill(); },
+    CN: (g) => { g.fillStyle = '#de2910'; g.fillRect(0, 0, W, H); star(g, 5, 5, 3.2, '#ffde00'); for (const [x, y] of [[10, 2], [12, 4], [12, 7], [10, 9]]) star(g, x, y, 1, '#ffde00'); },
+    RU: (g) => { [['#fff', 0], ['#0039a6', 1], ['#d52b1e', 2]].forEach(([c, i]) => { g.fillStyle = c; g.fillRect(0, (i * H) / 3, W, H / 3 + 0.5); }); },
+    TW: (g) => { g.fillStyle = '#fe0000'; g.fillRect(0, 0, W, H); g.fillStyle = '#000095'; g.fillRect(0, 0, W / 2, H / 2); g.fillStyle = '#fff'; g.beginPath(); g.arc(W / 4, H / 4, 2.2, 0, 7); g.fill(); },
+  };
+  function star(g, cx, cy, r, color) {
+    g.fillStyle = color; g.beginPath();
+    for (let k = 0; k < 10; k++) { const a = -Math.PI / 2 + (k * Math.PI) / 5, rr = k % 2 ? r * 0.45 : r; g.lineTo(cx + rr * Math.cos(a), cy + rr * Math.sin(a)); }
+    g.fill();
+  }
+  for (const [code, fn] of Object.entries(draw)) {
+    if (map.hasImage(`flag-${code}`)) continue;
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const g = cv.getContext('2d');
+    fn(g);
+    g.strokeStyle = 'rgba(0,0,0,0.35)'; g.lineWidth = 1; g.strokeRect(0.5, 0.5, W - 1, H - 1);
+    map.addImage(`flag-${code}`, g.getImageData(0, 0, W, H));
+  }
 }
 
 export function colorFor(metric, v) {

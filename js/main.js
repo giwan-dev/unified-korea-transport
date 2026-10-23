@@ -11,7 +11,7 @@ import {
 } from './game/state.js';
 import { MEGA, TSR_FREIGHT } from './game/mega.js';
 import { AIRPORT } from './game/catalog.js';
-import { setNameResolver, refreshNames } from './ui/map.js';
+import { setNameResolver, refreshNames, setRegions } from './ui/map.js';
 import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.js';
 import { kmBetween, routeKey } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
@@ -562,6 +562,8 @@ function nodeNames() {
     out.set(node, { name, kind: /JCT|분기점/.test(name) ? 'JCT' : /휴게소|졸음쉼터|SA$/.test(name) ? 'rest' : 'IC', isNew: 0 });
   }
   for (const f of base.foreignNodes || []) out.set(f.node, { name: f.name, kind: 'city', isNew: 0, country: f.country });
+  // 도로 없는 섬의 항구(독도): 어느 축척에서나 보이게 도시처럼 둔다
+  for (const [name, node] of base.ports || []) out.set(node, { name, kind: 'city', isNew: 0 });
   for (const [k, v] of Object.entries(state.names)) out.set(+k, { name: v.name, kind: v.kind, isNew: 1 });
   (state.restAreas || []).forEach((r, i) => out.set(`rest${i}`, { name: r.name + (r.built ? '' : ' (공사 중)'), kind: 'rest', isNew: 1, coord: [r.lon, r.lat] }));
   return out;
@@ -1208,7 +1210,15 @@ function setBusy(on, label = '', v = 0) {
 }
 
 function renderAll() {
+  renderRegions();
   renderTop(); renderLegend(); renderStatus(); renderBuild(); renderProjects(); renderRequests(); renderSettings(); renderStats(); renderSelection();
+}
+
+/** 지도의 광역 단체 경계·이름: 북측 도 복원, 광역시 승격(독립)이 바로 보이게 */
+function renderRegions() {
+  if (!state || !map) return;
+  const short = (n) => { for (const a of ['특별자치시', '특별자치도', '통합특별시', '특별시', '광역시', '직할시']) if (n.endsWith(a) && n.length > a.length + 1) return n.slice(0, -a.length); return n; };
+  setRegions(map, zoneProps.map((z) => (z.ext ? '' : regionOf(state, z))), zoneProps.map((z) => z.country), (i) => [zoneProps[i].cx, zoneProps[i].cy], short);
 }
 
 function renderTop() {

@@ -113,8 +113,12 @@ def load(raw: Path):
                     else:
                         stations[key] = [norm_station(name), lines, pts[0][0], pts[0][1], path[3]]
     walk(root, [])
-    out = [(n, {norm_line(x) for x in ls}, lon, lat, st) for n, ls, lon, lat, st in stations.values()]
+    out = [(n, {norm_line(x) for x in ls} - STATION_LINE_FIX.get(n, set()), lon, lat, st) for n, ls, lon, lat, st in stations.values()]
     return {"stations": out, "paths": [(norm_line(n), c, p, k) for n, c, p, k in paths], "closed": closed, "file": kmz.name}
+
+
+# DB(2024.04)가 잘못 적은 역–노선: GTX-A는 삼성중앙에 서지 않는다 (삼성역에 선다)
+STATION_LINE_FIX = {"삼성중앙": {"수도권광역급행철도에이선"}}
 
 
 def urban_only_names(ref):
