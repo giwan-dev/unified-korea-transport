@@ -7,6 +7,7 @@ import {
   placeName, setPlaceName, startRestoreName, RENAME, startAirport, startAirportExpand, renameLine, splitLink,
   fundFor, settlePPP, settleRail, renameKPLines, KP_LINE_RENAME, LINE_RENAME_COST, railDividend, railEquity, mergeRail, OP_FACTORS, initOngoing, linkPending, setProjectPace, PACES,
   initAirRoutes, updateAirRoutes, startOpenRoute, closeRoute, AIR,
+  closeLine, reopenLine, setLineFreq, FREQ_STEPS, CLOSE_APPROVAL, REOPEN_PER_KM,
 } from './game/state.js';
 import { AIRPORT } from './game/catalog.js';
 import { setNameResolver, refreshNames } from './ui/map.js';
@@ -1453,8 +1454,6 @@ function renderStats() {
   };
   const railRows = byName(1).sort((x, y) => y[1].vol - x[1].vol).slice(0, 10)
     .map(([n, v]) => `<tr><td>${esc(n)}</td><td>${Math.round(v.vol).toLocaleString()}</td><td class="${v.vc > 1 ? 'neg' : ''}">${v.vc.toFixed(2)}</td></tr>`).join('');
-  const econRows = lineEconomics().sort((x, y) => y.rev - x.rev).slice(0, 15)
-    .map((e) => `<tr><td>${esc(e.name)}</td><td>${formatWon(e.rev / 1e8)}</td><td>${formatWon(e.cost / 1e8)}</td><td class="${e.ratio > 100 ? 'neg' : ''}">${fmtRatio(e.ratio)}</td></tr>`).join('');
   const svcRows = svcStats().map((x) => `<tr><td>${esc(x.s.name)} <span class="m">${x.s.name.includes(SERVICE_KINDS[x.s.kind].label) ? "" : `${SERVICE_KINDS[x.s.kind].label} · `}${x.s.stops.length}역</span></td>
     <td>${x.s.trains}</td><td>${Math.round(x.peak).toLocaleString()}</td><td>${Math.round(x.load * 100)}%</td><td class="${x.ratio > 100 ? 'neg' : ''}">${fmtRatio(x.ratio)}</td></tr>`).join('');
   const roadRows = byName(0).filter(([, v]) => v.cls === 'motorway' || v.cls === 'trunk').sort((x, y) => y[1].vc - x[1].vc).slice(0, 10)
@@ -1476,9 +1475,8 @@ function renderStats() {
     <h4>역 순위 (지역 간 승하차)</h4><table class="cmp"><tr><th>역</th><th>명/일</th></tr>${stRows}</table>
     <h4>노선 순위 (최대 구간 이용객)</h4><table class="cmp"><tr><th>노선</th><th>명/일</th><th>V/C</th></tr>${railRows}</table>
     ${railStatsHTML()}
-    <h4>노선별 수익성 (철도·도시철도, 연간)</h4><table class="cmp"><tr><th>노선</th><th>수입</th><th>비용</th><th>영업계수</th></tr>${econRows}</table>
-    <p class="hint">영업계수 = 영업비용 ÷ 영업수입 × 100 (100 미만이면 흑자). 수입은 구간 이용객 × 거리 × km당 운임, 비용은 운행 열차-km와 선로 유지비로 셈한 추정입니다. 도시철도는 같은 구 안 이용을 역세권 인구로 어림해 더했습니다.</p>
     ${svcRows ? `<h4>운행 계통</h4><table class="cmp"><tr><th>계통</th><th>회/일</th><th>최대 구간</th><th>승차율</th><th>영업계수</th></tr>${svcRows}</table>` : ''}
+    ${econPanelHTML()}
     <h3 style="margin-top:16px">도로</h3>
     <h4>가장 막히는 고속도로·간선국도</h4><table class="cmp"><tr><th>노선</th><th>PCU/일</th><th>V/C</th></tr>${roadRows}</table>
     ${h.length > 1 ? `<h3 style="margin-top:16px">추이</h3>
@@ -1490,6 +1488,85 @@ function renderStats() {
       ${h.some((r) => r.air) ? chart('항공 분담률 (%)', h.filter((r) => r.air != null).map((r) => [r.year, r.air * 100])) : ''}
       ${chart('지지율 (%)', h.filter((r) => r.approval != null).map((r) => [r.year, r.approval]))}` : '<p class="hint">해를 넘기면 연도별 추이가 쌓입니다.</p>'}`;
   bindRailStats(el);
+  bindEcon(el);
+}
+
+// ---- 영업계수 패널: 노선별 수지를 나쁜 순으로 보고 감편·폐선·재개통한다
+let econView = { filter: 'all', sort: 'ratio', all: false };
+
+function lineKmOf(name) {
+  let km = 0;
+  allLinks().forEach((_, i) => {
+    const l = linkAt(base, state, i);
+    if (l.mode >= 1 && l.name === name && !state.replaced?.[i] && !l.replaced && (i < base.links.length || l.built)) km += l.len;
+  });
+  return km;
+}
+
+function econPanelHTML() {
+  const rows = lineEconomics().filter((e) => !e.idle && (econView.filter === 'all' || (econView.filter === 'metro') === (e.cls === 'metro')));
+  const loss = (e) => e.cost - e.rev;
+  rows.sort(econView.sort === 'loss' ? (x, y) => loss(y) - loss(x) : (x, y) => y.ratio - x.ratio);
+  const all = lineEconomics().filter((e) => !e.idle), deficit = all.filter((e) => e.ratio > 100);
+  const idle = lineEconomics().filter((e) => e.idle);
+  const shown = econView.all ? rows : rows.slice(0, 20);
+  const closed = Object.entries(state.closedLines || {});
+  const chip = (k, v, label) => `<button class="small ${econView[k] === v ? 'on' : ''}" data-econ="${k}:${v}">${label}</button>`;
+  const ratioCls = (r) => (r >= 200 ? 'neg' : r > 100 ? 'warn' : 'pos');
+  return `<h3 style="margin-top:16px">영업계수 · 노선 정리</h3>
+    <div class="kpis">
+      <div><span class="k">흑자 노선</span><span class="v">${all.length - deficit.length}</span></div>
+      <div><span class="k">적자 노선 (200 이상)</span><span class="v">${deficit.length} <small class="neg">(${all.filter((e) => e.ratio >= 200).length})</small></span></div>
+      <div><span class="k">적자 합계 (연)</span><span class="v neg">${formatWon(deficit.reduce((a, e) => a + loss(e), 0) / 1e8)}</span></div>
+      <div><span class="k">폐선·감편</span><span class="v">${closed.length} · ${Object.keys(state.lineFreq || {}).length}</span></div>
+    </div>
+    <div class="econ-bar">${chip('filter', 'all', '전체')}${chip('filter', 'rail', '철도')}${chip('filter', 'metro', '도시철도')}
+      <span style="flex:1"></span>${chip('sort', 'ratio', '영업계수순')}${chip('sort', 'loss', '적자액순')}</div>
+    <div class="econ-list">${shown.map((e) => {
+      const f = state.lineFreq?.[e.name] || 1;
+      return `<div class="econ-row"><div class="n"><b>${esc(e.name)}</b><span class="m">${Math.round(e.km)}km · 최대 ${Math.round(e.peak).toLocaleString()}명/일 · 수입 ${formatWon(e.rev / 1e8)} · 비용 ${formatWon(e.cost / 1e8)}</span></div>
+        <span class="r ${ratioCls(e.ratio)}">${fmtRatio(e.ratio)}</span>
+        <select data-freq="${esc(e.name)}" title="기본 열차 운행 비율">${FREQ_STEPS.map((x) => `<option value="${x}" ${x === f ? 'selected' : ''}>운행 ${Math.round(x * 100)}%</option>`).join('')}</select>
+        <button class="small" data-close-line="${esc(e.name)}" title="폐선">폐선</button></div>`;
+    }).join('') || '<p class="hint">노선이 없습니다.</p>'}</div>
+    ${rows.length > 20 ? `<button class="small" data-econ="all:${!econView.all}" style="margin-top:6px">${econView.all ? '20개만 보기' : `모두 보기 (${rows.length})`}</button>` : ''}
+    ${idle.length ? `<p class="hint">여객 이용이 없는 노선 ${idle.length}개(화물선, 역이 없는 선로: ${idle.slice(0, 6).map((e) => esc(e.name)).join(', ')}${idle.length > 6 ? ' 등' : ''})는 순위에서 뺐습니다. 여객 열차 없이 선로 유지비 연 ${formatWon(idle.reduce((a, e) => a + e.cost, 0) / 1e8)}만 셉니다.</p>` : ''}
+    ${closed.length ? `<h4>폐선한 노선</h4><div class="list">${closed.map(([n, y]) => `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
+      <span>${esc(n)} <span class="m">${y}년 폐선 · ${Math.round(lineKmOf(n))}km</span></span>
+      <button class="small" data-reopen="${esc(n)}">재개통 ${formatWon(lineKmOf(n) * REOPEN_PER_KM)}</button></div></div>`).join('')}</div>` : ''}
+    <p class="hint">영업계수 = 영업비용 ÷ 영업수입 × 100 (100 미만이면 흑자, 200 이상이면 수입의 두 배를 씁니다). 수입은 구간 이용객 × 거리 × km당 운임, 비용은 운행 열차-km와 선로 유지비로 셈한 추정입니다. 도시철도는 같은 구 안 이용을 역세권 인구로 어림해 더했습니다.<br>
+    운행 비율을 줄이면(감편) 기본 열차의 최소 운행과 비용이 줄지만, 배차가 길어져 기다림이 늘고(절반이면 노선 전체 약 20분) 수송력이 줄어 이용객도 빠집니다. 폐선하면 그 노선의 열차·선로 비용이 없어지고 지나던 계통은 멈추며, 2년 동안 지지율이 노선당 ${CLOSE_APPROVAL}점 깎입니다. 결과는 다음 해부터 반영됩니다.</p>`;
+}
+
+function bindEcon(el) {
+  el.querySelectorAll('[data-econ]').forEach((b) => {
+    b.onclick = () => { const [k, v] = b.dataset.econ.split(':'); econView[k] = k === 'all' ? v === 'true' : v; renderStats(); };
+  });
+  el.querySelectorAll('[data-freq]').forEach((sel) => {
+    sel.onchange = () => { setLineFreq(state, sel.dataset.freq, +sel.value); econCache = null; save(state); renderStats(); renderStatus(); };
+  });
+  el.querySelectorAll('[data-close-line]').forEach((b) => {
+    b.onclick = () => {
+      const name = b.dataset.closeLine, e = lineEconomics().find((x) => x.name === name);
+      const svcs = (state.services || []).filter((x) => (x.lines || [x.line]).includes(name));
+      const msg = `${name}을(를) 폐선할까요?
+연 수입 ${formatWon(e.rev / 1e8)} · 비용 ${formatWon(e.cost / 1e8)} → 수지 ${e.cost > e.rev ? '개선' : '악화'} ${formatWon(Math.abs(e.cost - e.rev) / 1e8)}/년`
+        + `${svcs.length ? `
+지나는 운행 계통 ${svcs.length}개가 멈춥니다.` : ''}
+지지율 -${CLOSE_APPROVAL} (2년). 재개통에는 ${formatWon(e.km * REOPEN_PER_KM)}이 듭니다.`;
+      if (!confirm(msg)) return;
+      closeLine(state, name);
+      econCache = null; save(state); renderAll();
+    };
+  });
+  el.querySelectorAll('[data-reopen]').forEach((b) => {
+    b.onclick = () => {
+      const name = b.dataset.reopen;
+      const r = reopenLine(state, name, lineKmOf(name));
+      if (!r.ok) { alert(r.reason); return; }
+      econCache = null; save(state); renderAll();
+    };
+  });
 }
 
 /** 작은 꺾은선 그래프 (SVG) */
@@ -1928,21 +2005,28 @@ function lineEconomics() {
   allLinks().forEach((_, i) => {
     const l = linkAt(base, state, i);
     if (l.mode === 0 || !l.name || l.ext || l.cls === 'ferry' || linkPending(base, state, i) || state.replaced?.[i] || i >= vol.length) return;
+    if (state.closedLines?.[l.name]) return;
     if (i >= base.links.length && !l.built) return;
     const cls = l.mode === 2 ? 'metro' : l.cls === 'hsr' ? 'hsr' : 'conv';
     let e = lines.get(l.name);
-    if (!e) lines.set(l.name, (e = { name: l.name, cls, km: 0, rev: 0, cost: 0, peak: 0 }));
+    if (!e) lines.set(l.name, (e = { name: l.name, cls, km: 0, rev: 0, cost: 0, track: 0, peak: 0 }));
     const v = vol[i];
-    const trains = Math.max(OP.minTrains[cls], v / (OP.paxPerTrain[cls] * OP.loadFactor));
+    // 감편한 노선은 최소 운행도 그만큼 줄인다
+    const f = state.lineFreq?.[l.name] || 1;
+    const trains = Math.max(OP.minTrains[cls] * f, v / (OP.paxPerTrain[cls] * OP.loadFactor));
     e.km += l.len;
     e.peak = Math.max(e.peak, v);
     e.rev += v * l.len * OP.fareKm[cls] * 365;
-    e.cost += trains * l.len * OP.trainKmCost[cls] * 365 + l.len * Math.max(1, Math.min(l.tracks || 2, 4)) * OP.trackKmCost[cls];
+    const track = l.len * Math.max(1, Math.min(l.tracks || 2, 4)) * OP.trackKmCost[cls];
+    e.track += track;
+    e.cost += trains * l.len * OP.trainKmCost[cls] * 365 + track;
   });
   // 특급·급행 승객은 등급 요금을 더 낸다
   for (const x of svcStats()) { const e = lines.get(x.s.line); if (e) e.rev += x.premium; }
   // 도시철도: 모형에 없는 같은 구 안 이용을 역세권 인구로 어림해 더한다
   for (const e of lines.values()) if (e.cls === 'metro') e.rev += metroIntraRevenue(e.name);
+  // 여객 이용이 없는 노선(화물선, 역이 없는 선로)은 여객 열차가 다니지 않으므로 선로 유지비만 든다
+  for (const e of lines.values()) if (e.peak < 1) { e.idle = true; e.cost = e.track; }
   const rows = [...lines.values()].filter((e) => e.km >= 5).map((e) => ({ ...e, ratio: e.rev > 0 ? (e.cost / e.rev) * 100 : Infinity }));
   econCache = { res: result, rows };
   return rows;
@@ -1964,7 +2048,8 @@ function airRatio(aps, a, b, pax, freq) {
 function autoLocalTrains(line, cls, peak) {
   const c = cls === 'metro' ? 'metro' : cls === 'hsr' ? 'hsr' : 'conv';
   if (peak == null) peak = lineEconomics().find((x) => x.name === line)?.peak || 0;
-  return Math.min(300, Math.max(OPERATING.minTrains[c], 2 * Math.round(peak / (2 * OPERATING.paxPerTrain[c] * OPERATING.loadFactor))));
+  const f = state.lineFreq?.[line] || 1;
+  return Math.round(f * Math.min(300, Math.max(OPERATING.minTrains[c], 2 * Math.round(peak / (2 * OPERATING.paxPerTrain[c] * OPERATING.loadFactor)))));
 }
 
 /** 운행 중 계통별 구간(정차역 사이) 이용객 (시뮬레이션 결과의 가상 링크 순서대로) */
@@ -2042,14 +2127,17 @@ function operatorEconomics() {
   if (!result) return out;
   const OP = OPERATING, vol = result.links.vol;
   const kpFare = OP_FACTORS.kpFare(state.integration);
+  const idle = new Set(lineEconomics().filter((e) => e.idle).map((e) => e.name));
   allLinks().forEach((_, i) => {
     const l = linkAt(base, state, i);
     if (l.mode !== 1 || l.ext || linkPending(base, state, i) || state.replaced?.[i] || i >= vol.length) return;
     if (i >= base.links.length && !l.built) return;
+    if (state.closedLines?.[l.name]) return;
     const op = operatorOf(state, l);
     const cls = l.cls === 'hsr' ? 'hsr' : 'conv';
     const v = vol[i];
-    const trains = Math.max(OP.minTrains[cls] * (l.kp ? OP_FACTORS.kpMinTrains : 1), v / (OP.paxPerTrain[cls] * OP.loadFactor));
+    const f = idle.has(l.name) ? 0 : state.lineFreq?.[l.name] || 1;
+    const trains = Math.max(OP.minTrains[cls] * (l.kp ? OP_FACTORS.kpMinTrains : 1) * f, v / (OP.paxPerTrain[cls] * OP.loadFactor));
     const fareF = l.kp ? kpFare : 1;
     const costF = (l.kp ? OP_FACTORS.kpCost : 1) * (op === 'merged' ? OP_FACTORS.mergedCost : 1);
     const e = (out[op] ||= { rev: 0, cost: 0, km: 0 });

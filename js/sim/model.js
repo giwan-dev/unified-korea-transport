@@ -144,14 +144,15 @@ export class Model {
         }
         this.capacity[i] = cap;
       } else if (l.mode === 2) {
-        this.freeTime[i] = (l.len / l.speed) * 60;
-        this.capacity[i] = P.metroTrainsPerDay * P.metroPaxPerTrain * (l.tracks >= 3 ? 1.5 : 1);
+        this.freeTime[i] = (l.len / l.speed) * 60 + (l.freqWait || 0);
+        this.capacity[i] = P.metroTrainsPerDay * P.metroPaxPerTrain * (l.tracks >= 3 ? 1.5 : 1) * (l.freq || 1);
       } else {
         const pen = l.power === 'AC' ? 1 : P.railNonACPenalty;
         // 양 끝이 역이면 정차 시간을 반씩 얹는다 (모든 역에 서는 열차 기준)
         const dwell = P.railDwellMin * ((stationSet.has(l.a) ? 0.5 : 0) + (stationSet.has(l.b) ? 0.5 : 0));
-        this.freeTime[i] = (l.len / l.speed) * 60 * pen + dwell;
-        this.capacity[i] = P.railTrainsPerDay[Math.min(l.tracks, 4)] * P.railPaxPerTrain[l.cls];
+        // 감편(freq < 1): 배차가 길어진 만큼의 기다림(freqWait)을 더하고 수송력을 줄인다
+        this.freeTime[i] = (l.len / l.speed) * 60 * pen + dwell + (l.freqWait || 0);
+        this.capacity[i] = P.railTrainsPerDay[Math.min(l.tracks, 4)] * P.railPaxPerTrain[l.cls] * (l.freq || 1);
       }
     }
     if (!this.volume || this.volume.length !== L.length) {

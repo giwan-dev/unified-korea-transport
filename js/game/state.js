@@ -79,6 +79,7 @@ export function effectiveNetwork(base, state) {
     delete m.geom;
     links.push(m);
   }
+  applyLinePolicy(links, state);
   const stations = base.stations.map((s) => s[1])
     .concat((base.metro_stations || []).map((s) => s[1]), state.newStations);
   const airports = (base.airports || []).map((a) => ({ ...a, cap: state.airportCap?.[a.id] ?? a.cap }))
@@ -641,6 +642,47 @@ export function isKP(lat, lon) {
   return lat > 38.3;
 }
 
+// ---- 노선 정리: 폐선과 감편 (영업계수 패널)
+export const FREQ_STEPS = [1, 0.75, 0.5];          // 기본 열차 운행 비율
+export const FREQ_WAIT_MIN = 20;                    // 운행이 절반이면 노선 전체에서 늘어나는 기다림 (분)
+export const REOPEN_PER_KM = 20;                    // 재개통 비용 (억원/km): 선로 점검·신호 복구
+export const CLOSE_APPROVAL = 2;                    // 폐선 한 노선당 지지율 감점 (2년)
+
+/** 폐선한 노선은 끊고, 감편한 노선은 수송력을 줄이고 기다림을 노선 길이에 나눠 얹는다 */
+function applyLinePolicy(links, state) {
+  const closed = state.closedLines || {}, freq = state.lineFreq || {};
+  if (!Object.keys(closed).length && !Object.keys(freq).length) return;
+  const km = {};
+  for (const l of links) if (l.mode >= 1 && l.name && freq[l.name]) km[l.name] = (km[l.name] || 0) + l.len;
+  for (const l of links) {
+    if (l.mode < 1 || !l.name) continue;
+    if (closed[l.name]) l.active = false;
+    const f = freq[l.name];
+    if (f && f < 1) { l.freq = f; l.freqWait = FREQ_WAIT_MIN * (1 / f - 1) * (l.len / km[l.name]); }
+  }
+}
+
+export function closeLine(state, name) {
+  (state.closedLines ||= {})[name] = state.year;
+  delete state.lineFreq?.[name];
+  state.log.unshift(`${state.year}년 폐선: ${name}`);
+}
+
+export function reopenLine(state, name, km) {
+  const cost = Math.round(km * REOPEN_PER_KM);
+  if (!canAfford(state, cost, 1)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
+  pay(state, cost);
+  delete state.closedLines[name];
+  state.log.unshift(`${state.year}년 재개통: ${name} (${formatWon(cost)})`);
+  return { ok: true };
+}
+
+export function setLineFreq(state, name, f) {
+  if (f >= 1) delete state.lineFreq?.[name];
+  else (state.lineFreq ||= {})[name] = f;
+  state.log.unshift(`${state.year}년 ${name} 기본 열차 운행 ${Math.round(f * 100)}%로 조정`);
+}
+
 /** 해 넘기기 전 처리: 공사 진행·완공, 예산 배정, 이자. 완공 사업 목록을 돌려준다 */
 export function advanceBudgetYear(base, state) {
   const d = DIFFICULTY[state.difficulty];
@@ -802,6 +844,8 @@ export function updateApproval(state, requests, summary, prevSummary, congestedK
   const built = state.projects.filter((p) => p.status === 'done' && p.kind !== 'osm' && p.doneYear >= state.year - 1).length;
   if (built) why.push([`최근 2년 완공 ${built}건`, Math.min(10, built * 2)]);
   if (state.lastLapse > 0) why.push(['예산 불용', -Math.min(6, (state.lastLapse / d.annualBudget) * 8)]);
+  const closedRecent = Object.values(state.closedLines || {}).filter((y) => y >= state.year - 1).length;
+  if (closedRecent) why.push([`최근 2년 폐선 ${closedRecent}개 노선`, -Math.min(8, closedRecent * CLOSE_APPROVAL)]);
   if (state.debt > 0) why.push(['부채', -(state.debt / d.borrowLimit) * 8]);
   if (prevSummary) why.push(['남북 HDI 개선', Math.max(-5, Math.min(8, (summary.KP.hdi - prevSummary.KP.hdi) * 300 + (summary.KR.hdi - prevSummary.KR.hdi) * 300))]);
   const target = why.reduce((s0, [, v]) => s0 + v, 0);

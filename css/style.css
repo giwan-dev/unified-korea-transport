@@ -249,3 +249,15 @@ details.fold > summary:hover { color: var(--accent); }
   .panel, #selection:not([hidden]) { padding: 12px; }
   details.fold { margin: 0 -12px; padding: 0 12px; }
 }
+
+/* 영업계수 · 노선 정리 */
+.warn { color: var(--warn); }
+.econ-bar { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin: 4px 0 8px; }
+.econ-list { display: flex; flex-direction: column; }
+.econ-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 6px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.econ-row .n { min-width: 0; display: flex; flex-direction: column; }
+.econ-row .n b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.econ-row .n .m { font-size: 11px; color: var(--muted); }
+.econ-row .r { font-weight: 800; font-variant-numeric: tabular-nums; min-width: 38px; text-align: right; }
+.econ-row select { font-size: 12px; padding: 2px; }
+.kpis .v small { font-size: 12px; font-weight: 600; }
