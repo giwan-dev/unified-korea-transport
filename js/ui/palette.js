@@ -66,6 +66,29 @@ function panelCommands() {
   return out;
 }
 
+/** 탭을 열고 제목이 prefix로 시작하는 접는 묶음을 펼쳐 그리로 옮긴다. 찾을 낱말(find)을 주면 그 글자가 있는 항목을 밝힌다 */
+export function goSection(tab, prefix, find) {
+  document.querySelector(`#tabs button[data-tab="${tab}"]`)?.click();
+  requestAnimationFrame(() => {
+    const panel = document.querySelector(`[data-panel="${tab}"]`);
+    if (!panel) return;
+    const sum = [...panel.querySelectorAll('details > summary')].find((x) => x.textContent.replace(/\s+/g, ' ').trim().startsWith(prefix));
+    if (sum) {
+      let d = sum.parentElement;
+      while (d && d.tagName === 'DETAILS') { d.open = true; d = d.parentElement.closest('details'); }
+    }
+    let target = sum;
+    if (find && sum) {
+      const item = [...sum.parentElement.querySelectorAll('.item, .name-row, .econ-row')].find((x) => x.textContent.includes(find));
+      if (item) target = item;
+    }
+    if (!target) return;
+    target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    target.classList.add('flash');
+    setTimeout(() => target.classList.remove('flash'), 1600);
+  });
+}
+
 function build() {
   el = document.createElement('div');
   el.id = 'palette';

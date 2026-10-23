@@ -420,3 +420,7 @@ details > summary.flash { animation: flash 1.4s ease-out; }
   .pal-foot { display: none; }
   #topbar [data-go] { padding: 2px 4px; margin: -2px -4px; }
 }
+.item.flash, .name-row.flash, .econ-row.flash { animation: flashbox 1.6s ease-out; }
+@keyframes flashbox { 0%, 40% { box-shadow: 0 0 0 3px var(--brand-gold); } 100% { box-shadow: 0 0 0 0 transparent; } }
+/* 탭 7개가 넓은 화면에서 한 줄에 들어가게 */
+#tabs button { padding: 0 4px; font-size: 13px; }
