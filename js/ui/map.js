@@ -399,10 +399,21 @@ const VIEW_HIDE = {
   road: ['rails', 'metro', 'airroutes', 'airports', 'airport-labels'],
   rail: ['roads', 'roads-minor', 'bg-roads', 'ferries'],
 };
+// 공사 중(미개통) 점선과 국경 연결도 보기에 맞는 수단만: 도로만 보기에서 미개통 철도가 섞여 보이지 않게
+const VIEW_MODE = { all: null, road: ['==', ['get', 'mode'], 0], rail: ['>=', ['get', 'mode'], 1] };
+const VIEW_FILTERED = {
+  'links-building': ['==', ['get', 'building'], 1],
+  'ext-links': ['all', ['==', ['get', 'ext'], 1], ['!=', ['get', 'cls'], 'ferry']],
+};
+
 export function setLayerView(map, view) {
   const hide = new Set(VIEW_HIDE[view] || []);
   for (const id of new Set(Object.values(VIEW_HIDE).flat())) {
     if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', hide.has(id) ? 'none' : 'visible');
+  }
+  const mode = VIEW_MODE[view];
+  for (const [id, base] of Object.entries(VIEW_FILTERED)) {
+    if (map.getLayer(id)) map.setFilter(id, mode ? ['all', base, mode] : base);
   }
 }
 
