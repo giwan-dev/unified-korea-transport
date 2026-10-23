@@ -1373,7 +1373,8 @@ function renderProjects() {
     const pace = p.pace || 1;
     const by = p.fund === 'ppp' ? ` · 민자 (정부 보조 ${Math.round((p.govShare || 0) * 100)}%)`
       : p.fund && p.fund !== 'gov' ? ` · ${opBadge(state, state.rail.merged ? 'merged' : p.fund)} 자체 재원` : '';
-    return `<div class="item"><div class="t">${esc(p.label)}</div>
+    const name = projectBounds(p) ? `<button class="t link" data-locate="${p.id}" title="지도에서 보기">${esc(p.label)}</button>` : `<div class="t">${esc(p.label)}</div>`;
+    return `<div class="item">${name}
       <div class="m">${formatWon(p.cost)} · 연 ${formatWon(Math.min(p.annual, p.cost - p.paid))} · ${p.doneYear}년 ${p.kind === 'osm' ? '개통' : '완공'} 예정${by}</div>
       <div class="progress"><div style="width:${Math.round(prog * 100)}%"></div></div>
       ${['service', 'vehicles', 'airRoute', 'rename'].includes(p.kind) ? '' : `<div class="pace">투입 속도 ${PACES.map((x) =>
@@ -1389,10 +1390,42 @@ function renderProjects() {
     <div class="list">${mine.map(row).join('') || '<p class="hint">진행 중인 사업이 없습니다.</p>'}</div>
     ${pppTableHTML()}
     <h3 style="margin-top:16px">완공 (${state.projects.length - building.length})</h3>
-    <div class="list">${done.map((p) => `<div class="item"><div class="t">${esc(p.label)}</div><div class="m">${p.doneYear}년 완공 · ${formatWon(p.cost)}</div></div>`).join('') || '<p class="hint">아직 없습니다.</p>'}</div>`;
+    <div class="list">${done.map((p) => `<div class="item">${projectBounds(p) ? `<button class="t link" data-locate="${p.id}" title="지도에서 보기">${esc(p.label)}</button>` : `<div class="t">${esc(p.label)}</div>`}<div class="m">${p.doneYear}년 완공 · ${formatWon(p.cost)}</div></div>`).join('') || '<p class="hint">아직 없습니다.</p>'}</div>`;
+  el.querySelectorAll('[data-locate]').forEach((b) => { b.onclick = () => locateProject(state.projects.find((x) => x.id === b.dataset.locate)); });
   el.querySelectorAll('[data-pace]').forEach((b) => {
     b.onclick = () => { setProjectPace(state, b.dataset.pace, +b.dataset.v); save(state); renderProjects(); renderTop(); };
   });
+}
+
+/** 사업이 놓인 범위 [[서, 남], [동, 북]]: 구간·공항·항공 노선·옛 이름(시군구). 찾을 수 없으면 null */
+function projectBounds(p) {
+  const pts = [];
+  for (const id of p.links || []) {
+    const g = allLinks()[id]?.geom;
+    if (g) for (let k = 0; k < g.length; k += 2) if (!Number.isNaN(g[k])) pts.push([g[k], g[k + 1]]);
+  }
+  const aps = (p.airport || p.kind === 'airRoute') ? effectiveNetwork(base, state).airports : [];
+  for (const id of [p.airport, p.a, p.b]) {
+    const ap = id != null && aps.find((a) => a.id === id);
+    if (ap) pts.push([ap.lon, ap.lat]);
+  }
+  if (p.kind === 'rename' && p.key?.startsWith('z:')) { const z = zoneProps[+p.key.slice(2)]; if (z) pts.push([z.cx, z.cy]); }
+  if (!pts.length) return null;
+  const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
+  return [[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]];
+}
+
+/** 사업 이름을 누르면 지도를 그곳으로 옮기고 구간을 잠깐 밝힌다 (오른쪽 패널은 그대로) */
+let locateFlash = null;
+function locateProject(p) {
+  const b = p && projectBounds(p);
+  if (!b) return;
+  map.fitBounds(b, { padding: 80, maxZoom: p.links?.length ? 12 : 9.5, duration: 900 });
+  if (locateFlash) { clearTimeout(locateFlash.t); locateFlash.ids.forEach((i) => map.setFeatureState({ source: 'links', id: i }, { sel: false })); }
+  const keep = new Set(selection?.type === 'link' ? selection.section?.ids || [selection.id] : selection?.type === 'multi' ? selection.ids : []);
+  const ids = (p.links || []).filter((i) => !keep.has(i));
+  ids.forEach((i) => map.setFeatureState({ source: 'links', id: i }, { sel: true }));
+  locateFlash = { ids, t: setTimeout(() => { ids.forEach((i) => map.setFeatureState({ source: 'links', id: i }, { sel: false })); locateFlash = null; }, 3000) };
 }
 
 function renderRequests() {

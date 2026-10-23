@@ -1,6 +1,7 @@
 // MapLibre 지도와 레이어. 자체 벡터 배경지도(외부 타일 없음), 존 단계구분도, 도로(혼잡도), 철도(교통량), 역·IC 라벨, 그리기 미리보기.
 
 import { hotspotsFC, warnIcon, HOT_VC } from './traffic.js';
+import { borderLines } from './borders.js';
 
 // 라벨 글꼴: 한글은 브라우저 글꼴로 그리고(localIdeographFontFamily), 숫자·영문 글리프만 받는다
 const GLYPHS = 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf';
@@ -24,6 +25,8 @@ function baseStyle() {
       lines: { type: 'geojson', data: 'data/base/lines.geojson' },
       labels: { type: 'geojson', data: 'data/base/labels.geojson' },
       units: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
+      // 시도 경계·해안선: 시군구 도형에서 뽑은 바깥 변 (addLayers에서 채운다)
+      sidoLines: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
       unitLabels: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
       osmroads: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
     },
@@ -41,7 +44,7 @@ function baseStyle() {
         filter: ['any', ['all', ['==', ['get', 'c'], 3], ['>=', ['zoom'], 10.5]], ['>=', ['zoom'], 12]],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-color': c.road, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, ['match', ['get', 'c'], 3, 0.7, 0.5], 14, ['match', ['get', 'c'], 3, 2.6, 1.8]] } },
-      { id: 'bg-sido', type: 'line', source: 'sido', paint: { 'line-color': c.sido, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.8, 10, 1.6] } },
+      { id: 'bg-sido', type: 'line', source: 'sidoLines', layout: { 'line-join': 'round' }, paint: { 'line-color': c.sido, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.8, 10, 1.6] } },
       { id: 'bg-mdl', type: 'line', source: 'lines', paint: { 'line-color': c.mdl, 'line-width': 1.6, 'line-dasharray': [3, 2] } },
       { id: 'lb-unit', type: 'symbol', source: 'unitLabels', minzoom: 11,
         layout: { 'symbol-placement': 'point', 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 10 },
@@ -81,7 +84,8 @@ export async function refreshNames(map) {
 
 function setUnits(map) {
   const fs = renamed([...unitFiles.values()].flat(), 'unit', 'id');
-  map.getSource('units').setData({ type: 'FeatureCollection', features: fs });
+  // 읍면동 경계는 같은 시군구 안의 변만: 시군구 경계와 겹치는 변은 시군구·시도 선이 그린다
+  map.getSource('units').setData(borderLines(fs, (f) => f.properties.zone).inner);
   // 이름은 면마다 점 하나에: 면 도형에 바로 글자를 달면 타일마다 하나씩 찍혀 넓은 면은 이름이 여러 번 뜬다
   map.getSource('unitLabels').setData({ type: 'FeatureCollection', features: fs.map((f) => ({ type: 'Feature', properties: { name: f.properties.name }, geometry: { type: 'Point', coordinates: labelPoint(f.geometry) } })) });
 }
@@ -236,13 +240,17 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   linksCache = linksFC;
   const below = firstSymbolId(map);
   map.addSource('zones', { type: 'geojson', data: zonesFC });
+  // 시군구 경계는 같은 도 안의 변만 한 번씩, 도 경계·해안선은 시도 선으로 (두 번 그려지지 않게)
+  const borders = borderLines(zonesFC.features, (f) => `${f.properties.country}:${f.properties.province}`);
+  map.addSource('zoneLines', { type: 'geojson', data: borders.inner });
+  map.getSource('sidoLines').setData(borders.outer);
   map.addLayer({
     id: 'zones-fill', type: 'fill', source: 'zones',
     paint: { 'fill-color': ['coalesce', ['feature-state', 'color'], 'rgba(0,0,0,0)'], 'fill-opacity': 0.55 },
   }, below);
   map.addLayer({
-    id: 'zones-line', type: 'line', source: 'zones',
-    paint: { 'line-color': '#7a7f86', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.2, 9, 0.8], 'line-opacity': 0.5 },
+    id: 'zones-line', type: 'line', source: 'zoneLines', layout: { 'line-join': 'round' },
+    paint: { 'line-color': '#7a7f86', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.2, 9, 0.8], 'line-opacity': 0.7 },
   }, below);
   map.addLayer({
     id: 'zones-sel', type: 'line', source: 'zones',
@@ -373,7 +381,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addLayer({
     id: 'points', type: 'circle', source: 'points',
     // 중요도(rank 0~3)에 따라 확대할수록 더 많이: 0 도시·새 시설, 1 큰 역, 2 일반 역·JCT, 3 IC·도시철도역
-    filter: ['>=', ['zoom'], ['match', ['get', 'rank'], 0, 0, 1, 6.5, 2, 9, 10.5]],
+    filter: POINT_BASE.points,
     paint: {
       'circle-radius': ['match', ['get', 'kind'], 'city', 6, 'station', 4, 'rest', 4, 3],
       'circle-color': ['match', ['get', 'kind'], 'city', '#f2c14e', 'station', '#ffffff', 'rest', '#2f8f5b', '#1d232b'],
@@ -383,7 +391,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   });
   map.addLayer({
     id: 'point-labels', type: 'symbol', source: 'points',
-    filter: ['>=', ['zoom'], ['match', ['get', 'rank'], 0, 0, 1, 8, 2, 10, 11.5]],
+    filter: POINT_BASE['point-labels'],
     layout: {
       'text-field': ['get', 'name'], 'text-size': ['case', ['==', ['get', 'isNew'], 1], 13, 11],
       'text-offset': [0, 1.0], 'text-anchor': 'top', 'text-font': FONT,
@@ -451,8 +459,8 @@ function mix(a, b, t) {
   return `rgb(${c.join(',')})`;
 }
 
-/** 지도 보기: 전체 / 도로만 / 철도만 (도시철도 포함, 혼잡도 색) / 항공만 */
-export const LAYER_VIEWS = { all: '모두 보기', road: '도로만', rail: '철도만', air: '항공만' };
+/** 지도 보기: 전체 / 도로만 / 철도만 (도시철도 포함, 혼잡도 색) / 항공만 / 아무것도 안 보기 (지표 색칠만) */
+export const LAYER_VIEWS = { all: '모두 보기', road: '도로만', rail: '철도만', air: '항공만', none: '아무것도 안 보기' };
 const ROAD_LAYERS = ['roads', 'roads-minor', 'roads-casing', 'roads-motorway', 'bg-roads', 'ferries'];
 const RAIL_LAYERS = ['rails', 'metro'];
 const RAIL_VC = ['rails-vc', 'metro-vc'];
@@ -463,11 +471,26 @@ const VIEW_HIDE = {
   road: [...RAIL_LAYERS, ...RAIL_VC, ...AIR_LAYERS],
   rail: [...ROAD_LAYERS, ...RAIL_LAYERS, ...AIR_LAYERS],
   air: [...ROAD_LAYERS, ...RAIL_LAYERS, ...RAIL_VC],
+  none: [...ROAD_LAYERS, ...RAIL_LAYERS, ...RAIL_VC, ...AIR_LAYERS, 'hotspots'],
 };
 // 공사 중(미개통) 점선·국경 연결·혼잡 주의 표시도 보기에 맞는 수단만: 도로만 보기에서 미개통 철도가 섞여 보이지 않게
 const NONE = ['==', ['get', 'mode'], -9];
-const VIEW_MODE = { all: null, road: ['==', ['get', 'mode'], 0], rail: ['>=', ['get', 'mode'], 1], air: NONE };
+const VIEW_MODE = { all: null, road: ['==', ['get', 'mode'], 0], rail: ['>=', ['get', 'mode'], 1], air: NONE, none: NONE };
+// 역·IC 점도 보기에 맞는 것만: 도로만 보기에는 IC·JCT·휴게소, 철도만 보기에는 역, 항공만·안 보기에는 도시만
+const KIND = ['get', 'kind'];
+const VIEW_POINTS = {
+  all: null,
+  road: ['!=', KIND, 'station'],
+  rail: ['match', KIND, ['station', 'city'], true, false],
+  air: ['==', KIND, 'city'],
+  none: ['==', KIND, 'city'],
+};
 const HOT_BASE = ['any', ['>=', ['zoom'], 7], ['>', ['get', 'vc'], 3]];
+// 역·IC 점: 중요도(rank 0~3)에 따라 확대할수록 더 많이
+const POINT_BASE = {
+  points: ['>=', ['zoom'], ['match', ['get', 'rank'], 0, 0, 1, 6.5, 2, 9, 10.5]],
+  'point-labels': ['>=', ['zoom'], ['match', ['get', 'rank'], 0, 0, 1, 8, 2, 10, 11.5]],
+};
 const VIEW_FILTERED = {
   'links-building': ['==', ['get', 'building'], 1],
   'ext-links': ['all', ['==', ['get', 'ext'], 1], ['!=', ['get', 'cls'], 'ferry']],
@@ -481,6 +504,10 @@ export function setLayerView(map, view) {
   const mode = VIEW_MODE[view];
   for (const [id, base] of Object.entries(VIEW_FILTERED)) {
     if (map.getLayer(id)) map.setFilter(id, mode ? ['all', base, mode] : base);
+  }
+  const pf = VIEW_POINTS[view];
+  for (const [id, base] of Object.entries(POINT_BASE)) {
+    if (map.getLayer(id)) map.setFilter(id, pf ? ['all', base, pf] : base);
   }
 }
 
@@ -505,9 +532,10 @@ export function legendHTML(metric, view = 'all') {
   if (air) rows.push(`${sw('#b04a9c', 'dot')} 공항 ${sw('#b04a9c')} 항공 노선 (굵기 = 여객)`);
   if (road || rail) rows.push(`${sw(IDLE_COLOR)} 이용 없음 ${sw('#8a8f96', 'dash')} 미개통`);
   if (road) rows.push(`${sw('#2b7bb9', 'dash')} 여객선 ${sw('#7a7f86', 'dash')} 국경 연결`);
-  if (view !== 'air') rows.push(`<i class="sw warn"></i> 혼잡 주의 (V/C &gt; ${HOT_VC})`);
+  if (view === 'none') rows.push('교통망을 숨기고 지표 색칠만 봅니다.');
+  if (view !== 'air' && view !== 'none') rows.push(`<i class="sw warn"></i> 혼잡 주의 (V/C &gt; ${HOT_VC})`);
   return `<select id="layerview" title="지도에 그릴 교통망">${Object.entries(LAYER_VIEWS).map(([k, v]) => `<option value="${k}" ${k === view ? 'selected' : ''}>${v}</option>`).join('')}</select>
     <select id="metric">${opts}</select>${ramp}
-    <div class="lg-more">${road || view === 'rail' ? vcRamp(view === 'rail' ? '철도 혼잡도 (V/C, 0~10)' : '도로 혼잡도 (V/C, 0~10)') : ''}
+    <div class="lg-more">${(road || view === 'rail') ? vcRamp(view === 'rail' ? '철도 혼잡도 (V/C, 0~10)' : '도로 혼잡도 (V/C, 0~10)') : ''}
     <div class="lg-rows">${rows.map((r) => `<div>${r}</div>`).join('')}</div></div>`;
 }
