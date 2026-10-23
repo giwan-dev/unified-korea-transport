@@ -4,6 +4,7 @@ import { P } from '../sim/params.js';
 import { routeKey } from '../sim/model.js';
 import { smoothSegments, polylineKm } from './curve.js';
 import { serviceLinks } from './services.js';
+import { initRail, operatorOf, OPERATORS, OP_FACTORS, MERGE_MIN_INTEGRATION, EQUITY_STEP } from './operators.js';
 
 const SAVE_KEY = 'ukt-save-v1';
 const START_YEAR = 2026;
@@ -38,6 +39,7 @@ export function newGame(difficulty = 'normal') {
     air: { auto: true, routes: null, banned: [] },  // 항공 노선 (routes: 키 → {a, b, freq, origin, low})
     happyBonus: {},     // 존 → 행복도 가산점 (사업 효과, 해마다 줄어듦)
     services: [],       // 운행 계통 (특급·급행·보통)
+    rail: null,         // 철도 운영사 (코레일·KPRail): initRail에서 채운다
   };
 }
 
@@ -101,11 +103,94 @@ export function committedThisYear(state) {
   return s;
 }
 
-/** 지금 착공할 수 있는지: 올해 분담액이 남은 예산 + 차입 한도 안이어야 한다 */
-export function canAfford(state, cost, years) {
+/**
+ * 지금 착공할 수 있는지: 올해 분담액이 남은 예산 + 차입 한도 안이어야 한다.
+ * 철도 운영사 자체 재원(fund = 'korail' 등)이면 그 회사의 잔액 안이어야 한다 (회사는 빌리지 않는다)
+ */
+export function canAfford(state, cost, years, fund = 'gov') {
+  if (fund !== 'gov') return cost / years <= (railOps(state)[fundOp(state, fund)]?.cash ?? 0);
   const d = DIFFICULTY[state.difficulty];
   return cost / years <= state.budget + (d.borrowLimit - state.debt);
 }
+
+// ------------------------------------------------------------ 철도 운영사 (코레일·KPRail)
+
+function railOps(state) { return initRail(state).ops; }
+/** 합병 뒤에는 어느 회사 몫이든 통합 공사가 낸다 */
+function fundOp(state, fund) { return state.rail?.merged ? 'merged' : fund; }
+
+/** 철도 사업 재원: 설정이 '운영사 자체 재원'이면 그 링크를 맡는 회사, 아니면 정부 */
+export function fundFor(state, links) {
+  if (initRail(state).fund !== 'op') return 'gov';
+  const list = Array.isArray(links) ? links : [links];
+  const rail = list.filter((l) => l && l.mode === 1 && !l.ext);
+  if (!rail.length) return 'gov';
+  const kp = rail.filter((l) => l.kp).length;
+  return operatorOf(state, { mode: 1, kp: kp * 2 > rail.length ? 1 : 0 });
+}
+
+/** 운영사 자체 재원 사업: 잔액이 모자라면 모자란 만큼 정부 SOC 예산이 보탠다 (잔액은 0 밑으로 내려가지 않는다) */
+function payProject(state, p, amount) {
+  if (!p.fund || p.fund === 'gov') { pay(state, amount); return; }
+  const op = fundOp(state, p.fund), o = railOps(state)[op];
+  const own = Math.min(amount, Math.max(0, o.cash));
+  o.cash -= own;
+  if (amount > own) {
+    pay(state, amount - own);
+    state.log.unshift(`${state.year}년 ${opName(state, op)} 사업비 부족분 SOC 예산 보조: ${formatWon(amount - own)}`);
+  }
+}
+
+/** 한 해 영업 결산: econ = {운영사: {rev, cost}} (원/년). 적자로 잔액이 0 밑으로 내려가면 정부가 SOC 예산에서 메운다 */
+export function settleRail(state, econ) {
+  const ops = railOps(state);
+  for (const [op, e] of Object.entries(econ)) {
+    const o = ops[op];
+    if (!o) continue;
+    const profit = (e.rev - e.cost) / 1e8;
+    o.cash += profit;
+    o.hist.push({ year: state.year, rev: e.rev / 1e8, cost: e.cost / 1e8, profit, cash: o.cash });
+    if (o.cash < 0) {
+      pay(state, -o.cash);
+      state.log.unshift(`${state.year}년 ${opName(state, op)} 적자 보전 (SOC 예산): ${formatWon(-o.cash)}`);
+      o.hist[o.hist.length - 1].subsidy = -o.cash;
+      o.cash = 0;
+    }
+  }
+}
+
+function opName(state, op) { return op === 'merged' && state.rail?.name ? state.rail.name : OPERATORS[op].name; }
+
+/** 배당: 회사 잔액의 일부를 정부 예산으로 */
+export function railDividend(state, op, amount) {
+  const o = railOps(state)[op];
+  const v = Math.max(0, Math.min(o.cash, amount));
+  o.cash -= v; state.budget += v;
+  state.log.unshift(`${state.year}년 ${opName(state, op)} 배당: 정부 예산으로 ${formatWon(v)}`);
+}
+
+/** 출자: 정부 예산을 회사에 넣는다 */
+export function railEquity(state, op, amount = EQUITY_STEP) {
+  if (!canAfford(state, amount, 1)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
+  pay(state, amount);
+  railOps(state)[op].cash += amount;
+  state.log.unshift(`${state.year}년 ${opName(state, op)} 출자: ${formatWon(amount)}`);
+  return { ok: true };
+}
+
+/** 코레일·KPRail 합병: 잔액을 합치고 모든 철도를 통합 공사가 맡는다 */
+export function mergeRail(state, name) {
+  const r = initRail(state);
+  if (r.merged) return { ok: false, reason: '이미 합병했습니다.' };
+  if (state.integration < MERGE_MIN_INTEGRATION) return { ok: false, reason: `남북 통합도가 ${Math.round(MERGE_MIN_INTEGRATION * 100)}% 이상이어야 합병할 수 있습니다.` };
+  r.ops.merged = { cash: r.ops.korail.cash + r.ops.kprail.cash, hist: [] };
+  r.merged = true;
+  r.name = name || OPERATORS.merged.name;
+  state.log.unshift(`${state.year}년 코레일·KPRail 합병: ${r.name} 출범 (잔액 ${formatWon(r.ops.merged.cash)})`);
+  return { ok: true };
+}
+
+export { OP_FACTORS };
 
 export function startProject(state, p) {
   p.annual = Math.round(p.cost / p.years);
@@ -113,9 +198,11 @@ export function startProject(state, p) {
   p.startYear = state.year;
   p.doneYear = state.year + p.years;
   p.status = 'building';
-  pay(state, p.annual);
+  p.fund ||= 'gov';
+  payProject(state, p, p.annual);
   state.projects.push(p);
-  state.log.unshift(`${state.year}년 착공: ${p.label} (${formatWon(p.cost)}, ${p.years}년)`);
+  const by = p.fund === 'gov' ? '' : ` · ${opName(state, fundOp(state, p.fund))} 자체 재원`;
+  state.log.unshift(`${state.year}년 착공: ${p.label} (${formatWon(p.cost)}, ${p.years}년${by})`);
 }
 
 function pay(state, amount) {
@@ -211,10 +298,11 @@ export function startUpgrade(base, state, linkIds, upgradeId) {
   if (!targets.length) return { ok: false, reason: '이미 공사 중이거나 적용할 수 없는 구간입니다.' };
   let cost = 0, km = 0;
   for (const id of targets) { const l = linkAt(base, state, id); cost += upgradeCost(u, l); km += l.len; }
-  if (!canAfford(state, cost, u.years)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
+  const fund = fundFor(state, targets.map((id) => linkAt(base, state, id)));
+  if (!canAfford(state, cost, u.years, fund)) return { ok: false, reason: fund === 'gov' ? '예산과 차입 한도가 부족합니다.' : '운영사 잔액이 부족합니다.' };
   const first = linkAt(base, state, targets[0]);
   startProject(state, {
-    id: crypto.randomUUID(), kind: 'upgrade', upgrade: u.id, links: targets, cost, years: u.years,
+    id: crypto.randomUUID(), kind: 'upgrade', upgrade: u.id, links: targets, cost, years: u.years, fund,
     label: `${first.name || '무명 구간'} ${resolve(u.label, first)} (${km.toFixed(0)}km)`,
   });
   return { ok: true };
@@ -301,9 +389,10 @@ export function startNewBuild(base, state, plan) {
     });
   }
   total += plan.extraCost || 0;   // 중간 IC·역·휴게소 설치비
-  if (!canAfford(state, total, spec.years)) {
+  const fund = fundFor(state, links);
+  if (!canAfford(state, total, spec.years, fund)) {
     state.newNodes.length -= plan.points.filter((p) => p.node == null).length;
-    return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
+    return { ok: false, reason: fund === 'gov' ? '예산과 차입 한도가 부족합니다.' : '운영사 잔액이 부족합니다.' };
   }
   state.newLinks.push(...links);
   plan.points.forEach((pt, i) => {
@@ -318,7 +407,7 @@ export function startNewBuild(base, state, plan) {
   startProject(state, {
     id: crypto.randomUUID(), kind: 'new', type: plan.type, links: links.map((l) => l.id), extension: !!plan.extendOf,
     stations: spec.mode >= 1 ? nodeIds.filter((_, i) => plan.names[i]?.kind === 'station') : [],
-    cost: total, years: spec.years, label,
+    cost: total, years: spec.years, label, fund,
   });
   return { ok: true };
 }
@@ -421,7 +510,7 @@ export function advanceBudgetYear(base, state) {
       done.push(p);
       completeProject(base, state, p);
     } else {
-      pay(state, p.annual);
+      payProject(state, p, p.annual);
       p.paid += p.annual;
     }
   }

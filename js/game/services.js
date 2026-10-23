@@ -2,7 +2,7 @@
 // 시뮬레이션에서는 정차역 사이를 잇는 가상 철도 링크가 되고, 그 이용객은 밑의 실제 선로 용량을 함께 쓴다.
 
 import { P } from '../sim/params.js';
-import { canAfford, startProject } from './state.js';
+import { canAfford, startProject, fundFor } from './state.js';
 
 export const SERVICE_KINDS = {
   limited: { label: '특급', setCost: 300, fareFactor: 1.3 },   // 편성당 차량비 (억원)
@@ -166,10 +166,12 @@ export function setCost(kind, cls) {
 export function startService(state, svc) {
   const sets = trainsets(svc.trains, svc.runMin);
   const cost = Math.round(sets * setCost(svc.kind, svc.cls));
-  if (!canAfford(state, cost, 1)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
+  const fund = fundFor(state, svc.underLinks || []);
+  if (!canAfford(state, cost, 1, fund)) return { ok: false, reason: fund === 'gov' ? '예산과 차입 한도가 부족합니다.' : '운영사 잔액이 부족합니다.' };
   const id = `svc${Date.now().toString(36)}`;
-  (state.services ||= []).push({ ...svc, id, sets, built: false });
-  startProject(state, { id: crypto.randomUUID(), kind: 'service', service: id, links: [], cost, years: 1,
+  const { underLinks, ...rec } = svc;
+  (state.services ||= []).push({ ...rec, id, sets, built: false });
+  startProject(state, { id: crypto.randomUUID(), kind: 'service', service: id, links: [], cost, years: 1, fund,
     label: `운행 계통 ${svc.name} (${svc.stops.length}개 역, 하루 ${svc.trains}회, 차량 ${sets}편성)` });
   return { ok: true };
 }

@@ -171,3 +171,15 @@ select { font: inherit; padding: 4px; border-radius: 4px; border: 1px solid var(
 @media (max-width: 760px) {
   #linediagram { right: 0; max-height: 45vh; }
 }
+
+/* 철도 운영사 배지 */
+.op-badge { display: inline-block; color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .04em; padding: 1px 6px; border-radius: 3px; vertical-align: 1px; }
+
+/* 운행 다이어 */
+.ld-tabs { display: inline-flex; gap: 4px; }
+.dia-bg { fill: var(--bg); }
+.dia-grid { stroke: var(--line); stroke-width: .6; }
+.dia-grid6 { stroke: var(--muted); stroke-width: .9; }
+.dia-hour { font-size: 10px; fill: var(--muted); text-anchor: middle; }
+.dia-st-line { stroke: var(--line); stroke-width: .4; }
+.dia-st { font-size: 10px; fill: var(--ink); text-anchor: end; }

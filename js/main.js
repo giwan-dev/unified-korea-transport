@@ -5,6 +5,7 @@ import {
   newGame, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
   updateCongestion, defaultFix, updateApproval, canAfford, isKP, linksUnderWork, UPGRADES, NEW_BUILDS, upgradeCost,
   placeName, setPlaceName, startRestoreName, RENAME, startAirport, startAirportExpand, renameLine, splitLink,
+  fundFor, settleRail, railDividend, railEquity, mergeRail, OP_FACTORS,
   initAirRoutes, updateAirRoutes, startOpenRoute, closeRoute, AIR,
 } from './game/state.js';
 import { AIRPORT } from './game/catalog.js';
@@ -19,6 +20,7 @@ import { saveSim, loadSim, clearSim } from './game/simstore.js';
 import { SERVICE_KINDS, OPERATING, lineStations, planService, railPath, trainsets, setCost, startService, updateService, removeService } from './game/services.js';
 import { showLineDiagram, stopLineDiagram } from './ui/linediagram.js';
 import { P } from './sim/params.js';
+import { initRail, operatorOf, opInfo, opBadge, OPERATORS, MERGE_MIN_INTEGRATION, EQUITY_STEP } from './game/operators.js';
 
 const $ = (s) => document.querySelector(s);
 const CLASS_LABEL = { motorway: '고속도로', trunk: '간선국도', primary: '주요 도로', secondary: '지방 도로', hsr: '고속철도', conv: '일반철도', metro: '도시철도' };
@@ -76,6 +78,7 @@ async function init() {
   state ||= newGame('normal');
   if (meta) state.dataStamp = meta.stamp;
   initAirRoutes(state, world.routes || []);
+  initRail(state);
   assignTourism(await fetch('data/tourism.json').then((r) => r.json()).catch(() => null));
   const baseline = await loadBaseline(meta);
   // 저장된 게임의 그해 계산 상태 (같은 해·같은 데이터일 때만)
@@ -119,7 +122,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { map, base, select, selectBox, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { map, base, select, selectBox, renderAll, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 /** 관광지를 가장 가까운 존(국외는 같은 이름의 거점)에 하루 방문객으로 붙인다 */
@@ -266,6 +269,8 @@ function applyResult(res) {
   if (stepped) {
     if (DIFFICULTY[state.difficulty].autoApprove) autoApprove();
     updateApproval(state, requests, res.summary, prevSummary);
+    // 철도 운영사 한 해 결산
+    settleRail(state, operatorEconomics());
     // 주민 행복도가 오르면 지지율도 오른다
     updateAirRoutes(state, res.air, airportName);
     if (prevHappy) state.approval = Math.max(0, Math.min(100, state.approval + 0.5 * (avgHappiness().all - prevHappy.all)));
@@ -910,7 +915,7 @@ function commitDraft() {
   const names = {};
   draft.points.forEach((p, i) => { if (p.name && !p.existing) names[i] = { name: p.name, kind: p.kind, auto: p.auto !== false }; });
   const dc = draftCost();
-  if (!canAfford(state, dc.cost, dc.years)) { alert('예산과 차입 한도가 부족합니다.'); return; }
+  if (NEW_BUILDS[draft.type].mode !== 1 && !canAfford(state, dc.cost, dc.years)) { alert('예산과 차입 한도가 부족합니다.'); return; }
   const lineName = draftLineName();
   let split = false;
   for (const p of draft.points) {
@@ -1046,7 +1051,10 @@ function renderBuild() {
     }
     const spec = NEW_BUILDS[draft.type];
     const { km, cost, years, foreignKm } = draftCost();
-    const affordable = canAfford(state, cost, years);
+    // 철도 신설은 운영사 자체 재원으로도 지을 수 있다 (찍은 점 대부분이 북측이면 KPRail)
+    const draftOp = spec.mode === 1 ? operatorOf(state, { mode: 1, kp: draft.points.filter((p) => isKP(p.lat, p.lon)).length * 2 > draft.points.length ? 1 : 0 }) : null;
+    const draftFund = draftOp && state.rail.fund === 'op' ? draftOp : 'gov';
+    const affordable = canAfford(state, cost, years, draftFund);
     const lineName = draftLineName();
     body = `<h4>${spec.label}</h4>
       ${lineName ? `<div class="name-row"><span class="kind">노선</span><input type="text" id="line-name" value="${esc(lineName)}"></div>` : ''}
@@ -1064,6 +1072,7 @@ function renderBuild() {
         ${draftCost().mids ? `<tr><td>중간 ${spec.mode === 0 ? 'IC' : '역'} ${draftCost().mids}곳</td><td>${formatWon(draftCost().mids * (spec.mode === 0 ? MID_COST.road : MID_COST.rail))}</td></tr>` : ''}
         ${draftCost().rests ? `<tr><td>휴게소 ${draftCost().rests}곳 (약 ${REST.spacingKm}km마다)</td><td>${formatWon(draftCost().rests * REST.cost)}</td></tr>` : ''}
       </table>
+      ${draftOp ? fundSelect([draftOp]) : ''}
       <div class="name-row"><label><input type="checkbox" id="snap-node" ${snap.node ? 'checked' : ''}> 노드에 붙이기</label>
         <label><input type="checkbox" id="snap-line" ${snap.line ? 'checked' : ''}> 선 위에 붙이기 (중간 ${spec.mode === 0 ? 'IC' : '역'})</label></div>
       <p class="hint">노란 점(◆)은 중국·러시아·일본 거점 도시입니다. 끝점을 거점에 붙이면 국제 노선이 됩니다.
@@ -1083,6 +1092,7 @@ function renderBuild() {
   if (draft) {
     $('#draft-ok').onclick = commitDraft;
     $('#snap-node').onchange = (e) => { snap.node = e.target.checked; };
+    bindFund(el, renderBuild);
     $('#snap-line').onchange = (e) => { snap.line = e.target.checked; };
     const ln = $('#line-name');
     if (ln) ln.onchange = () => { draft.lineName = ln.value.trim() || draft.lineName; draft.lineNameEdited = true; };
@@ -1259,6 +1269,7 @@ function renderStats() {
     <h3 style="margin-top:16px">철도</h3>
     <h4>역 순위 (지역 간 승하차)</h4><table class="cmp"><tr><th>역</th><th>명/일</th></tr>${stRows}</table>
     <h4>노선 순위 (최대 구간 이용객)</h4><table class="cmp"><tr><th>노선</th><th>명/일</th><th>V/C</th></tr>${railRows}</table>
+    ${railStatsHTML()}
     <h4>노선별 수익성 (철도·도시철도, 연간)</h4><table class="cmp"><tr><th>노선</th><th>수입</th><th>비용</th><th>영업계수</th></tr>${econRows}</table>
     <p class="hint">영업계수 = 영업비용 ÷ 영업수입 × 100 (100 미만이면 흑자). 수입은 구간 이용객 × 거리 × km당 운임, 비용은 운행 열차-km와 선로 유지비로 셈한 추정입니다. 도시철도는 시군구 사이 이용만 셈해 수입이 실제보다 적습니다.</p>
     ${svcRows ? `<h4>운행 계통</h4><table class="cmp"><tr><th>계통</th><th>회/일</th><th>최대 구간</th><th>승차율</th><th>영업계수</th></tr>${svcRows}</table>` : ''}
@@ -1272,6 +1283,7 @@ function renderStats() {
       ${chart('철도 분담률 (%)', h.map((r) => [r.year, r.rail * 100]))}
       ${h.some((r) => r.air) ? chart('항공 분담률 (%)', h.filter((r) => r.air != null).map((r) => [r.year, r.air * 100])) : ''}
       ${chart('지지율 (%)', h.filter((r) => r.approval != null).map((r) => [r.year, r.approval]))}` : '<p class="hint">해를 넘기면 연도별 추이가 쌓입니다.</p>'}`;
+  bindRailStats(el);
 }
 
 /** 작은 꺾은선 그래프 (SVG) */
@@ -1331,6 +1343,7 @@ function renderSelection() {
   else el.innerHTML = nodePanel(selection.id);
   el.querySelector('.close')?.addEventListener('click', () => select(null));
   if (selection.type === 'service') bindService(el);
+  if (selection.type === 'service') bindFund(el, renderSelection);
   el.querySelector('#line-diagram')?.addEventListener('click', () => openLineDiagram(selection.id));
   el.querySelectorAll('[data-st-diagram]').forEach((b) => { b.onclick = () => openLineDiagram(+b.dataset.stDiagram); });
   el.querySelectorAll('[data-st-goto]').forEach((a) => {
@@ -1351,6 +1364,7 @@ function renderSelection() {
       save(state); refreshLinks(); renderAll();
     };
   });
+  bindFund(el, renderSelection);
   const wr = el.querySelector('#whole-route');
   if (wr) wr.onchange = () => { wholeRoute = wr.checked; renderSelection(); };
   bindRestore(el);
@@ -1512,6 +1526,7 @@ function servicePanel() {
       <button class="small" data-svc-preset="local">모든 역</button><button class="small" data-svc-preset="express">큰 역 절반</button>
       <button class="small" data-svc-preset="limited">주요 역만</button></div>
     <div style="max-height:240px;overflow:auto">${rows}</div>
+    ${e.id ? '' : fundSelect(plan ? [serviceOperator({ segs: plan.segs })] : [])}
     <div class="row" style="display:flex;gap:6px;margin-top:8px">
       <button class="primary" id="svc-ok" ${plan ? '' : 'disabled'}>${e.id ? (cost ? `저장 (차량 ${formatWon(cost)})` : '저장') : `운행 시작 (차량 ${formatWon(cost)} · 1년)`}</button>
       ${e.id ? '<button id="svc-del">운행 중단</button>' : ''}
@@ -1536,7 +1551,8 @@ function bindService(el) {
   el.querySelector('#svc-ok').onclick = () => {
     const { stops, plan } = servicePlan();
     if (!plan) return;
-    const rec = { name: e.name, kind: e.kind, line: e.line, cls: e.cls, stops, trains: e.trains, runMin: plan.runMin, km: plan.km, segs: plan.segs };
+    const rec = { name: e.name, kind: e.kind, line: e.line, cls: e.cls, stops, trains: e.trains, runMin: plan.runMin, km: plan.km, segs: plan.segs,
+      underLinks: plan.segs.flatMap((sg) => sg.via.map((i) => linkAt(base, state, i))) };
     const r = e.id ? updateService(state, e.id, rec) : startService(state, rec);
     if (!r.ok) { alert(r.reason); return; }
     svcEdit = null;
@@ -1696,8 +1712,102 @@ function openLineDiagram(id) {
   rows.push({ name: `${l0.cls === 'hsr' ? '고속' : '보통'} (자동)`, kind: 'base', first: 0, last: nodes.length - 1, stops: all, trains: baseTrains,
     times: timesFor(0, nodes.length - 1, all, 1), segVC: null, label: `모든 역 · 24시간 · ${baseTrains}회/일` });
   showLineDiagram($('#linediagram'), {
-    title: `${line} · ${km.toFixed(0)}km · ${nodes.length}역`, stations, segs, rows,
+    title: `${line} · ${km.toFixed(0)}km · ${nodes.length}역`, badge: opBadge(state, operatorOf(state, l0)), stations, segs, rows,
     onStation: (i) => { flyToNode(stations[i].node); select({ type: 'node', id: stations[i].node }); },
+  });
+}
+
+// ------------------------------------------------------------ 철도 운영사 (코레일·KPRail)
+
+/** 운영사별 한 해 수지 (원/년): 철도 구간마다 수입·비용을 그 구간을 맡은 회사에 매긴다 */
+function operatorEconomics() {
+  const out = {};
+  if (!result) return out;
+  const OP = OPERATING, vol = result.links.vol;
+  const kpFare = OP_FACTORS.kpFare(state.integration);
+  allLinks().forEach((_, i) => {
+    const l = linkAt(base, state, i);
+    if (l.mode !== 1 || l.ext || l.open > state.year || state.replaced?.[i] || i >= vol.length) return;
+    if (i >= base.links.length && !l.built) return;
+    const op = operatorOf(state, l);
+    const cls = l.cls === 'hsr' ? 'hsr' : 'conv';
+    const v = vol[i];
+    const trains = Math.max(OP.minTrains[cls] * (l.kp ? OP_FACTORS.kpMinTrains : 1), v / (OP.paxPerTrain[cls] * OP.loadFactor));
+    const fareF = l.kp ? kpFare : 1;
+    const costF = (l.kp ? OP_FACTORS.kpCost : 1) * (op === 'merged' ? OP_FACTORS.mergedCost : 1);
+    const e = (out[op] ||= { rev: 0, cost: 0, km: 0 });
+    e.km += l.len;
+    e.rev += v * l.len * OP.fareKm[cls] * fareF * 365;
+    e.cost += (trains * l.len * OP.trainKmCost[cls] * 365 + l.len * Math.max(1, Math.min(l.tracks || 2, 4)) * OP.trackKmCost[cls]) * costF;
+  });
+  // 특급·급행 등급 요금과 차량 감가상각은 그 계통을 맡은 회사에
+  for (const x of svcStats()) {
+    const op = serviceOperator(x.s);
+    const e = (out[op] ||= { rev: 0, cost: 0, km: 0 });
+    e.rev += x.premium;
+    e.cost += (x.s.sets * setCost(x.s.kind, x.s.cls) * 1e8) / 25;
+  }
+  return out;
+}
+
+function serviceOperator(s) {
+  const under = s.segs.flatMap((seg) => seg.via.map((i) => linkAt(base, state, i)));
+  const kp = under.filter((l) => l.kp).length;
+  return operatorOf(state, { mode: 1, kp: kp * 2 > under.length ? 1 : 0 });
+}
+
+/** 철도 사업 재원 고르기 (정부 예산 / 운영사 자체 재원) */
+function fundSelect(ops) {
+  const r = state.rail, list = [...new Set(ops)].filter(Boolean);
+  const bal = list.map((op) => `${opInfo(state, op).name} ${formatWon(r.ops[op]?.cash || 0)}`).join(', ');
+  return `<div class="name-row"><span class="kind">재원</span><select class="rail-fund">
+      <option value="gov" ${r.fund !== 'op' ? 'selected' : ''}>정부 예산</option>
+      <option value="op" ${r.fund === 'op' ? 'selected' : ''}>운영사 자체 재원${bal ? ` (잔액 ${bal})` : ''}</option></select></div>`;
+}
+
+function bindFund(el, rerender) {
+  el.querySelectorAll('.rail-fund').forEach((s) => {
+    s.onchange = () => { state.rail.fund = s.value; save(state); rerender(); };
+  });
+}
+
+function railStatsHTML() {
+  const r = state.rail, econ = operatorEconomics();
+  const ops = r.merged ? ['merged'] : ['korail', 'kprail'];
+  const rows = ops.map((op) => {
+    const e = econ[op] || { rev: 0, cost: 0, km: 0 }, o = r.ops[op];
+    const ratio = e.rev > 0 ? (e.cost / e.rev) * 100 : Infinity;
+    return `<tr><td>${opBadge(state, op)} <span class="m">${Math.round(e.km).toLocaleString()}km</span></td><td>${formatWon(e.rev / 1e8)}</td><td>${formatWon(e.cost / 1e8)}</td>
+      <td class="${e.rev < e.cost ? 'neg' : ''}">${formatWon((e.rev - e.cost) / 1e8)}</td><td class="${ratio > 100 ? 'neg' : ''}">${fmtRatio(ratio)}</td><td>${formatWon(o.cash)}</td></tr>`;
+  }).join('');
+  const charts = ops.map((op) => (r.ops[op].hist.length > 1 ? chart(`${opInfo(state, op).name} 잔액 (억원)`, r.ops[op].hist.map((h) => [h.year, h.cash])) : '')).join('');
+  const actions = ops.map((op) => `<div class="row" style="display:flex;gap:6px;margin:4px 0;align-items:center">${opBadge(state, op)}
+      <button class="small" data-rail-div="${op}" ${r.ops[op].cash > 0 ? '' : 'disabled'}>배당 (잔액 절반 → 정부)</button>
+      <button class="small" data-rail-eq="${op}">출자 ${formatWon(EQUITY_STEP)}</button></div>`).join('');
+  const canMerge = !r.merged && state.integration >= MERGE_MIN_INTEGRATION;
+  return `<h3 style="margin-top:16px">철도 운영사</h3>
+    <table class="cmp"><tr><th>회사</th><th>연 수입</th><th>연 비용</th><th>영업이익</th><th>영업계수</th><th>잔액</th></tr>${rows}</table>
+    <p class="hint">해마다 영업이익이 잔액에 쌓입니다. 잔액은 건설 탭이나 구간 패널에서 재원을 "운영사 자체 재원"으로 고르면 그 회사 노선의 개량·신설·차량 구입에 씁니다. 적자로 잔액이 0 밑으로 내려가면 정부가 SOC 예산에서 메워 잔액은 0 밑으로 떨어지지 않습니다.
+      북측 운임은 남북 통합도만큼 오릅니다 (지금 남측의 ${Math.round(OP_FACTORS.kpFare(state.integration) * 100)}%).</p>
+    ${actions}
+    ${r.merged ? `<p class="hint">${esc(r.name)}: 코레일과 KPRail이 합병해 모든 철도를 맡습니다 (운영비 5% 절감).</p>`
+      : `<h4>합병</h4><div class="name-row"><input type="text" id="merge-name" placeholder="통합 회사 이름" value="${esc(OPERATORS.merged.name)}">
+        <button class="small ${canMerge ? 'primary' : ''}" id="rail-merge" ${canMerge ? '' : 'disabled'}>코레일·KPRail 합병</button></div>
+        <p class="hint">${canMerge ? '합치면 잔액·노선을 하나로 묶고 운영비가 5% 줄어듭니다. 대신 북측 적자를 남측 흑자로 메우게 됩니다.' : `남북 통합도 ${Math.round(MERGE_MIN_INTEGRATION * 100)}% 이상이면 합병할 수 있습니다 (지금 ${Math.round(state.integration * 100)}%).`}</p>`}
+    ${charts}`;
+}
+
+function bindRailStats(el) {
+  el.querySelectorAll('[data-rail-div]').forEach((b) => {
+    b.onclick = () => { const op = b.dataset.railDiv; railDividend(state, op, state.rail.ops[op].cash / 2); save(state); renderAll(); };
+  });
+  el.querySelectorAll('[data-rail-eq]').forEach((b) => {
+    b.onclick = () => { const r = railEquity(state, b.dataset.railEq); if (!r.ok) { alert(r.reason); return; } save(state); renderAll(); };
+  });
+  el.querySelector('#rail-merge')?.addEventListener('click', () => {
+    const r = mergeRail(state, el.querySelector('#merge-name').value.trim());
+    if (!r.ok) { alert(r.reason); return; }
+    save(state); renderAll();
   });
 }
 
@@ -1730,6 +1840,7 @@ function linkPanel(id) {
   return `${header(l.name || CLASS_LABEL[l.cls])}
     <table class="kv">
       <tr><td>종류</td><td>${CLASS_LABEL[l.cls]} · ${l.kp ? '북' : '남'}</td></tr>
+      ${operatorOf(state, l) ? `<tr><td>운영사</td><td>${opBadge(state, operatorOf(state, l))}</td></tr>` : ''}
       <tr><td>연장</td><td>${l.len.toFixed(1)} km</td></tr>
       ${rows}
       <tr><td>혼잡도 (V/C)</td><td class="${vc > 1 ? 'neg' : ''}">${vc.toFixed(2)}</td></tr>
@@ -1741,12 +1852,13 @@ function linkPanel(id) {
     : l.ext ? '<p class="hint">국외 거점과 잇는 국경 연결 구간입니다. 개량 대상이 아닙니다.</p>'
     : l.cls === 'ferry' ? '<p class="hint">여객선 항로입니다. 개량 대상이 아닙니다.</p>'
     : busyProj ? `<p class="hint">공사 중: ${esc(busyProj.label)} (${busyProj.doneYear}년 완공)</p>` : `<h4>개량</h4>
+    ${l.mode === 1 ? fundSelect([operatorOf(state, l)]) : ''}
     ${route.length > 1 ? `<label class="name-row"><input type="checkbox" id="whole-route" ${wholeRoute ? 'checked' : ''}>
       <span>같은 이름 노선 전체 (${route.length}개 구간, ${routeKm.toFixed(0)}km)</span></label>` : ''}
     <div class="list">${ups.map((u) => {
       const ids = (wholeRoute && route.length > 1 ? route : [id]).filter((x) => u.applies(linkAt(base, state, x)));
       const cost = ids.reduce((sum, x) => sum + upgradeCost(u, linkAt(base, state, x)), 0);
-      const ok = canAfford(state, cost, u.years);
+      const ok = canAfford(state, cost, u.years, fundFor(state, ids.map((x) => linkAt(base, state, x))));
       return `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
         <span>${resolve(u.label, l)}${ids.length > 1 ? ` · ${ids.length}개 구간` : ''}</span>
         <button class="small ${ok ? 'primary' : ''}" data-up="${u.id}" ${ok ? '' : 'disabled'}>${formatWon(cost)} · ${u.years}년</button></div></div>`;
@@ -1989,7 +2101,7 @@ function stationPanel(id, n) {
     <td>${stop ? `하루 ${s.trains}회 · 약 ${Math.round(SERVICE_DAY_MIN / Math.max(1, s.trains / 2))}분 간격` : '통과'}</td></tr>`;
   return `
     <h4>노선</h4>
-    <table class="kv">${lines.map((l) => `<tr><td>${esc(l.name)} <span class="m">${modeLabel(l)}</span>
+    <table class="kv">${lines.map((l) => `<tr><td>${opBadge(state, operatorOf(state, { mode: l.mode, kp: linkAt(base, state, l.link).kp }))} ${esc(l.name)} <span class="m">${modeLabel(l)}</span>
       ${l.named ? `<button class="small" data-st-diagram="${l.link}">노선도</button>` : ''}</td>
       <td>${Math.round(l.vol).toLocaleString()}명/일 통과</td></tr>`).join('') || '<tr><td colspan="2">운행 중인 노선이 없습니다.</td></tr>'}</table>
     <h4>승하차</h4>

@@ -75,13 +75,24 @@ export function showLineDiagram(el, d, onClose) {
     svg += `<g class="ld-trains" data-row="${k}"></g>`;
   });
 
-  el.innerHTML = `<div class="ld-head"><b>${esc(d.title)}</b>
+  el.innerHTML = `<div class="ld-head">${d.badge || ''}<b>${esc(d.title)}</b>
       <span class="ld-clock" id="ld-clock">07:00</span>
       <button class="small" id="ld-play">⏸</button>
       <select id="ld-speed"><option value="1">1분/0.1초</option><option value="5" selected>5분/0.1초</option><option value="15">15분/0.1초</option></select>
-      <span class="ld-legend">● 정차 │ 통과 · ▶ 하행 ◀ 상행 · 선 색 = 혼잡도</span>
+      <span class="ld-tabs"><button class="small on" data-ld-view="line">노선도</button><button class="small" data-ld-view="dia">운행 다이어 (24시간)</button></span>
+      <span class="ld-legend" id="ld-legend">● 정차 │ 통과 · ▶ 하행 ◀ 상행 · 선 색 = 혼잡도</span>
       <button class="small close" id="ld-close">닫기</button></div>
-    <div class="ld-scroll"><svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${svg}</svg></div>`;
+    <div class="ld-scroll" data-ld="line"><svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${svg}</svg></div>
+    <div class="ld-scroll" data-ld="dia" hidden>${diaSVG(d)}</div>`;
+  el.querySelectorAll('[data-ld-view]').forEach((b) => {
+    b.onclick = () => {
+      el.querySelectorAll('[data-ld-view]').forEach((x) => x.classList.toggle('on', x === b));
+      el.querySelectorAll('[data-ld]').forEach((v) => { v.hidden = v.dataset.ld !== b.dataset.ldView; });
+      el.querySelector('#ld-legend').textContent = b.dataset.ldView === 'dia'
+        ? '가로 = 시각(0~24시), 세로 = 역 · 선 하나가 열차 하나 · 빨간 세로선 = 지금 시각'
+        : '● 정차 │ 통과 · ▶ 하행 ◀ 상행 · 선 색 = 혼잡도';
+    };
+  });
   el.hidden = false;
   el.querySelector('#ld-close').onclick = () => { stopLineDiagram(); el.hidden = true; onClose?.(); };
   if (d.onStation) el.querySelectorAll('[data-st]').forEach((t) => { t.onclick = () => d.onStation(+t.dataset.st); });
@@ -104,6 +115,8 @@ export function showLineDiagram(el, d, onClose) {
   const draw = () => {
     const hh = String(Math.floor(clock / 60)).padStart(2, '0'), mm = String(Math.floor(clock % 60)).padStart(2, '0');
     el.querySelector('#ld-clock').textContent = `${hh}:${mm}`;
+    const now = el.querySelector('#dia-now');
+    if (now) { const x = DIA.left + clock * DIA.pxPerMin; now.setAttribute('x1', x); now.setAttribute('x2', x); }
     d.rows.forEach((r, k) => {
       const y = top + 40 + k * rowH;
       const col = KIND_COLOR[r.kind] || KIND_COLOR.base;
@@ -139,6 +152,61 @@ export function showLineDiagram(el, d, onClose) {
     draw();
   }, 100);
   el.querySelector('#ld-play').onclick = (ev) => { playing = !playing; ev.target.textContent = playing ? '⏸' : '▶'; };
+}
+
+const DIA = { left: 120, top: 28, pxPerMin: 1.2, minH: 360 };
+
+/**
+ * 운행 다이어 (열차 운행 도표): 가로 0~24시, 세로 역(거리 비례). 계통마다 하루 운행을 24시간에 고르게 나눠
+ * 하행은 위에서 아래로, 상행은 아래에서 위로 그린다. 정차역에서는 정차 시간만큼 수평으로 머문다.
+ */
+function diaSVG(d) {
+  const N = d.stations.length, total = d.stations[N - 1].km || 1;
+  const H = Math.max(DIA.minH, Math.min(1400, N * 16));
+  const yOf = (km) => DIA.top + (km / total) * (H - DIA.top - 16);
+  const W = DIA.left + DAY * DIA.pxPerMin + 20;
+  const xOf = (t) => DIA.left + t * DIA.pxPerMin;
+  let g = '';
+  for (let h = 0; h <= 24; h++) {
+    const x = xOf(h * 60);
+    g += `<line x1="${x}" y1="${DIA.top - 6}" x2="${x}" y2="${H - 10}" class="dia-grid${h % 6 ? '' : ' dia-grid6'}"/>
+      <text x="${x}" y="${DIA.top - 10}" class="dia-hour">${h}</text>`;
+  }
+  d.stations.forEach((s) => {
+    const y = yOf(s.km);
+    g += `<line x1="${DIA.left}" y1="${y}" x2="${W - 20}" y2="${y}" class="dia-st-line"/>
+      <text x="${DIA.left - 6}" y="${y + 3}" class="dia-st">${esc(s.name)}</text>`;
+  });
+  for (const r of d.rows) {
+    if (!r.trains) continue;
+    const col = KIND_COLOR[r.kind] || KIND_COLOR.base;
+    const perDir = Math.max(1, Math.round(r.trains / 2));
+    const headway = DAY / perDir;
+    const dwell = (i) => (r.stops.has(i) && i !== r.first && i !== r.last ? 1 : 0);
+    // 하행 한 편의 (시각, 역) 점들 (출발 0분 기준)
+    const down = [];
+    for (let i = r.first; i <= r.last; i++) {
+      if (!r.stops.has(i) && i !== r.first && i !== r.last) { down.push([r.times[i], d.stations[i].km]); continue; }
+      down.push([r.times[i], d.stations[i].km]);
+      if (dwell(i)) down.push([r.times[i] + dwell(i), d.stations[i].km]);
+    }
+    const run = r.times[r.last];
+    const kmA = d.stations[r.first].km, kmB = d.stations[r.last].km;
+    const up = down.map(([t, km]) => [run - t, kmA + kmB - km]).reverse();
+    const path = (pts, dep) => pts.map(([t, km], k) => `${k ? 'L' : 'M'}${xOf(dep + t).toFixed(1)},${yOf(km).toFixed(1)}`).join('');
+    let dd = '';
+    for (let n = 0; n < perDir; n++) {
+      for (const [pts, dep] of [[down, n * headway], [up, (n + 0.5) * headway]]) {
+        dd += path(pts, dep);
+        if (dep + run > DAY) dd += path(pts, dep - DAY);   // 자정을 넘기는 열차는 0시 쪽에 이어 그린다
+      }
+    }
+    g += `<path d="${dd}" fill="none" stroke="${col}" stroke-width="${r.kind === 'base' ? 0.6 : 1.3}" stroke-opacity="${r.kind === 'base' ? 0.55 : 0.9}"><title>${esc(r.name)}</title></path>`;
+  }
+  g += `<line id="dia-now" x1="${xOf(420)}" y1="${DIA.top - 6}" x2="${xOf(420)}" y2="${H - 10}" stroke="#e02424" stroke-width="1.5"/>`;
+  const legend = d.rows.filter((r) => r.trains).map((r, k) => `<g transform="translate(${DIA.left + k * 170},${H - 2})"><line x1="0" y1="-4" x2="18" y2="-4" stroke="${KIND_COLOR[r.kind] || KIND_COLOR.base}" stroke-width="2"/>
+    <text x="22" y="0" class="dia-st" text-anchor="start">${esc(r.name)} ${r.trains}회/일</text></g>`).join('');
+  return `<svg width="${W}" height="${H + 14}" viewBox="0 0 ${W} ${H + 14}"><rect x="${DIA.left}" y="${DIA.top - 6}" width="${DAY * DIA.pxPerMin}" height="${H - DIA.top - 4}" class="dia-bg"/>${g}${legend}</svg>`;
 }
 
 export function stopLineDiagram() {
