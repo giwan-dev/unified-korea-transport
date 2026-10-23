@@ -5,7 +5,7 @@ import {
   newGame, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
   updateCongestion, defaultFix, updateApproval, canAfford, isKP, linksUnderWork, UPGRADES, NEW_BUILDS, upgradeCost,
   placeName, setPlaceName, startRestoreName, RENAME, startAirport, startAirportExpand, renameLine, splitLink,
-  fundFor, settleRail, railDividend, railEquity, mergeRail, OP_FACTORS,
+  fundFor, settleRail, railDividend, railEquity, mergeRail, OP_FACTORS, initOngoing, linkPending, setProjectPace, PACES,
   initAirRoutes, updateAirRoutes, startOpenRoute, closeRoute, AIR,
 } from './game/state.js';
 import { AIRPORT } from './game/catalog.js';
@@ -66,6 +66,7 @@ async function init() {
   // 지명은 새 역·IC 이름을 지을 때만 필요하므로 첫 화면 뒤에 받는다
   const placesReady = fetch('data/places.json').then((r) => r.json()).then((p) => { places = p; });
   fetch('data/base/world.geojson').then((r) => r.json()).then((w) => { isForeign = makeForeignTest(w); }).catch(() => {});
+  fetch('data/plans.json').then((r) => (r.ok ? r.json() : { plans: [] })).then((p) => { plans = p.plans || []; if (map) renderBuild(); }).catch(() => {});
   fetch('data/historic_targets.json').then((r) => (r.ok ? r.json() : [])).then((h) => { historic = h; }).catch(() => {});
   subPop0 = zoneProps.flatMap((zp) => zp.subs.map((s) => s[2] * zp.pop));
   state = load();
@@ -79,6 +80,13 @@ async function init() {
   if (meta) state.dataStamp = meta.stamp;
   initAirRoutes(state, world.routes || []);
   initRail(state);
+  // OSM 공사 중 노선 → 진행 중 사업 (이름 없는 구간은 가까운 시군 이름으로)
+  initOngoing(base, state, (l) => {
+    const [x, y] = base.nodes[l.a];
+    let best = null, bd = Infinity;
+    for (const z of zoneProps) { if (z.ext) continue; const d = (z.cx - x) ** 2 + (z.cy - y) ** 2; if (d < bd) { bd = d; best = z; } }
+    return `${best ? best.name : ''} ${CLASS_LABEL[l.cls] || ''} 공사`.trim();
+  });
   assignTourism(await fetch('data/tourism.json').then((r) => r.json()).catch(() => null));
   const baseline = await loadBaseline(meta);
   // 저장된 게임의 그해 계산 상태 (같은 해·같은 데이터일 때만)
@@ -425,7 +433,7 @@ function linksFC() {
     }
     return {
       type: 'Feature', id: i,
-      properties: { id: i, mode: eff.mode, cls: eff.cls, building: building.has(i) || eff.open > state.year ? 1 : 0, colour: eff.colour || '', ext: eff.ext ? 1 : 0 },
+      properties: { id: i, mode: eff.mode, cls: eff.cls, building: building.has(i) || (i < base.links.length && linkPending(base, state, i)) ? 1 : 0, colour: eff.colour || '', ext: eff.ext ? 1 : 0 },
       geometry: parts.length > 1 ? { type: 'MultiLineString', coordinates: parts } : { type: 'LineString', coordinates: parts[0] },
     };
   });
@@ -924,7 +932,7 @@ function commitDraft() {
     split = true;
   }
   const restAreas = restPositions(smoothSegments(draft.points)).map(([lon, lat]) => ({ lon, lat, name: namer.suggest(lon, lat, 'rest') }));
-  const r = startNewBuild(base, state, { type: draft.type, points: draft.points, names, lineName, extendOf: draft.extendOf, segFactor: dc.segFactor, extraCost: dc.extraCost, restAreas });
+  const r = startNewBuild(base, state, { type: draft.type, points: draft.points, names, lineName, extendOf: draft.extendOf, plan: draft.plan, segFactor: dc.segFactor, extraCost: dc.extraCost, restAreas });
   if (split) refreshLinks();
   if (!r.ok) { alert(r.reason); return; }
   draft.points.forEach((p) => { p.reserved = false; });
@@ -1076,7 +1084,7 @@ function renderBuild() {
       <div class="name-row"><label><input type="checkbox" id="snap-node" ${snap.node ? 'checked' : ''}> 노드에 붙이기</label>
         <label><input type="checkbox" id="snap-line" ${snap.line ? 'checked' : ''}> 선 위에 붙이기 (중간 ${spec.mode === 0 ? 'IC' : '역'})</label></div>
       <p class="hint">노란 점(◆)은 중국·러시아·일본 거점 도시입니다. 끝점을 거점에 붙이면 국제 노선이 됩니다.
-        기존 ${spec.mode ? '선로' : '도로'} 중간을 누르면 그 자리에 ${spec.mode === 0 ? 'IC·JCT' : '역'}를 만들고 이어집니다.</p>
+        기존 ${spec.mode ? '선로' : '도로'} 중간을 누르면 그 자리에 ${spec.mode === 0 ? 'IC·JCT를' : '역을'} 만들고 이어집니다.</p>
       ${!affordable && draft.points.length > 1 ? '<p class="hint neg">예산과 차입 한도를 넘습니다.</p>' : ''}
       <div class="row" style="display:flex;gap:6px;margin-top:8px">
         <button class="primary" id="draft-ok" ${draft.points.length < 2 || !affordable ? 'disabled' : ''}>착공</button>
@@ -1086,7 +1094,8 @@ function renderBuild() {
   const restore = historic.length ? `<h4>옛 이름 되찾기</h4>
     <p class="hint">북측에서 지도자 이름이나 선전 구호로 바뀐 지명을 바뀌기 전 이름으로 돌립니다. 표지판·행정 문서·지도를 바꾸는 데 예산이 들고, 완공되면 그 지역 주민 행복도가 오릅니다.</p>
     <div class="list">${historic.map((t) => restoreRow(t)).join('')}</div>` : '';
-  el.innerHTML = `<div class="tools">${tools}</div>${body}${draft ? '' : restore}`;
+  el.innerHTML = `<div class="tools">${tools}</div>${body}${draft ? '' : plansHTML() + restore}`;
+  el.querySelectorAll('[data-plan]').forEach((b) => { b.onclick = () => openPlan(b.dataset.plan); });
   bindRestore(el);
   el.querySelectorAll('[data-build]').forEach((b) => { b.onclick = () => startDraft(b.dataset.build); });
   if (draft) {
@@ -1146,20 +1155,32 @@ function renameDraftPoint(i, name) {
 
 function renderProjects() {
   const el = $('[data-panel=projects]');
-  const building = state.projects.filter((p) => p.status === 'building');
+  const building = state.projects.filter((p) => p.status === 'building').sort((x, y) => x.doneYear - y.doneYear);
   const done = state.projects.filter((p) => p.status === 'done').slice(-15).reverse();
-  const annual = building.reduce((s, p) => s + p.annual, 0);
+  const annual = building.filter((p) => !p.fund || p.fund === 'gov').reduce((s, p) => s + Math.min(p.annual, p.cost - p.paid), 0);
+  const row = (p) => {
+    const prog = Math.min(1, p.paid / Math.max(1, p.cost));
+    const pace = p.pace || 1;
+    const by = p.fund && p.fund !== 'gov' ? ` · ${opBadge(state, state.rail.merged ? 'merged' : p.fund)} 자체 재원` : '';
+    return `<div class="item"><div class="t">${esc(p.label)}</div>
+      <div class="m">${formatWon(p.cost)} · 연 ${formatWon(Math.min(p.annual, p.cost - p.paid))} · ${p.doneYear}년 ${p.kind === 'osm' ? '개통' : '완공'} 예정${by}</div>
+      <div class="progress"><div style="width:${Math.round(prog * 100)}%"></div></div>
+      ${['service', 'vehicles', 'airRoute', 'rename'].includes(p.kind) ? '' : `<div class="pace">투입 속도 ${PACES.map((x) =>
+        `<button class="small ${x === pace ? 'on' : ''}" data-pace="${p.id}" data-v="${x}">${Math.round(x * 100)}%</button>`).join('')}</div>`}</div>`;
+  };
+  const ongoing = building.filter((p) => p.kind === 'osm'), mine = building.filter((p) => p.kind !== 'osm');
   el.innerHTML = `
-    <h3>공사 중 (${building.length})</h3>
-    <p class="hint">내년 공사비 분담: ${formatWon(annual)} / 연 예산 ${formatWon(DIFFICULTY[state.difficulty].annualBudget)}</p>
-    <div class="list">${building.map((p) => {
-      const prog = (state.year - p.startYear) / p.years;
-      return `<div class="item"><div class="t">${esc(p.label)}</div>
-        <div class="m">${formatWon(p.cost)} · ${p.doneYear}년 완공 예정</div>
-        <div class="progress"><div style="width:${Math.round(prog * 100)}%"></div></div></div>`;
-    }).join('') || '<p class="hint">진행 중인 사업이 없습니다.</p>'}</div>
+    <p class="hint">내년 정부 예산 투입: ${formatWon(annual)} / 연 예산 ${formatWon(DIFFICULTY[state.difficulty].annualBudget)}.
+      사업마다 투입 속도를 바꾸면 연 투입액과 완공 연도가 달라집니다 (빠르게 하면 남은 사업비에 할증이 붙습니다).</p>
+    <h3>진행 중인 사업 (이어받은 공사 ${ongoing.length})</h3>
+    <div class="list">${ongoing.map(row).join('') || '<p class="hint">없습니다.</p>'}</div>
+    <h3 style="margin-top:16px">새로 벌인 사업 (${mine.length})</h3>
+    <div class="list">${mine.map(row).join('') || '<p class="hint">진행 중인 사업이 없습니다.</p>'}</div>
     <h3 style="margin-top:16px">완공 (${state.projects.length - building.length})</h3>
     <div class="list">${done.map((p) => `<div class="item"><div class="t">${esc(p.label)}</div><div class="m">${p.doneYear}년 완공 · ${formatWon(p.cost)}</div></div>`).join('') || '<p class="hint">아직 없습니다.</p>'}</div>`;
+  el.querySelectorAll('[data-pace]').forEach((b) => {
+    b.onclick = () => { setProjectPace(state, b.dataset.pace, +b.dataset.v); save(state); renderProjects(); renderTop(); };
+  });
 }
 
 function renderRequests() {
@@ -1626,7 +1647,7 @@ function lineEconomics() {
   const OP = OPERATING, vol = result.links.vol, lines = new Map();
   allLinks().forEach((_, i) => {
     const l = linkAt(base, state, i);
-    if (l.mode === 0 || !l.name || l.ext || l.cls === 'ferry' || l.open > state.year || state.replaced?.[i] || i >= vol.length) return;
+    if (l.mode === 0 || !l.name || l.ext || l.cls === 'ferry' || linkPending(base, state, i) || state.replaced?.[i] || i >= vol.length) return;
     if (i >= base.links.length && !l.built) return;
     const cls = l.mode === 2 ? 'metro' : l.cls === 'hsr' ? 'hsr' : 'conv';
     let e = lines.get(l.name);
@@ -1741,7 +1762,7 @@ function operatorEconomics() {
   const kpFare = OP_FACTORS.kpFare(state.integration);
   allLinks().forEach((_, i) => {
     const l = linkAt(base, state, i);
-    if (l.mode !== 1 || l.ext || l.open > state.year || state.replaced?.[i] || i >= vol.length) return;
+    if (l.mode !== 1 || l.ext || linkPending(base, state, i) || state.replaced?.[i] || i >= vol.length) return;
     if (i >= base.links.length && !l.built) return;
     const op = operatorOf(state, l);
     const cls = l.cls === 'hsr' ? 'hsr' : 'conv';
@@ -1825,6 +1846,66 @@ function bindRailStats(el) {
   });
 }
 
+// ------------------------------------------------------------ 계획 사업 (data/plans.json)
+
+let plans = [];
+
+/** 경유지 이름과 좌표로 기존 역(또는 도로 노드)을 찾는다: 같은 이름의 역이 6km 안에 있으면 그 역, 아니면 가까운 노드 */
+function resolveWaypoint([name, lon, lat], mode) {
+  const lists = mode === 2 ? [base.metro_stations || [], base.stations] : mode === 1 ? [base.stations, base.metro_stations || []] : [];
+  for (const list of lists) {
+    let best = null, bd = 6;
+    for (const [nm, node] of list) {
+      if (nm !== name && nm !== `${name}역` && nm.replace(/역$/, '') !== name) continue;
+      const c = nodeCoord(node);
+      const d = kmBetween(lon, lat, c[0], c[1]);
+      if (d < bd) { bd = d; best = node; }
+    }
+    if (best != null && nodesOfMode(mode).has?.(best) !== false) return best;
+  }
+  return nearestNode({ lng: lon, lat }, mode, null, mode === 0 ? 4 : 1.5);
+}
+
+/** 계획 노선을 그리기로 연다 (경유지가 찍힌 상태). 확인하고 고친 뒤 착공한다 */
+function openPlan(id) {
+  const plan = plans.find((p) => p.id === id);
+  if (!plan) return;
+  startDraft(plan.type);
+  const spec = NEW_BUILDS[plan.type];
+  for (const wp of plan.points) {
+    const node = resolveWaypoint(wp, spec.mode);
+    const c = node != null ? nodeCoord(node) : [wp[1], wp[2]];
+    const pt = { node, lon: c[0], lat: c[1], split: null };
+    draft.points.push(pt);
+    nameDraftPoint(pt, draft.points.length - 1);
+    // 새 역이면 계획에 적힌 역 이름을 쓴다
+    if (spec.mode >= 1 && !pt.existing && wp[0]) { if (pt.reserved) namer.release(pt.name, 'station'); pt.name = wp[0]; pt.auto = false; }
+  }
+  draft.lineName = plan.name;
+  draft.lineNameEdited = true;
+  draft.plan = plan.id;
+  drawDraft();
+  renderBuild();
+  const xs = draft.points.map((p) => p.lon), ys = draft.points.map((p) => p.lat);
+  map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: 60, maxZoom: 11 });
+}
+
+function plansHTML() {
+  if (!plans.length) return '';
+  const started = new Set(state.projects.map((p) => p.plan).filter(Boolean));
+  const groups = [...new Set(plans.map((p) => p.group))];
+  return `<h4>계획 사업</h4>
+    <p class="hint">국가·광역 교통계획에 나온 노선입니다. 누르면 경유지가 찍힌 채로 그리기가 열리고, 사업비를 확인한 뒤 착공합니다 (경로는 고칠 수 있습니다).</p>
+    ${groups.map((g) => `<div class="m" style="margin:6px 0 2px">${esc(g)}</div><div class="list">${plans.filter((p) => p.group === g).map((p) => {
+      let km = 0;
+      for (let i = 1; i < p.points.length; i++) km += kmBetween(p.points[i - 1][1], p.points[i - 1][2], p.points[i][1], p.points[i][2]);
+      const spec = NEW_BUILDS[p.type];
+      return `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
+        <span>${esc(p.name)} <span class="m">${spec.label.replace(/ 신설.*$/, '')} · 약 ${Math.round(km * 1.1)}km · ${formatWon(km * 1.1 * spec.perKm)}</span></span>
+        <button class="small" data-plan="${p.id}" ${started.has(p.id) ? 'disabled' : ''}>${started.has(p.id) ? '착공함' : '열기'}</button></div></div>`;
+    }).join('')}</div>`).join('')}`;
+}
+
 function header(title) {
   return `<div style="display:flex;justify-content:space-between;align-items:center"><h3>${esc(title)}</h3><button class="small close">닫기</button></div>`;
 }
@@ -1835,7 +1916,8 @@ function linkPanel(id) {
   const speed = result ? result.links.speed[id] : 0;
   const busyProj = state.projects.find((p) => p.status === 'building' && p.links.includes(id));
   const isRoad = l.mode === 0;
-  const planned = l.open > state.year;
+  const planned = id < base.links.length && linkPending(base, state, id);
+  const osmProj = planned && state.projects.find((p) => p.kind === 'osm' && p.status === 'building' && p.links.includes(id));
   const ups = l.ext || l.cls === 'ferry' || planned ? [] : UPGRADES.filter((u) => u.mode === l.mode && u.applies(l));
   const isNew = id >= base.links.length;
   const route = sameRoute(id);
@@ -1862,7 +1944,7 @@ function linkPanel(id) {
     ${l.mode >= 1 && l.name && !l.ext && !planned ? serviceSection(l) : ''}
     ${isNew && l.name ? `<h4>노선 이름</h4><div class="name-row"><input type="text" id="line-rename" value="${esc(l.name)}">
       <button class="small" id="line-rename-ok">바꾸기</button></div>` : ''}
-    ${planned ? `<p class="hint">현재 공사 중인 노선입니다 (OpenStreetMap 기준). ${l.open}년에 자동으로 개통합니다.</p>`
+    ${planned ? `<p class="hint">진행 중인 사업 구간입니다: ${esc(osmProj?.label || '')} · ${osmProj ? `${osmProj.doneYear}년 개통 예정` : ''}. 사업 탭에서 예산 투입 속도를 바꿀 수 있습니다.</p>`
     : l.ext ? '<p class="hint">국외 거점과 잇는 국경 연결 구간입니다. 개량 대상이 아닙니다.</p>'
     : l.cls === 'ferry' ? '<p class="hint">여객선 항로입니다. 개량 대상이 아닙니다.</p>'
     : busyProj ? `<p class="hint">공사 중: ${esc(busyProj.label)} (${busyProj.doneYear}년 완공)</p>` : `<h4>개량</h4>
@@ -1887,7 +1969,7 @@ function multiPanel(ids) {
   const mode = km.indexOf(Math.max(...km));
   const pool = ids.filter((i) => {
     const l = linkAt(base, state, i);
-    return l.mode === mode && !l.ext && l.cls !== 'ferry' && !(l.open > state.year) && !work.has(i);
+    return l.mode === mode && !l.ext && l.cls !== 'ferry' && !(i < base.links.length && linkPending(base, state, i)) && !work.has(i);
   });
   const names = [...new Set(pool.map((i) => linkAt(base, state, i).name).filter(Boolean))].slice(0, 6);
   const ups = UPGRADES.filter((u) => u.mode === mode).map((u) => {
@@ -2054,7 +2136,7 @@ function linesAt(node) {
   const out = new Map();
   allLinks().forEach((_, i) => {
     const l = linkAt(base, state, i);
-    if (l.mode === 0 || (l.a !== node && l.b !== node) || l.ext || l.open > state.year || state.replaced?.[i]) return;
+    if (l.mode === 0 || (l.a !== node && l.b !== node) || l.ext || (i < base.links.length && linkPending(base, state, i)) || state.replaced?.[i]) return;
     if (i >= base.links.length && !l.built) return;
     const key = l.name || CLASS_LABEL[l.cls];
     const e = out.get(key) || { name: key, named: !!l.name, mode: l.mode, cls: l.cls, vol: 0, link: i };

@@ -81,6 +81,7 @@ export const NEW_BUILDS = {
   motorway: { mode: 0, label: '고속도로 신설 (4차로)', perKm: 450, years: 5, attrs: { cls: 'motorway', lanes: 4, speed: 100, paved: 1 } },
   trunk: { mode: 0, label: '국도 신설 (4차로)', perKm: 180, years: 3, attrs: { cls: 'trunk', lanes: 4, speed: 70, paved: 1 } },
   hsr: { mode: 1, label: '고속철도 신설', perKm: 850, years: 6, attrs: { cls: 'hsr', tracks: 2, speed: 250, power: 'AC' } },
+  gtx: { mode: 1, label: '광역급행철도 신설 (대심도)', perKm: 1100, years: 6, attrs: { cls: 'conv', tracks: 2, speed: 180, power: 'AC' } },
   rail: { mode: 1, label: '일반철도 신설 (복선전철)', perKm: 400, years: 5, attrs: { cls: 'conv', tracks: 2, speed: 150, power: 'AC' } },
   metro: { mode: 2, label: '도시철도 신설 (지하)', perKm: 1300, years: 6, attrs: { cls: 'metro', tracks: 2, speed: 35, power: 'AC' } },
   tunnelRail: { mode: 1, label: '해저터널 (고속철도)', perKm: 3500, years: 10, attrs: { cls: 'hsr', tracks: 2, speed: 250, power: 'AC' } },

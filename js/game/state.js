@@ -67,7 +67,7 @@ export function effectiveNetwork(base, state) {
     const o = state.overrides[i];
     const m = o ? { ...l, ...o } : { ...l };
     // OSM에 공사 중으로 올라온 노선은 개통 연도부터 쓴다
-    m.active = !(l.open > state.year) && !state.replaced?.[i];
+    m.active = !linkPending(base, state, i) && !state.replaced?.[i];
     if (building.has(i) && m.mode === 0) m.speed = Math.round(m.speed * 0.85); // 공사 중 감속
     delete m.geom;
     return m;
@@ -111,6 +111,94 @@ export function canAfford(state, cost, years, fund = 'gov') {
   if (fund !== 'gov') return cost / years <= (railOps(state)[fundOp(state, fund)]?.cash ?? 0);
   const d = DIFFICULTY[state.difficulty];
   return cost / years <= state.budget + (d.borrowLimit - state.debt);
+}
+
+// ------------------------------------------------------------ 진행 중 사업 (OSM 공사 중 노선)
+
+/** km당 사업비 어림 (억원): 노선 종류별, 광역급행철도는 대심도라 비싸다 */
+const ONGOING_PER_KM = { motorway: 450, trunk: 180, primary: 150, secondary: 100, hsr: 850, conv: 450, metro: 1300, gtx: 1100 };
+const ONGOING_TOTAL_YEARS = { 0: 5, 1: 6, 2: 6 };   // 사업 전체 공기 어림 (도로·철도·도시철도)
+const ONGOING_UNFUNDED = 0.5;                        // 남은 사업비 중 앞으로 예산에서 내야 하는 몫
+
+/** OSM 이름에 붙은 공사 메모("@2030", "(2029예정)")를 뗀다 */
+export function cleanLineName(name) {
+  return (name || '').replace(/@\d+/g, '').replace(/\s*\([^)]*(예정|개통|공사|건설)[^)]*\)/g, '').trim();
+}
+
+/** 아직 열리지 않은 OSM 공사 중 구간인지 */
+export function linkPending(base, state, i) {
+  const l = base.links[i];
+  if (!l || !(l.open > 0)) return false;
+  if (state.osm) return state.osm.auto?.[i] ? l.open > state.year : !state.osm.opened[i];
+  return l.open > state.year;
+}
+
+/**
+ * 게임을 시작할 때 OSM의 공사 중 노선을 같은 이름(이름 없으면 이어진 구간)끼리 묶어 진행 중 사업으로 넣는다.
+ * 남은 사업비는 개통 예정 연도까지 남은 해만큼 어림하고, 해마다 예산에서 나간다. 다 지어야 열린다.
+ */
+export function initOngoing(base, state, labelFor) {
+  if (state.osm) return;
+  state.osm = { opened: {}, auto: {} };
+  const groups = new Map();
+  const parent = new Map();
+  const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+  base.links.forEach((l, i) => {
+    if (!(l.open > 0)) return;
+    if (l.open <= state.year) { state.osm.opened[i] = true; return; }
+    const name = cleanLineName(l.name);
+    const key = name ? `${name}|${l.mode}` : `|${l.mode}|${l.cls}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(i);
+  });
+  const projects = [];
+  for (const [key, ids] of groups) {
+    // 이름 없는 구간은 서로 이어진 것끼리만 한 사업으로 본다
+    let parts = [ids];
+    if (key.startsWith('|')) {
+      for (const i of ids) { const l = base.links[i]; for (const n of [l.a, l.b]) if (!parent.has(n)) parent.set(n, n); parent.set(find(l.a), find(l.b)); }
+      const comp = new Map();
+      for (const i of ids) { const r = find(base.links[i].a); if (!comp.has(r)) comp.set(r, []); comp.get(r).push(i); }
+      parts = [...comp.values()];
+    }
+    for (const part of parts) {
+      const ls = part.map((i) => base.links[i]);
+      const km = ls.reduce((s, l) => s + l.len, 0);
+      // 이름 없는 짧은 구간(3km 미만)은 사업으로 따로 두지 않고 OSM 개통 예정 연도에 저절로 연다
+      if (km < (key.startsWith('|') ? 3 : 0.5)) { for (const i of part) state.osm.auto[i] = true; continue; }
+      const l0 = ls[0];
+      const open = Math.max(...ls.map((l) => l.open));
+      const years = Math.max(1, open - state.year);
+      const kind = l0.mode === 2 ? 'metro' : /광역급행/.test(l0.name || '') ? 'gtx' : l0.cls;
+      const kp = ls.filter((l) => l.kp).length * 2 > ls.length;
+      const full = km * (ONGOING_PER_KM[kind] ?? 300) * (kp ? KP_COST_FACTOR : 1);
+      // 남은 공기만큼의 사업비 가운데 절반은 이미 확보된 계속비로 보고, 나머지 절반을 앞으로의 예산에서 낸다
+      const share = Math.min(1, years / (ONGOING_TOTAL_YEARS[l0.mode] || 5)) * ONGOING_UNFUNDED;
+      const name = cleanLineName(l0.name) || labelFor(l0);
+      projects.push({ id: crypto.randomUUID(), kind: 'osm', links: part, cost: Math.round(full * share), years,
+        label: `${name} (${km.toFixed(0)}km, 공사 중)`, mode: l0.mode });
+    }
+  }
+  for (const p of projects) startProject(state, p, { quiet: true });
+  state.log.unshift(`${state.year}년 진행 중인 사업 ${projects.length}건(OSM 공사 중 노선)을 이어받았습니다. 사업 탭에서 예산 투입 속도를 조절할 수 있습니다.`);
+}
+
+/** 사업 속도: 연 투입액을 기본의 pace배로. 빨리 하면 남은 사업비에 할증(초과 근무·동시 시공)이 붙는다 */
+export const PACES = [0.5, 0.75, 1, 1.5, 2];
+export function setProjectPace(state, id, pace) {
+  const p = state.projects.find((x) => x.id === id);
+  if (!p || p.status !== 'building') return;
+  p.baseAnnual ||= p.annual;
+  const old = p.pace || 1;
+  const remaining = p.cost - p.paid;
+  // 할증은 기본 속도보다 빠른 만큼만 (늦추면 할증을 되돌린다)
+  const premium = (x) => 0.1 * Math.max(0, x - 1);
+  const base = remaining / (1 + premium(old));
+  const newRemaining = Math.round(base * (1 + premium(pace)));
+  p.cost = p.paid + newRemaining;
+  p.pace = pace;
+  p.annual = Math.max(1, Math.round(p.baseAnnual * pace));
+  p.doneYear = state.year + Math.max(1, Math.ceil(newRemaining / p.annual));
 }
 
 // ------------------------------------------------------------ 철도 운영사 (코레일·KPRail)
@@ -192,7 +280,7 @@ export function mergeRail(state, name) {
 
 export { OP_FACTORS };
 
-export function startProject(state, p) {
+export function startProject(state, p, { quiet = false } = {}) {
   p.annual = Math.round(p.cost / p.years);
   p.paid = p.annual;
   p.startYear = state.year;
@@ -202,7 +290,7 @@ export function startProject(state, p) {
   payProject(state, p, p.annual);
   state.projects.push(p);
   const by = p.fund === 'gov' ? '' : ` · ${opName(state, fundOp(state, p.fund))} 자체 재원`;
-  state.log.unshift(`${state.year}년 착공: ${p.label} (${formatWon(p.cost)}, ${p.years}년${by})`);
+  if (!quiet) state.log.unshift(`${state.year}년 착공: ${p.label} (${formatWon(p.cost)}, ${p.years}년${by})`);
 }
 
 function pay(state, amount) {
@@ -407,7 +495,7 @@ export function startNewBuild(base, state, plan) {
   startProject(state, {
     id: crypto.randomUUID(), kind: 'new', type: plan.type, links: links.map((l) => l.id), extension: !!plan.extendOf,
     stations: spec.mode >= 1 ? nodeIds.filter((_, i) => plan.names[i]?.kind === 'station') : [],
-    cost: total, years: spec.years, label, fund,
+    cost: total, years: spec.years, label, fund, plan: plan.plan,
   });
   return { ok: true };
 }
@@ -510,8 +598,9 @@ export function advanceBudgetYear(base, state) {
       done.push(p);
       completeProject(base, state, p);
     } else {
-      payProject(state, p, p.annual);
-      p.paid += p.annual;
+      const amt = Math.min(p.annual, Math.max(0, p.cost - p.paid));
+      payProject(state, p, amt);
+      p.paid += amt;
     }
   }
   // 상환: 남은 예산의 일부로 빚을 갚는다
@@ -524,12 +613,12 @@ export function advanceBudgetYear(base, state) {
     state.happyBonus[k] *= 0.9;
     if (state.happyBonus[k] < 0.2) delete state.happyBonus[k];
   }
-  for (const p of done) state.log.unshift(`${state.year}년 완공: ${p.label}`);
-  // OSM의 공사 중 노선 개통
-  // OSM 이름에 붙은 "(2029예정)" 같은 공사 메모는 뗀다
-  const opened = new Set(base.links.filter((l) => l.open === state.year)
-    .map((l) => (l.name || '').replace(/\s*\([^)]*(예정|개통|공사|건설)[^)]*\)/g, '').trim() || '이름 없는 구간'));
-  for (const n of opened) state.log.unshift(`${state.year}년 개통: ${n}`);
+  for (const p of done) state.log.unshift(`${state.year}년 ${p.kind === 'osm' ? '개통' : '완공'}: ${p.label.replace(', 공사 중', '')}`);
+  // 예전 저장 게임(진행 중 사업 없음): OSM 개통 예정 연도에 저절로 연다
+  if (!state.osm) {
+    const opened = new Set(base.links.filter((l) => l.open === state.year).map((l) => cleanLineName(l.name) || '이름 없는 구간'));
+    for (const n of opened) state.log.unshift(`${state.year}년 개통: ${n}`);
+  }
   return done;
 }
 
@@ -539,7 +628,8 @@ function completeProject(base, state, p) {
     if (s) s.built = true;
     return;
   }
-  if (p.kind === 'vehicles') return;   // 계통 차량 추가 구입 (편성 수는 고칠 때 이미 바뀌었다)
+  if (p.kind === 'vehicles') return;
+  if (p.kind === 'osm') { for (const i of p.links) state.osm.opened[i] = true; return; }   // 계통 차량 추가 구입 (편성 수는 고칠 때 이미 바뀌었다)
   if (p.kind === 'airRoute') {
     state.air.routes[p.key] = { a: p.a, b: p.b, freq: AIR.manualFreq, origin: 'manual', low: 0 };
     state.air.banned = state.air.banned.filter((k) => k !== p.key);
