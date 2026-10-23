@@ -27,6 +27,10 @@ import { showLineDiagram, stopLineDiagram } from './ui/linediagram.js';
 import { trainBrand, autoBrand } from './game/trainnames.js';
 import { seedInterKoreaAir, airlinesHTML } from './game/airlines.js';
 import { develPlan, startDevel, settleDevels } from './game/devel.js';
+import { newlyUnlocked, unlockedTourKP, unlockAt } from './game/tourism.js';
+import { showNotice } from './ui/notice.js';
+import { addTrainsLayer, setTrainsProvider, invalidateTrains, setTrains, trainsLegend } from './ui/trainsmap.js';
+import { registerSentimentMetrics, initSubBase, subGains, zoneGains, nationalFactor, updateMayorApproval, pShare, subValue } from './game/sentiment.js';
 import { addPlansLayer, showPlanLine } from './ui/plansmap.js';
 import { addRailKindLayer, railKindLegend, railStd, syncRailKind } from './ui/railkind.js';
 import { P } from './sim/params.js';
@@ -38,6 +42,7 @@ import {
 import { initRail, operatorOf, opInfo, opBadge, OPERATORS, MERGE_MIN_INTEGRATION, EQUITY_STEP, FOREIGN_OPERATORS, foreignOpBadge } from './game/operators.js';
 
 const $ = (s) => document.querySelector(s);
+registerSentimentMetrics(METRICS);   // 득표율·지자체장 지지율·읍면동 행복도·지지율 지도
 const CLASS_LABEL = { motorway: '고속도로', trunk: '간선국도', primary: '주요 도로', secondary: '지방 도로', hsr: '고속철도', conv: '일반철도', metro: '도시철도' };
 const POLICY_LABEL = { free: '자유 이주', limited: '이주 제한 (허가제)', closed: '이주 통제' };
 
@@ -141,6 +146,8 @@ async function init() {
     addLayers(map, zonesFC, linksFC(), { type: 'FeatureCollection', features: [] });
     addRailKindLayer(map);
     addPlansLayer(map);
+    addTrainsLayer(map);
+    setTrainsProvider(trainsData);
     setNameResolver((level, id, original) => placeName(state, level, id, original));
     refreshNames(map);
     subsReady.then(() => map.getSource('subs').setData(subsFC));
@@ -156,19 +163,25 @@ async function init() {
   window.ukt = { map, base, select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
+let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
+
+/** 관광지가 놓인 존: 존 중심이 아니라 읍면동(소구역) 중심 중 가장 가까운 곳의 존 */
+function zoneOfSite(s) {
+  let best = -1, bd = Infinity;
+  zoneProps.forEach((z, i) => {
+    if (z.ext) return;
+    for (const [x, y] of z.subs) { const d = (x - s.lon) ** 2 + (y - s.lat) ** 2; if (d < bd) { bd = d; best = i; } }
+  });
+  return best;
+}
+
 /** 관광지를 가장 가까운 존(국외는 같은 이름의 거점)에 하루 방문객으로 붙인다 */
 function assignTourism(t) {
   if (!t) return;
+  tourSites = t.sites;
   for (const s of t.sites) {
     // 존 중심이 아니라 읍면동(소구역) 중심 중 가장 가까운 곳의 존 (안동 하회마을이 예천군으로 가지 않도록)
-    let best = -1, bd = Infinity;
-    zoneProps.forEach((z, i) => {
-      if (z.ext) return;
-      for (const [x, y] of z.subs) {
-        const d = (x - s.lon) ** 2 + (y - s.lat) ** 2;
-        if (d < bd) { bd = d; best = i; }
-      }
-    });
+    const best = zoneOfSite(s);
     const daily = (s.visitors * 1e6) / 365;
     const z = zoneProps[best];
     if (s.kp) z.tourKP = (z.tourKP || 0) + daily; else z.tour = (z.tour || 0) + daily;
@@ -288,6 +301,9 @@ function applyResult(res) {
   pendingStep = false;
   result = res;
   state.snapshot = res.snapshot;
+  invalidateTrains();
+  initSubBase(state, res.subs);
+  gains = subGains(state, res.subs);
 
   const { vc, vol } = res.links;
   for (let i = 0; i < vc.length; i++) {
@@ -302,7 +318,8 @@ function applyResult(res) {
   happiness = computeHappiness(res);
   if (stepped) {
     if (DIFFICULTY[state.difficulty].autoApprove) autoApprove();
-    updateApproval(state, requests, res.summary, prevSummary, roadCongestedKm(vc));
+    updateApproval(state, requests, res.summary, prevSummary, roadCongestedKm(vc), [nationalFactor(res.subs, gains)]);
+    updateMayorApproval(state, zoneGains(zoneProps, res.subs, gains));
     // 철도 운영사 한 해 결산
     settleRail(state, operatorEconomics());
     settleMega(state);
@@ -335,6 +352,7 @@ function applyResult(res) {
 }
 
 let pendingStep = false;
+let gains = null;   // 읍면동 체감 교통 개선 (시작 대비 점수)
 
 function nextYear() {
   if (busy || !result) return;
@@ -355,7 +373,15 @@ function nextYear() {
   const opened = done.some((p) => p.kind === 'new');   // 플레이어가 놓은 새 노선 (이어받은 공사는 해마다 열려서 뺀다)
   // 완공된 역세권 개발: 분양 수익과 인구 순유입
   const dev = settleDevels(state, done);
-  worker.postMessage({ type: 'step', net: effectiveNetwork(base, state), ctx: { ...ctx(), dev }, opened });
+  // 남북 통합도가 오르면 북측 관광지가 하나씩 열린다
+  for (const s of newlyUnlocked(state, tourSites)) {
+    const z = zoneOfSite(s);
+    state.log.unshift(`${state.year}년 관광지 해금: ${s.name} (남북 통합도 ${Math.round(unlockAt(s) * 100)}%)`);
+    showNotice(`관광지 해금: ${esc(s.name)}`, `남북 통합도가 ${Math.round(unlockAt(s) * 100)}%에 이르러 <b>${esc(s.name)}</b>(${esc(zoneName(z))}) 관광이 열렸습니다.
+      남측과 국외에서 관광객이 찾아오기 시작하고, 통합도가 오를수록 늘어납니다 (많을 때 연 ${s.visitors}백만 명).<br><span class="m">가는 철도·도로를 놓으면 관광 통행이 더 늘어납니다.</span>`);
+  }
+  const tourKP = unlockedTourKP(state, tourSites, zoneOfSite, zoneProps.length);
+  worker.postMessage({ type: 'step', net: effectiveNetwork(base, state), ctx: { ...ctx(), dev, tourKP }, opened });
 }
 
 function autoApprove() {
@@ -554,6 +580,7 @@ function smoothParts(l, i) {
 
 function refreshLinks() {
   map.getSource('links').setData(linksFC());
+  invalidateTrains();
   if (result) {
     const { vc, vol } = result.links;
     for (let i = 0; i < vc.length; i++) map.setFeatureState({ source: 'links', id: i }, { vc: vc[i], vol: vol[i] });
@@ -638,6 +665,7 @@ function paintZones() {
       let v;
       if (metric === 'subDensity') v = s.pop[i] / subArea(i);
       else if (metric === 'subChange') v = s.pop[i] / Math.max(subPop0[i], 1) - 1;
+      else if (['subHappy', 'subApproval', 'subGain'].includes(metric)) v = subMetric(metric, i);
       else v = s.transit[i];
       map.setFeatureState({ source: 'subs', id: i }, { color: colorFor(metric, v) });
     }
@@ -654,8 +682,18 @@ function paintZones() {
     else if (metric === 'happiness') v = happiness?.[i];
     else if (metric === 'partyMayor') v = partyValue(i, 'mayor');
     else if (metric === 'partyGov') v = partyValue(i, 'gov');
+    else if (metric === 'voteMayor') v = pShare(state.local.offices[`m:${i}`]);
+    else if (metric === 'voteGov') v = zoneProps[i].ext ? null : pShare(state.local.offices[`g:${regionOf(state, zoneProps[i])}`]);
+    else if (metric === 'mayorApproval') v = state.local.offices[`m:${i}`]?.approval ?? null;
     map.setFeatureState({ source: 'zones', id: i }, { color: sub ? null : colorFor(metric, v) });
   }
+}
+
+/** 읍면동 행복도·지지율·체감 개선 */
+function subMetric(metric, i) {
+  const [z] = subInfo(i);
+  if (zoneProps[z].ext) return null;
+  return subValue(metric, { zoneHappy: happiness?.[z], approval: state.approval, mayor: state.local.offices[`m:${z}`]?.approval, gain: gains?.[i] || 0 });
 }
 
 let subIndex = null;
@@ -1162,6 +1200,10 @@ function bindUI() {
   $('#legend').addEventListener('change', (e) => {
     if (e.target.id === 'metric') { metric = e.target.value; paintZones(); renderLegend(); }
     if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); syncRailKind(map); }
+    if (e.target.id === 'trains-toggle') {
+      if (e.target.checked && !confirm('지도에 열차 위치를 그리면 컴퓨터 부하가 커집니다 (화면에 보이는 열차를 1초에 5번 다시 그립니다). 느려지면 다시 끄세요. 켤까요?')) { e.target.checked = false; return; }
+      setTrains(map, e.target.checked);
+    }
   });
   document.addEventListener('keydown', (e) => {
     if (!draft || e.target.tagName === 'INPUT') return;
@@ -1257,7 +1299,7 @@ function renderTop() {
 }
 
 let layerView = 'all';
-function renderLegend() { $('#legend').innerHTML = legendHTML(metric, layerView) + railKindLegend(); }
+function renderLegend() { $('#legend').innerHTML = legendHTML(metric, layerView) + railKindLegend() + trainsLegend(); }
 
 function fmtPop(v) { return v >= 1e6 ? `${(v / 1e6).toFixed(2)}백만` : `${Math.round(v / 1000).toLocaleString()}천`; }
 function pct(v, d = 1) { return `${(v * 100).toFixed(d)}%`; }
@@ -3973,6 +4015,8 @@ function subPanel(i) {
       <tr><td>인구 밀도</td><td>${Math.round(s.pop[i] / subArea(i)).toLocaleString()}/km²</td></tr>
       <tr><td>대중교통 접근 (대기 포함)</td><td>${Math.round(s.transit[i])}분</td></tr>
       <tr><td>지역 간 철도역 접근 (대기 포함)</td><td>${s.rail[i] >= 120 ? '역 없음' : Math.round(s.rail[i]) + '분'}</td></tr>
+      <tr><td>교통 체감 개선 (시작 대비)</td><td class="${(gains?.[i] || 0) >= 0 ? 'pos' : 'neg'}">${(gains?.[i] || 0) >= 0 ? '+' : ''}${(gains?.[i] || 0).toFixed(1)}점</td></tr>
+      <tr><td>주민 행복도 · 지지율</td><td>${subMetric('subHappy', i)?.toFixed(0) ?? '–'} · ${Math.round(subMetric('subApproval', i) ?? 0)}%</td></tr>
     </table>
     <p class="hint">해마다 주민 일부가 같은 시군구 안에서 대중교통·철도 접근이 좋고 덜 붐비는 곳으로 옮겨 갑니다. 새 역을 놓으면 주변 인구가 늘어납니다.</p>`;
 }
@@ -4148,6 +4192,40 @@ function stationPanel(id, n) {
       <span class="m">${x.lines.map(esc).join(', ') || '노선 정보 없음'}</span></td><td>도보 ${Math.round(x.d * 1000)}m</td></tr>`).join('')}</table>`
       : lines.filter((l) => l.named).length > 1 ? '' : '<p class="hint">400m 안에 갈아탈 다른 역이 없습니다.</p>'}
     ${develHTML(id, n)}`;
+}
+
+/**
+ * 지도 열차 위치 자료: 기본 열차는 철도·도시철도 구간마다 (이용객만큼, 최소 운행 이상), 운행 계통은 계통 경로를 따라
+ */
+function trainsData() {
+  if (!result) return null;
+  const OP = OPERATING, vol = result.links.vol, nn = nodeNames();
+  const links = [];
+  allLinks().forEach((l0, i) => {
+    const l = linkAt(base, state, i);
+    if ((l.mode !== 1 && l.mode !== 2) || l.ext || state.replaced?.[i] || l.replaced || linkPending(base, state, i) || i >= vol.length) return;
+    if (i >= base.links.length && !l.built) return;
+    if (state.closedLines?.[l.name]) return;
+    const cls = l.mode === 2 ? 'metro' : l.cls === 'hsr' ? 'hsr' : 'conv';
+    const kp = l.kp && l.mode === 1 && !state.rail?.merged;
+    const f = state.lineFreq?.[l.name] || 1;
+    const trains = Math.min(300, Math.max(OP.minTrains[cls] * f * (kp ? OP_FACTORS.kpMinTrains : 1), vol[i] / (OP.paxPerTrain[cls] * OP.loadFactor)));
+    if (vol[i] < 1 && l.mode === 1) return;   // 여객이 없는 선로 (화물선 등)
+    const parts = smoothParts(l0, i);
+    const coords = parts.reduce((a, p) => (p.length > a.length ? p : a), []);
+    links.push({ coords, trains, speed: l.speed, cls, label: `${autoBrand(cls, operatorOf(state, l))} · ${l.name || CLASS_LABEL[l.cls]}` });
+  });
+  const net = effectiveNetwork(base, state);
+  const services = (state.services || []).filter((s) => s.built).map((s) => {
+    const coords = [];
+    for (const seg of s.segs) {
+      const c = pathCoords(net.links, seg.via, seg.a);
+      coords.push(...(coords.length ? c.slice(1) : c));
+    }
+    const brand = serviceBrand(s), a = nn.get(s.stops[0])?.name || '', b = nn.get(s.stops[s.stops.length - 1])?.name || '';
+    return { coords, runMin: s.runMin, trains: s.trains, kind: s.kind, down: `${a}발 ${b}행 ${brand} (${s.name})`, up: `${b}발 ${a}행 ${brand} (${s.name})` };
+  });
+  return { links, services };
 }
 
 /** 역이 놓인 존 (가장 가까운 읍면동 중심의 존) */

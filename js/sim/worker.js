@@ -67,6 +67,8 @@ self.onmessage = (ev) => {
       lastNet = msg.net;
       // 지난 1년의 교통 조건으로 경제·인구를 갱신한 뒤 새 해의 통행을 배정한다 (완공된 역세권 개발 인구를 먼저 옮긴다)
       if (msg.ctx.dev?.length) model.applyDevelopments(msg.ctx.dev);
+      // 열린 북측 관광지만 관광 수요를 끈다 (해금)
+      if (msg.ctx.tourKP?.length === model.tourKP.length) model.tourKP.set(msg.ctx.tourKP);
       model.advanceYear(msg.ctx.integration, msg.ctx.policy);
       // 새 노선이 개통한 해에는 지난해 교통량과 반씩 섞어 이용이 빨리 자리 잡게 한다
       results(model.assign(msg.ctx.integration, progress('통행배정'), true, msg.opened ? 1 : null));
