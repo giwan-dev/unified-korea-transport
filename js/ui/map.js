@@ -150,7 +150,11 @@ export async function createMap(container) {
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
   // 좁은 화면에서는 출처 상자를 ⓘ 단추로 접어 둔다 (눌러서 펼침)
   if (window.matchMedia('(max-width: 760px)').matches) {
-    map.once('load', () => map.getContainer().querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show'));
+    map.once('load', () => {
+      const a = map.getContainer().querySelector('.maplibregl-ctrl-attrib');
+      a?.classList.remove('maplibregl-compact-show');
+      a?.removeAttribute('open');
+    });
   }
   await new Promise((res) => map.on('load', res));
   enableUnits(map);
@@ -358,9 +362,9 @@ export function legendHTML(metric) {
       <div class="ends"><span>${m.fmt(m.stops[0])}</span><span>${m.fmt(m.stops[m.stops.length - 1])}</span></div>`;
   }
   return `<select id="metric">${opts}</select>${ramp}
-    <div style="margin-top:6px">도로 혼잡도 (V/C, 0~10)</div>
+    <div class="lg-more"><div style="margin-top:6px">도로 혼잡도 (V/C, 0~10)</div>
     <div class="ramp" style="background:linear-gradient(to right,${VC_STOPS.map(([v, c]) => `${c} ${v * 10}%`).join(',')})"></div>
     <div class="ticks">${[0, 1, 2, 4, 7, 10].map((v) => `<span style="left:${v * 10}%">${v}</span>`).join('')}</div>
     <div style="margin-top:6px"><span style="color:#2453c9">━</span> 고속철 <span style="color:#6c3fa0">━</span> 일반철도 <span style="color:#1a9a6c">━</span> 도시철도 (노선색)<br>
-      <span style="color:#b04a9c">●</span> 공항·항공 노선 <span style="color:#2b7bb9">┅</span> 여객선 <span style="color:#7a7f86">┅</span> 국경 연결<br>(굵기·크기 = 이용객)</div>`;
+      <span style="color:#b04a9c">●</span> 공항·항공 노선 <span style="color:#2b7bb9">┅</span> 여객선 <span style="color:#7a7f86">┅</span> 국경 연결<br>(굵기·크기 = 이용객)</div></div>`;
 }

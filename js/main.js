@@ -307,7 +307,7 @@ function applyResult(res) {
       year: state.year, krPop: res.summary.KR.pop, kpPop: res.summary.KP.pop,
       krHdi: res.summary.KR.hdi, kpHdi: res.summary.KP.hdi,
       krInc: res.summary.KR.income, kpInc: res.summary.KP.income,
-      kpToKr: res.summary.kpToKr, rail: res.totals.rail / res.totals.trips, congestedKm,
+      kpToKr: res.summary.kpToKr, rail: res.totals.rail / res.totals.trips, congestedKm, trips: res.totals.trips,
       air: res.totals.air / res.totals.trips, road: res.totals.road / res.totals.trips, transit: res.totals.transit / res.totals.trips,
       happyKR: avgHappiness().KR, happyKP: avgHappiness().KP, debt: state.debt, approval: state.approval,
     });
@@ -1073,6 +1073,7 @@ function bindUI() {
   $('#btn-next').onclick = nextYear;
   $('#btn-measure').onclick = () => (measure ? endMeasure() : startMeasure());
   document.querySelectorAll('#tabs button').forEach((b) => { b.onclick = () => switchTab(b.dataset.tab); });
+  watchFolds();
   $('#legend').addEventListener('change', (e) => {
     if (e.target.id === 'metric') { metric = e.target.value; paintZones(); renderLegend(); }
   });
@@ -1091,8 +1092,47 @@ function removeLastPoint() {
 }
 
 function switchTab(tab) {
+  // 선택 패널은 오른쪽 패널을 다 차지하므로, 탭을 누르면 닫고 그 탭을 보여 준다
+  if (!$('#selection').hidden) $('#selection .close')?.click();
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
   document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('on', p.dataset.panel === tab));
+}
+
+// ---- 접는 묶음: 패널의 소제목(h4, 설정은 h3)마다 그 아래 내용을 <details>로 묶는다. 펼침 상태는 이 브라우저에 남긴다
+const FOLD_KEY = 'ukt-folds';
+const FOLD_CLOSED = new Set(['settings:저장 슬롯', 'settings:새 게임', 'settings:데이터', 'status:추이', 'stats:관광', 'stats:추이']);
+let folds = {};
+try { folds = JSON.parse(localStorage.getItem(FOLD_KEY) || '{}'); } catch { folds = {}; }
+
+function foldSections(el, key, tag) {
+  if (el.hidden || el.querySelector(':scope > details.fold')) return;
+  const kids = [...el.children];
+  let box = null;
+  for (const c of kids) {
+    if (c.tagName === tag) {
+      const title = c.textContent.trim(), id = `${key}:${title.replace(/\s*\(.*$/, '')}`;
+      box = document.createElement('details');
+      box.className = 'fold';
+      box.open = folds[id] ?? !FOLD_CLOSED.has(id);
+      box.ontoggle = () => { folds[id] = box.open; try { localStorage.setItem(FOLD_KEY, JSON.stringify(folds)); } catch { /* 저장 못 해도 된다 */ } };
+      const sum = document.createElement('summary');
+      sum.innerHTML = c.innerHTML;
+      el.insertBefore(box, c);
+      box.appendChild(sum);
+      c.remove();
+    } else if (box) box.appendChild(c);
+  }
+}
+
+function watchFolds() {
+  const spots = [['[data-panel=status]', 'status', 'H4'], ['[data-panel=stats]', 'stats', 'H3'], ['[data-panel=settings]', 'settings', 'H3'],
+    ['[data-panel=projects]', 'projects', 'H3'], ['#selection', 'sel', 'H4']];
+  for (const [sel, key, tag] of spots) {
+    const el = $(sel);
+    const run = () => foldSections(el, key, tag);
+    new MutationObserver(run).observe(el, { childList: true, attributes: true, attributeFilter: ['hidden'] });
+    run();
+  }
 }
 
 function setBusy(on, label = '', v = 0) {
@@ -1130,8 +1170,23 @@ function renderStatus() {
   const h = state.history;
   const first = h[0];
   const cong = h[h.length - 1]?.congestedKm ?? 0;
+  // 요약 카드: 지난해 대비 변화
+  const prev = h.length > 1 ? h[h.length - 2] : null, last = h[h.length - 1];
+  const delta = (now, before, fmt, good = 1) => {
+    if (before == null || now == null || !Number.isFinite(now - before) || Math.abs(now - before) < 1e-9) return '';
+    const up = now > before;
+    return `<span class="${(up ? good : -good) > 0 ? 'pos' : 'neg'}">${up ? '▲' : '▼'} ${fmt(Math.abs(now - before))}</span>`;
+  };
+  const tiles = [
+    ['지역 간 통행', `${fmtPop(t.trips)}`, delta(t.trips, prev?.trips, fmtPop)],
+    ['철도·대중교통 분담', pct((t.rail + t.transit) / t.trips, 0), delta(last && last.rail + last.transit, prev && prev.rail + prev.transit, (v) => `${(v * 100).toFixed(1)}%p`)],
+    ['정체 도로', `${Math.round(cong).toLocaleString()}km`, delta(cong, prev?.congestedKm, (v) => `${Math.round(v)}km`, -1)],
+    ['남북 소득 격차', `${(s.KR.income / s.KP.income).toFixed(1)}배`, prev ? delta(last.krInc / last.kpInc, prev.krInc / prev.kpInc, (v) => `${v.toFixed(1)}`, -1) : ''],
+  ];
   el.innerHTML = `
     <h3>${state.year}년 현황</h3>
+    <div class="kpis">${tiles.map(([k, v, d]) => `<div><span class="k">${k}</span><span class="v">${v}</span>${d ? `<span class="d">${d}</span>` : ''}</div>`).join('')}</div>
+    <h4>인구·소득</h4>
     <table class="cmp">
       <tr><th></th><th>남</th><th>북</th><th>전체</th></tr>
       <tr><td>인구</td><td>${fmtPop(s.KR.pop)}</td><td>${fmtPop(s.KP.pop)}</td><td>${fmtPop(tot)}</td></tr>

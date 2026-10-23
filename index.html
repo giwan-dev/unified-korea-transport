@@ -6,12 +6,14 @@
   <title>통일 한반도 교통망</title>
   <meta name="description" content="통일 한반도의 고속도로·고속철도를 계획하고 수요와 인구 이동을 시뮬레이션하는 게임">
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <link rel="icon" href="assets/brand/mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
   <div id="loading" role="status" aria-live="polite">
     <div class="ld-card">
-      <div class="ld-title">통일 한반도 교통망</div>
+      <div class="ld-logo"><img src="assets/brand/mark.svg" alt="" width="56" height="56">
+        <div class="ld-title">통일 한반도 교통망<small>UNIFIED KOREA TRANSPORT</small></div></div>
       <p class="ld-sub">2026년, 남북이 오늘 통일되었습니다. 한정된 SOC 예산으로 고속도로·철도·도시철도를 놓고 국토를 다시 짜 보세요.</p>
       <ol class="ld-steps">
         <li data-stage="data"><span class="t">데이터 내려받기</span><span class="s">도로·철도·인구 격자</span><div class="bar"><div class="p"></div></div></li>
@@ -22,7 +24,7 @@
     </div>
   </div>
   <header id="topbar">
-    <div class="brand">통일 한반도 교통망</div>
+    <div class="brand"><img src="assets/brand/mark.svg" alt="" width="26" height="26">통일 한반도 교통망</div>
     <div class="stats">
       <div><span class="k">연도</span><span id="s-year" class="v">–</span></div>
       <div><span class="k">가용 예산</span><span id="s-budget" class="v">–</span></div>
@@ -30,7 +32,7 @@
       <div><span class="k">지지율</span><span id="s-approval" class="v">–</span></div>
       <div><span class="k">남북 통합도</span><span id="s-integration" class="v">–</span></div>
     </div>
-    <button id="btn-measure" title="두 지점을 눌러 수단별 소요 시간을 잽니다">⏱ 소요 시간</button>
+    <button id="btn-measure" title="두 지점을 눌러 수단별 소요 시간을 잽니다">⏱<span class="lbl"> 소요 시간</span></button>
     <button id="btn-next" class="primary" disabled>다음 해 ▶</button>
   </header>
 

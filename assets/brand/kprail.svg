@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 48" role="img" aria-label="KPRail">
+  <!-- KPRail: 북측 철도 공기업(게임 속 가상 회사). 진홍 바탕의 원형 엠블럼 안에 북쪽으로 뻗는 두 선로와 침목, 금색 띠는 대륙으로 이어지는 길 -->
+  <rect x="0" y="0" width="160" height="48" rx="8" fill="#8E1F2C"/>
+  <g transform="translate(24 24)">
+    <circle r="17" fill="#B3263A" stroke="#E9C46A" stroke-width="2"/>
+    <path d="M-6 13 L-2 -11 M6 13 L2 -11" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M-6.5 8 H6.5 M-5.3 2 H5.3 M-4.1 -4 H4.1" stroke="#fff" stroke-width="1.6" opacity=".9"/>
+    <path d="M-13 -9 A17 17 0 0 1 13 -9" fill="none" stroke="#E9C46A" stroke-width="3"/>
+  </g>
+  <text x="50" y="23" font-family="'Pretendard','Noto Sans KR','Malgun Gothic',sans-serif" font-size="17" font-weight="800" fill="#fff" letter-spacing=".5">KPRail</text>
+  <text x="50" y="38" font-family="'Pretendard','Noto Sans KR','Malgun Gothic',sans-serif" font-size="10" font-weight="600" fill="#E9C46A">북측 철도공사</text>
+</svg>

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="통일 한반도 교통망">
+  <!-- 심볼: 한반도의 등줄기를 따라 남북을 하나로 잇는 노선. 위(북)는 진홍, 아래(남)는 남색, 가운데 이음매에서 보라로 만난다 -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#C8323F"/>
+      <stop offset="0.5" stop-color="#6B3FA0"/>
+      <stop offset="1" stop-color="#1F4E99"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#F7F4EC"/>
+  <path d="M38 9 C 30 15, 41 21, 33 28 C 26 34, 37 40, 30 47 C 26 51, 29 55, 26 57"
+        fill="none" stroke="url(#g)" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="38" cy="9.5" r="4" fill="#fff" stroke="#C8323F" stroke-width="2.5"/>
+  <circle cx="33" cy="28" r="4" fill="#fff" stroke="#6B3FA0" stroke-width="2.5"/>
+  <circle cx="26" cy="56.5" r="4" fill="#fff" stroke="#1F4E99" stroke-width="2.5"/>
+  <path d="M14 34 H50" stroke="#6B3FA0" stroke-width="1.6" stroke-dasharray="3 3" opacity=".55"/>
+</svg>

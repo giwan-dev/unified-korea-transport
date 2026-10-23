@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>브랜드 가이드</title>
+  <link rel="icon" href="mark.svg">
+  <style>
+    :root { --ink: #1d232b; --muted: #6b7380; --line: #e2ddd1; --bg: #f7f4ec; --panel: #fff; }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ink: #e8eaed; --muted: #9aa3ad; --line: #2f353d; --bg: #15181c; --panel: #1d2127; } }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 'Pretendard', 'Noto Sans KR', 'Malgun Gothic', system-ui, sans-serif; }
+    main { max-width: 900px; margin: 0 auto; padding: 32px 16px 64px; }
+    h1 { font-size: 26px; margin: 0 0 4px; } h2 { font-size: 17px; margin: 32px 0 10px; }
+    .muted { color: var(--muted); }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+    .logo { display: flex; align-items: center; gap: 16px; }
+    .logo img { width: 72px; height: 72px; }
+    .word { font-size: 28px; font-weight: 800; letter-spacing: -.02em; }
+    .word small { display: block; font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .08em; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+    .sw { border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: var(--panel); }
+    .sw div:first-child { height: 64px; }
+    .sw div:last-child { padding: 8px 10px; font-size: 12px; }
+    .ops { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+    .ops img { width: 100%; max-width: 280px; display: block; }
+    ul { padding-left: 18px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>통일 한반도 교통망 · 브랜드 가이드</h1>
+  <p class="muted">게임 이름표, 색, 글꼴, 철도 운영사 표시(게임 속 디자인)를 정리합니다.</p>
+
+  <h2>로고</h2>
+  <div class="card logo">
+    <img src="mark.svg" alt="">
+    <div class="word">통일 한반도 교통망<small>UNIFIED KOREA TRANSPORT</small></div>
+  </div>
+  <ul>
+    <li>심볼: 한반도의 등줄기를 따라 남북을 하나로 잇는 노선. 북(진홍)과 남(남색)이 가운데 이음매(옛 군사분계선, 점선)에서 보라로 만납니다.</li>
+    <li>심볼만 쓸 때는 파비콘·앱 아이콘, 이름과 함께 쓸 때는 불러오기 화면·상단 바.</li>
+    <li>심볼 둘레에 심볼 높이의 1/4 이상 여백을 둡니다. 심볼을 늘이거나 색을 바꾸지 않습니다.</li>
+  </ul>
+
+  <h2>색</h2>
+  <div class="grid">
+    <div class="sw"><div style="background:#1F4E99"></div><div><b>남색</b> #1F4E99<br>남측·기본 강조</div></div>
+    <div class="sw"><div style="background:#C8323F"></div><div><b>진홍</b> #C8323F<br>북측</div></div>
+    <div class="sw"><div style="background:#6B3FA0"></div><div><b>통합 보라</b> #6B3FA0<br>남북 연결·통합</div></div>
+    <div class="sw"><div style="background:#E9C46A"></div><div><b>금색</b> #E9C46A<br>포인트·도시</div></div>
+    <div class="sw"><div style="background:#F7F4EC"></div><div><b>한지색</b> #F7F4EC<br>배경</div></div>
+    <div class="sw"><div style="background:#1D232B"></div><div><b>먹색</b> #1D232B<br>글자</div></div>
+  </div>
+  <p class="muted">지도 위 혼잡도(초록→노랑→주황→빨강→자주), 고속철·일반철도·도시철도 노선색은 정보 표시용이라 브랜드 색과 따로 씁니다.</p>
+
+  <h2>글꼴</h2>
+  <div class="card">
+    <div style="font-size:22px;font-weight:800">제목 · Pretendard 800</div>
+    <div style="font-size:15px">본문 · Pretendard 400 (없으면 Noto Sans KR, 맑은 고딕)</div>
+    <div style="font-size:13px;font-variant-numeric:tabular-nums">숫자 · 표에서는 고정폭 숫자 (12,345.6)</div>
+  </div>
+
+  <h2>철도 운영사 (게임 속 표시)</h2>
+  <div class="ops">
+    <div class="card"><img src="korail.svg" alt="KORAIL"><p class="muted">남측 철도. 실제 회사 로고를 쓰지 않고 같은 체계로 그린 게임 표시입니다. 남색 바탕, 하늘색 선.</p></div>
+    <div class="card"><img src="kprail.svg" alt="KPRail"><p class="muted">KPRail: 북측 철도를 맡는 게임 속 공기업. 진홍 바탕의 원형 엠블럼 안에 북쪽으로 뻗는 선로와 침목, 대륙으로 이어지는 금색 띠.</p></div>
+    <div class="card"><img src="merged.svg" alt="통합 철도공사"><p class="muted">두 회사가 합병하면 쓰는 통합 공사 표시. 남(하늘색)·북(분홍) 선로가 한 원 안에서 만납니다. 이름은 플레이어가 정합니다.</p></div>
+  </div>
+</main>
+</body>
+</html>

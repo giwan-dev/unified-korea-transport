@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 48" role="img" aria-label="통합 철도공사">
+  <!-- 합병 뒤 통합 철도공사: 남(남색)·북(진홍) 엠블럼의 선로가 한 원 안에서 만난다 -->
+  <rect x="0" y="0" width="160" height="48" rx="8" fill="#4B2A78"/>
+  <g transform="translate(24 24)">
+    <circle r="17" fill="#6B3FA0" stroke="#E9C46A" stroke-width="2"/>
+    <path d="M-12 7 C -4 7, -2 -2, 0 -12" fill="none" stroke="#9CC3F5" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M12 7 C 4 7, 2 -2, 0 -12" fill="none" stroke="#F2A0A8" stroke-width="2.6" stroke-linecap="round"/>
+    <circle cy="-12" r="2.4" fill="#E9C46A"/>
+  </g>
+  <text x="50" y="23" font-family="'Pretendard','Noto Sans KR','Malgun Gothic',sans-serif" font-size="15" font-weight="800" fill="#fff">통합 철도공사</text>
+  <text x="50" y="38" font-family="'Pretendard','Noto Sans KR','Malgun Gothic',sans-serif" font-size="10" font-weight="600" fill="#E9C46A">K-RAIL · 남북 철도</text>
+</svg>

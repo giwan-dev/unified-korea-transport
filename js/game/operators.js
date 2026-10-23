@@ -2,9 +2,9 @@
 // 배지·색은 게임에서 만든 것이며 실제 회사의 상표가 아니다.
 
 export const OPERATORS = {
-  korail: { name: '코레일', en: 'KORAIL', color: '#1f5fbf' },
-  kprail: { name: 'KPRail', en: 'KPRail', color: '#b3263a' },
-  merged: { name: '통합 철도공사', en: 'K-RAIL', color: '#6b3fa0' },
+  korail: { name: '코레일', en: 'KORAIL', color: '#163E7A', logo: 'assets/brand/korail.svg' },
+  kprail: { name: 'KPRail', en: 'KPRail', color: '#8E1F2C', logo: 'assets/brand/kprail.svg' },
+  merged: { name: '통합 철도공사', en: 'K-RAIL', color: '#4B2A78', logo: 'assets/brand/merged.svg' },
 };
 
 /** 운영사별 운임·비용 보정: 북측은 운임이 낮고(통합도만큼 오른다), 인건비·전력비도 낮다 */
