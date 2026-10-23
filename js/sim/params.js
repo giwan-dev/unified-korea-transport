@@ -90,6 +90,8 @@ export const P = {
   airTerminalMin: 50,         // 수속·보안검색
   airAccessSpeedKmh: 50,
   airAccessMaxKm: 150,
+  airportRailKm: 2,           // 공항에서 이만큼 안의 역은 공항역 (철도로 공항에 갈 수 있다)
+  airRailWalkMin: 8,          // 공항역 → 터미널
   airBaseFare: 45000,         // 원
   airFarePerKm: 90,
   airIntlFareFactor: 1.6,
