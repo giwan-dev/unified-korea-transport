@@ -21,8 +21,8 @@ import build_data  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data" / "base" / "roads"
-CLS = {"motorway": 0, "motorway_link": 0, "trunk": 1, "trunk_link": 1, "primary": 2, "primary_link": 2,
-       "secondary": 3, "secondary_link": 3, "tertiary": 4, "tertiary_link": 4}
+# 연결로(*_link)는 그리지 않는다: IC·JCT는 접속점으로 단순화해 보여 준다
+CLS = {"motorway": 0, "trunk": 1, "primary": 2, "secondary": 3, "tertiary": 4}
 DETAIL_MINZOOM = 12
 
 

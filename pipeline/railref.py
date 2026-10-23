@@ -16,6 +16,7 @@ from pathlib import Path
 
 NS = {"k": "http://www.opengis.net/kml/2.2"}
 OPEN = ("영업중", "개업예정")
+URBAN = ("도시철도", "궤도선")
 # 영업시설 폴더에는 여객역 말고도 기계실·분기점·관측소 같은 시설이 섞여 있다
 OPERATOR = re.compile(r"(철도성|공사$|주식회사|철도국|기업소|관리국|사업소|운수)")
 NOT_STATION = re.compile(r"(기계실|분기|기상|관측|시험\d*$|신호장|신호소|조차장|기지|사업소|기관차|변전|연결선|차량|공장|기업소|창$|발전소)")
@@ -74,7 +75,7 @@ def load(raw: Path):
         return None
     with zipfile.ZipFile(kmz) as z:
         root = ET.fromstring(z.read("doc.kml"))
-    stations, paths = {}, []
+    stations, paths, closed = {}, [], []
 
     def walk(el, path):
         for ch in el:
@@ -87,7 +88,9 @@ def load(raw: Path):
                     continue
                 pts = [tuple(map(float, p.split(",")[:2])) for p in coords.text.split()]
                 name = ch.findtext("k:name", default="", namespaces=NS)
-                if len(path) > 5 and path[1] == "Path" and path[4] == "영업":
+                if len(path) > 5 and path[1] == "Path" and path[4] == "폐지" and path[5] not in URBAN:
+                    closed.append(pts)
+                elif len(path) > 5 and path[1] == "Path" and path[4] in ("영업", "미래"):
                     # Path/ASIA/<나라>/영업/<구분>/<운영사>/<노선>. 운영사 폴더 바로 밑의 선은 그 이름이 노선 이름이다 (북측 전용선)
                     line = path[-1]
                     if OPERATOR.search(line):
@@ -108,10 +111,7 @@ def load(raw: Path):
                         stations[key] = [norm_station(name), lines, pts[0][0], pts[0][1], path[3]]
     walk(root, [])
     out = [(n, {norm_line(x) for x in ls}, lon, lat, st) for n, ls, lon, lat, st in stations.values()]
-    return {"stations": out, "paths": [(norm_line(n), c, p, k) for n, c, p, k in paths], "file": kmz.name}
-
-
-URBAN = ("도시철도", "궤도선")
+    return {"stations": out, "paths": [(norm_line(n), c, p, k) for n, c, p, k in paths], "closed": closed, "file": kmz.name}
 
 
 def mainline_paths(ref):

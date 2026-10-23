@@ -358,6 +358,9 @@ class NetHandler:
             self.stations.append((ko_name(t), loc.lon, loc.lat))
         elif t.get("highway") == "motorway_junction" and ko_name(t):
             self.junctions.append((ko_name(t), loc.lon, loc.lat))
+        elif t.get("highway") in ("services", "rest_area") and ko_name(t):
+            # 고속도로 휴게소도 구간 경계로 둔다 (IC–휴게소)
+            self.junctions.append((ko_name(t), loc.lon, loc.lat))
         p = t.get("place")
         if p in ("city", "town", "village", "suburb") and ko_name(t):
             self.places.append((ko_name(t), p, round(loc.lon, 4), round(loc.lat, 4)))
@@ -365,6 +368,13 @@ class NetHandler:
     def way(self, w):
         t = w.tags
         hw = t.get("highway")
+        if hw in ("services", "rest_area") and ko_name(t):
+            try:
+                nd = w.nodes[0]
+                self.junctions.append((ko_name(t), nd.lon, nd.lat))
+            except (osmium.InvalidLocationError, IndexError):
+                pass
+            return
         rw = t.get("railway")
         # 공사 중 노선은 원래 등급으로 읽고 개통 연도를 붙인다 (게임에서 그해에 자동 개통)
         opening = 0
@@ -585,6 +595,7 @@ def build_network(zones):
     edges = {k: e for k, e in edges.items() if inside(k[1]) or inside(k[2])}
     log("cell edges inside zones", len(edges))
     edges = merge_dual_carriageways(edges, modepts, junction)
+    edges = collapse_ramps(edges, modepts, [j for h in handlers.values() for j in h.junctions])
     edges = merge_parallel_rail(edges, modepts, junction)
     edges = merge_parallel_metro(edges, modepts, junction)
 
@@ -602,6 +613,7 @@ def build_network(zones):
                 rail_names[k[1]].add(railref.norm_line(nm)); rail_names[k[2]].add(railref.norm_line(nm))
     ref = railref.load(RAW)
     # 칸마다 철도 DB 선로의 노선 이름도 붙인다: DB와 OSM이 같은 선로를 다르게 부르는 곳(북측 평부선 = DB 경의선)에서도 역을 그 선로에 붙이도록
+    db_names = defaultdict(set)    # 칸 → 철도 DB 선로 이름 (OSM 이름으로 못 찾을 때만 쓴다)
     if ref:
         from scipy.spatial import cKDTree
         pts, pnames = [], []
@@ -615,9 +627,10 @@ def build_network(zones):
         for c in list(rail_names):
             cp = modepts.get(("r", c)) or cellpts[c]
             for i in ptree.query_ball_point([cp[0] / cp[2] * 0.8, cp[1] / cp[2]], 0.003):
-                rail_names[c].add(pnames[i])
+                db_names[c].add(pnames[i])
+    both_names = defaultdict(set, {c: rail_names.get(c, set()) | db_names.get(c, set()) for c in set(rail_names) | set(db_names)})
     ref_lines = _ref_station_lines(ref)
-    known_lines = {railref.norm_line(n) for v in rail_names.values() for n in v} \
+    known_lines = {railref.norm_line(n) for v in both_names.values() for n in v} \
         | {railref.norm_line(k[3].split("@")[0]) for k in edges if k[0] == "metro"}
     canon = _ref_canon(ref)
     # 철도역: 선로 웨이에 찍힌 역은 그 칸에 바로 붙이고, 선로 옆에 따로 찍힌 역만 가까운 선로에 붙인다
@@ -645,7 +658,10 @@ def build_network(zones):
             c = hit[0]
         else:
             # DB가 아는 역은 그 노선 선로에만 (없으면 도시철도역일 뿐이므로 철도역으로 두지 않는다: 경복궁·광화문 밑을 지나는 GTX)
+            # OSM 노선 이름으로 먼저 찾고, 없으면 DB 선로 이름까지 넣어 찾는다 (나란한 다른 노선 칸에 DB 이름이 섞여 잘못 붙지 않게)
             c = _snap_rail(st[1], st[2], rail_cls, rail_names=rail_names, allowed=allowed, strict=bool(allowed))
+            if c is None and allowed:
+                c = _snap_rail(st[1], st[2], rail_cls, rail_names=both_names, allowed=allowed, strict=True)
             # DB의 노선 이름이 철도에도 도시철도에도 없으면(DB가 옛 이름: 원시의 '소사원시선') 가까운 선로에 붙인다.
             # 도시철도 노선 이름이면(경복궁의 3호선) 그 밑을 지나는 다른 철도에는 붙이지 않는다
             if c is None and allowed and not (allowed & known_lines):
@@ -659,29 +675,11 @@ def build_network(zones):
             station_pt[c] = (st[1], st[2])
         station_lines[c] |= _station_lines(lines_at[c], allowed, hit[1] if hit and hit[0] == c else None, rail_cls)
         station_allowed.append((st[0], c, allowed))
-    added = _ref_missing_stations(ref, stations, cellpts, rail_cls, rail_names)
+    added = _ref_missing_stations(ref, stations, cellpts, rail_cls, rail_names, both_names)
     for name, c, lines in added:
         station_lines[c] |= _station_lines(lines_at[c], lines, None, rail_cls)
         station_allowed.append((name, c, lines))
     stations += [(n, c) for n, c, _ in added]
-    # 한 역의 다른 노선 승강장이 이웃 칸에 있으면(오송: 충북선·경부고속선) 그 노선에도 같은 이름의 역을 둔다 (약 500m 안)
-    extra = []
-    for name, c, allowed in station_allowed:
-        if not allowed:
-            continue
-        have = {railref.norm_line(ln) for ln in station_lines[c]}
-        for want in allowed - have:
-            best, bd = None, 99
-            for dx in range(-5, 6):
-                for dy in range(-5, 6):
-                    c2 = (c[0] + dx, c[1] + dy)
-                    if c2 != c and any(railref.norm_line(ln) == want for ln in lines_at.get(c2, ())) and dx * dx + dy * dy < bd:
-                        best, bd = c2, dx * dx + dy * dy
-            if best is not None:
-                station_lines[best] |= {ln for ln in lines_at[best] if railref.norm_line(ln) == want}
-                extra.append((name, best, c))
-    stations += [(n, c2) for n, c2, _ in extra]
-    log("stations attached to other lines nearby", len(extra))
     stations = merge_station_names(stations, {s[0] for s in ref["stations"]} if ref else set())
     junctions = dedupe_junctions(_snap_points([j for h in handlers.values() for j in h.junctions], road_cells, 1), edges)
     metro_stations = _snap_points([s for h in handlers.values() for s in h.metro_stations], metro_cells, 1)
@@ -702,9 +700,28 @@ def build_network(zones):
             if on_rail or (not known and c not in metro_cells):
                 shared.append((nm, c))
                 station_lines[c] |= on_rail or lines_at[c]
+                station_allowed.append((nm, c, known))
                 rail_station_cells.add(c)
     stations += shared
     log("metro-tagged stations on main-line tracks", len(shared))
+    # 한 역의 다른 노선 승강장이 이웃 칸에 있으면(오송: 충북선·경부고속선) 그 노선에도 같은 이름의 역을 둔다 (약 500m 안)
+    extra = []
+    for name, c, allowed in station_allowed:
+        if not allowed:
+            continue
+        have = {railref.norm_line(ln) for ln in station_lines[c]}
+        for want in allowed - have:
+            best, bd = None, 99
+            for dx in range(-5, 6):
+                for dy in range(-5, 6):
+                    c2 = (c[0] + dx, c[1] + dy)
+                    if c2 != c and any(railref.norm_line(ln) == want for ln in lines_at.get(c2, ())) and dx * dx + dy * dy < bd:
+                        best, bd = c2, dx * dx + dy * dy
+            if best is not None:
+                station_lines[best] |= {ln for ln in lines_at[best] if railref.norm_line(ln) == want}
+                extra.append((name, best, c))
+    stations += [(n, c2) for n, c2, _ in extra]
+    log("stations attached to other lines nearby", len(extra))
     # 단순화 때 남길 칸은 수단마다 따로: 도로 접근점·IC가 철도를 끊거나 역이 도로를 끊지 않게
     # 도시철도도 노선마다 노드를 따로: 같은 칸을 지나는 다른 노선끼리 서로 끊지 않게 (역에서만 환승으로 묶는다)
     mlines_at = defaultdict(set)
@@ -761,8 +778,9 @@ def build_network(zones):
         munion(c, mlines_at[c])
 
     # 존 접근 셀: 인구중심에서 가장 가까운 도로 셀(간선 우선)과 철도 셀
-    road_major = {k[1] for k, e in edges.items() if k[0] == "road" and e["cls"] != "secondary"} | \
-                 {k[2] for k, e in edges.items() if k[0] == "road" and e["cls"] != "secondary"}
+    # 존 접근점은 일반 간선에만 둔다: 고속도로 위에 두면 고속도로가 IC가 아닌 곳에서 끊긴다
+    road_major = {k[1] for k, e in edges.items() if k[0] == "road" and e["cls"] not in ("secondary", "motorway")} | \
+                 {k[2] for k, e in edges.items() if k[0] == "road" and e["cls"] not in ("secondary", "motorway")}
     for z in zones:
         z["road_cell"] = _nearest_cell((z["cx"], z["cy"]), road_major)
         keep.add(("road", z["road_cell"]))
@@ -810,7 +828,8 @@ def build_network(zones):
                 speed *= 0.6
             out_links.append({"mode": 0, "cls": e["cls"], "a": a, "b": b, "len": round(length, 2),
                               "lanes": lanes, "speed": round(speed), "paved": int(e["paved"]),
-                              "name": name, "kp": int(country == "KP"), "geom": geom, "open": e.get("opening", 0)})
+                              "name": name, "kp": int(country == "KP"), "geom": geom, "open": e.get("opening", 0),
+                              "ramp": int(e["ramp_only"])})
         elif metro:
             out_links.append({"mode": 2, "cls": "metro", "a": a, "b": b, "len": round(length, 2),
                               "tracks": 2, "speed": 35, "power": "AC",
@@ -884,6 +903,12 @@ def build_network(zones):
             if k not in seen:
                 seen.add(k)
                 places.append(p)
+    out_links = final_cleanup(nodes, out_links, out_stations, out_metro, out_junctions, {z["road_node"] for z in zones})
+    import audit
+    summary = audit.audit(nodes, out_links, out_stations, out_metro, out_junctions, OUT / "audit.json",
+                          extra_stops={z["road_node"] for z in zones})
+    for m, d in summary.items():
+        log("audit", m, " ".join(f"{k}={v}" for k, v in d.items()))
     return {"nodes": nodes, "links": out_links, "stations": out_stations,
             "metro_stations": out_metro, "junctions": out_junctions}, places
 
@@ -911,6 +936,18 @@ def line_geom(line, pa, pb, tol=0.00006):
     if len(pts) == 1 and sharp(pa, pts[0], pb):
         pts = []
     out = [tuple(pa)] + pts + [tuple(pb)]
+    # 선 중간의 톱니(110°보다 날카로운 꺾임) 점을 뺀다: 왕복 차도·복선을 합친 곳에서 칸마다 다른 쪽 선 점을 써 생긴다
+    changed = True
+    while changed and len(out) > 2:
+        changed = False
+        for k in range(1, len(out) - 1):
+            a, b, c = out[k - 1], out[k], out[k + 1]
+            v1 = ((b[0] - a[0]) * 0.8, b[1] - a[1]); v2 = ((c[0] - b[0]) * 0.8, c[1] - b[1])
+            n = math.hypot(*v1) * math.hypot(*v2)
+            if n > 0 and (v1[0] * v2[0] + v1[1] * v2[1]) / n < -0.34:
+                del out[k]
+                changed = True
+                break
     return [round(v, 5) for xy in out for v in xy]
 
 
@@ -929,13 +966,13 @@ def draw_geom(pieces, tol=0.00015):
     return out
 
 
-def prune_rail_stubs(links, station_nodes, max_km=3.0):
+def prune_rail_stubs(links, station_nodes, max_km=3.0, mode=1):
     """역 없이 끝나는 짧은 철도 곁가지(공장·탄광 전용선, 측선)를 뺀다. 여객이 없고 지도에는 이상한 돌기로만 보인다.
     끝에서부터 역이나 갈림길을 만날 때까지 거슬러 올라가며, 그 길이가 max_km 안이면 통째로 뺀다."""
     deg = defaultdict(int)
     at = defaultdict(list)
     for i, l in enumerate(links):
-        if l["mode"] == 1:
+        if l["mode"] == mode:
             deg[l["a"]] += 1; deg[l["b"]] += 1
             at[l["a"]].append(i); at[l["b"]].append(i)
     drop = set()
@@ -955,8 +992,259 @@ def prune_rail_stubs(links, station_nodes, max_km=3.0):
                 break
         if path and km <= max_km and (deg[node] >= 3 or node in station_nodes):
             drop.update(path)
-    log("rail stubs pruned", len(drop))
+    log("stubs pruned", MODE_NAMES[mode], len(drop))
     return [l for i, l in enumerate(links) if i not in drop]
+
+
+MODE_NAMES = {0: "road", 1: "rail", 2: "metro"}
+
+
+def final_cleanup(nodes, links, stations, metro_stations, junctions, zone_nodes):
+    """마지막 정리 (검수에서 찾은 유형별):
+    1) 철도 DB에 폐선으로만 나오는 선로 삭제 (만포청년–차가평, 함백 등)
+    2) 도시철도 곁가지(기지선) 삭제
+    3) 역이 2개 안 되는 10km 미만 철도·도시철도 덩어리 삭제 (측선·레일바이크·공장선)
+    4) 역·IC·존 접근점이 아닌 곳에서 끊긴 같은 노선 링크를 다시 이어 붙임 (구간이 역–역, IC–IC가 되게)"""
+    keep_first = {n for _, n in stations} | {n for _, n in metro_stations} | {n for _, n in junctions} | set(zone_nodes)
+    nmap = collapse_close_nodes(nodes, links, keep_first)
+    for lst in (stations, metro_stations, junctions):
+        for item in lst:
+            item[1] = nmap.get(item[1], item[1])
+    zone_nodes.clear(); zone_nodes.update(nmap.get(n, n) for n in list(zone_nodes))
+    st = {n for _, n in stations}
+    mst = {n for _, n in metro_stations}
+    links = drop_parallel_duplicates(links)   # 틈 잇기·환승 선로가 기존 링크와 겹친 곳
+    links = drop_closed_rail(links)
+    links = prune_rail_stubs(links, mst, mode=2)
+    links = drop_small_islands(links, {1: st, 2: mst})
+    links = prune_line_meshes(links)
+    # 그물을 걷어낸 뒤 남은 짧은 꼬리(엇갈린 선로의 끝)도 뺀다
+    links = prune_rail_stubs(links, st, mode=1)
+    links = prune_rail_stubs(links, mst, mode=2)
+    protect = {0: {n for _, n in junctions} | zone_nodes, 1: st, 2: mst}
+    links = remerge_chains(links, protect)
+    for l in links:
+        l["geom"] = clean_geom(l["geom"])
+    return links
+
+
+def clean_geom(flat):
+    """마지막 도형 다듬기: 선 중간에서 110°보다 날카롭게 되돌아가는 점과, 끝 노드에서 되돌아가는 첫·끝 점을 뺀다
+    (링크를 잇거나 노드를 옮긴 뒤에 새로 생긴 톱니·돌기)"""
+    pts = [(flat[k], flat[k + 1]) for k in range(0, len(flat) - 1, 2)]
+    if len(pts) < 3 or any(p[0] != p[0] for p in pts):
+        return flat
+
+    def back(a, b, c):
+        v1 = ((b[0] - a[0]) * 0.8, b[1] - a[1]); v2 = ((c[0] - b[0]) * 0.8, c[1] - b[1])
+        n = math.hypot(*v1) * math.hypot(*v2)
+        return n > 0 and (v1[0] * v2[0] + v1[1] * v2[1]) / n < -0.34
+    changed = True
+    while changed and len(pts) > 2:
+        changed = False
+        for k in range(1, len(pts) - 1):
+            if back(pts[k - 1], pts[k], pts[k + 1]):
+                del pts[k]
+                changed = True
+                break
+    return [round(v, 5) for xy in pts for v in xy]
+
+
+def collapse_close_nodes(nodes, links, keep_first, dist_km=0.07, max_extent_km=0.11):
+    """같은 수단에서 70m 안으로 가까운 노드를 하나로 모은다 (묶음 크기 약 110m까지).
+    복복선이 칸을 오가며 서로 엇갈려 생긴 그물(경부선 대방–노량진)이나 도심 왕복 차도의 짧은 고리를 없앤다.
+    역·IC·존 접근점 노드를 대표로 남긴다. 링크의 a·b와 도형 끝을 대표 노드로 옮기고, 바뀐 노드 번호를 돌려준다."""
+    from scipy.spatial import cKDTree
+    nmap = {}
+    for mode in (0, 1, 2):
+        ids = sorted({n for l in links if l["mode"] == mode and not l.get("ext") for n in (l["a"], l["b"])})
+        if not ids:
+            continue
+        pts = np.array([[nodes[n][0] * 88.0, nodes[n][1] * 111.0] for n in ids])
+        parent = list(range(len(ids)))
+        box = {i: (pts[i][0], pts[i][1], pts[i][0], pts[i][1]) for i in range(len(ids))}
+
+        def find(i):
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+        for d, i, j in sorted((float(np.hypot(*(pts[i] - pts[j]))), i, j) for i, j in cKDTree(pts).query_pairs(dist_km)):
+            ri, rj = find(i), find(j)
+            if ri == rj:
+                continue
+            a, b = box[ri], box[rj]
+            nb = (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+            if max(nb[2] - nb[0], nb[3] - nb[1]) > max_extent_km:
+                continue
+            # 지킬 노드(역·IC)가 대표가 되게
+            if ids[rj] in keep_first and ids[ri] not in keep_first:
+                ri, rj = rj, ri
+            if ids[ri] in keep_first and ids[rj] in keep_first:
+                continue   # 서로 다른 두 역·IC는 합치지 않는다
+            parent[rj] = ri
+            box[ri] = nb
+        for i, n in enumerate(ids):
+            r = ids[find(i)]
+            if r != n:
+                nmap[n] = r
+    for l in links:
+        a, b = nmap.get(l["a"], l["a"]), nmap.get(l["b"], l["b"])
+        if (a, b) != (l["a"], l["b"]):
+            g = l["geom"]
+            l["geom"] = list(nodes[a]) + g[2:-2] + list(nodes[b]) if len(g) >= 4 else list(nodes[a]) + list(nodes[b])
+            l["a"], l["b"] = a, b
+    log("close nodes collapsed", len(nmap))
+    return nmap
+
+
+def prune_line_meshes(links, slack=1.5, extra_km=0.3, max_km=3.0):
+    """같은 노선 안에서 거의 나란한 다른 길이 있는 링크를 뺀다 (복복선·왕복 차도가 엇갈려 생긴 그물).
+    긴 링크부터 보며, 같은 이름·수단 링크만으로 양 끝을 잇는 다른 길이 이 링크 길이×1.5+300m 안이면 뺀다."""
+    import heapq
+    by_line = defaultdict(list)
+    for i, l in enumerate(links):
+        if l["name"] and not l.get("ext") and not l["name"].endswith(" 환승") and l["len"] <= max_km:
+            by_line[(l["mode"], l["name"], l.get("open", 0))].append(i)
+    alive = [True] * len(links)
+    removed = 0
+    for key, ids in by_line.items():
+        if len(ids) < 3:
+            continue
+        adj = defaultdict(list)
+        for i in ids:
+            l = links[i]
+            adj[l["a"]].append((l["b"], i)); adj[l["b"]].append((l["a"], i))
+        for i in sorted(ids, key=lambda i: -links[i]["len"]):
+            l = links[i]
+            limit = l["len"] * slack + extra_km
+            dist = {l["a"]: 0.0}
+            pq = [(0.0, l["a"])]
+            found = False
+            while pq:
+                d, u = heapq.heappop(pq)
+                if u == l["b"]:
+                    found = True
+                    break
+                if d > dist.get(u, 1e9) or d > limit:
+                    continue
+                for v, j in adj[u]:
+                    if j == i or not alive[j]:
+                        continue
+                    nd = d + links[j]["len"]
+                    if nd <= limit and nd < dist.get(v, 1e9):
+                        dist[v] = nd
+                        heapq.heappush(pq, (nd, v))
+            if found:
+                alive[i] = False
+                removed += 1
+    log("mesh links pruned", removed)
+    return [l for i, l in enumerate(links) if alive[i]]
+
+
+def drop_closed_rail(links):
+    """철도 DB에서 폐선으로만 나오는 선로(근처 300m 안에 폐선, 600m 안에 운영·계획 노선 없음)를 뺀다"""
+    ref = railref.load(RAW)
+    if not ref or not ref.get("closed"):
+        return links
+    from scipy.spatial import cKDTree
+
+    def tree(paths):
+        pts = []
+        for line in paths:
+            for i, q in enumerate(line):
+                pts.append([q[0] * 0.8, q[1]])
+                if i:
+                    r0 = line[i - 1]
+                    pts.append([(q[0] + r0[0]) * 0.4, (q[1] + r0[1]) / 2])
+        return cKDTree(np.array(pts))
+    closed = tree(ref["closed"])
+    open_ = tree([p for _, _, p in railref.mainline_paths(ref)])
+    drop = set()
+    for i, l in enumerate(links):
+        if l["mode"] != 1 or l.get("open") or l.get("ext") or l["len"] > 30 or l["name"].endswith(" 환승"):
+            continue
+        g = l["geom"]
+        samples = [(g[k], g[k + 1]) for k in range(0, len(g) - 1, 2)][1:-1] or [(g[0], g[1])]
+        samples = samples[:: max(1, len(samples) // 5)]
+        if all(closed.query([x * 0.8, y])[0] < 0.003 and open_.query([x * 0.8, y])[0] > 0.006 for x, y in samples):
+            drop.add(i)
+    log("closed (abandoned) rail links dropped", len(drop))
+    return [l for i, l in enumerate(links) if i not in drop]
+
+
+def drop_small_islands(links, stops, min_stations=2, min_km=10):
+    """본선과 떨어진 작은 철도·도시철도 덩어리(역 2개 미만, 10km 미만)를 뺀다"""
+    drop = set()
+    for mode in (1, 2):
+        adj = defaultdict(list)
+        for i, l in enumerate(links):
+            if l["mode"] == mode and not l.get("ext"):
+                adj[l["a"]].append(i); adj[l["b"]].append(i)
+        seen = set()
+        for s0 in list(adj):
+            if s0 in seen:
+                continue
+            nodes_c, ids, stack = [], set(), [s0]
+            seen.add(s0)
+            while stack:
+                u = stack.pop(); nodes_c.append(u)
+                for i in adj[u]:
+                    ids.add(i)
+                    v = links[i]["b"] if links[i]["a"] == u else links[i]["a"]
+                    if v not in seen:
+                        seen.add(v); stack.append(v)
+            km = sum(links[i]["len"] for i in ids)
+            if sum(1 for u in nodes_c if u in stops[mode]) < min_stations and km < min_km \
+                    and not any(links[i].get("open") for i in ids):
+                drop |= ids
+    log("small rail/metro islands dropped", len(drop))
+    return [l for i, l in enumerate(links) if i not in drop]
+
+
+def remerge_chains(links, protect):
+    """역·IC·존 접근점이 아닌 노드에서 같은 노선(이름·등급·개통 연도) 두 링크만 만나면 하나로 잇는다.
+    속도는 소요시간이 같게(길이 가중 조화평균), 선로·차로 수는 작은 쪽"""
+    alive = [True] * len(links)
+    at = defaultdict(list)
+    for i, l in enumerate(links):
+        if not l.get("ext"):
+            at[l["a"]].append(i); at[l["b"]].append(i)
+
+    def oriented(l, n, end_at_n):
+        g = [(l["geom"][k], l["geom"][k + 1]) for k in range(0, len(l["geom"]) - 1, 2)]
+        if (l["b"] == n) != end_at_n:
+            return l["b"], l["a"], g[::-1]
+        return l["a"], l["b"], g
+    merged = 0
+    for n in list(at):
+        ids = [i for i in at[n] if alive[i]]
+        if len(ids) != 2 or ids[0] == ids[1]:
+            continue
+        x, y = links[ids[0]], links[ids[1]]
+        if x["mode"] != y["mode"] or n in protect.get(x["mode"], ()) or x["name"] != y["name"] or x["cls"] != y["cls"] \
+                or x.get("open", 0) != y.get("open", 0) or x["name"].endswith(" 환승"):
+            continue
+        xa, _, gx = oriented(x, n, True)
+        _, yb, gy = oriented(y, n, False)
+        if xa == yb:
+            continue
+        t = x["len"] / max(x["speed"], 1) + y["len"] / max(y["speed"], 1)
+        new = dict(x)
+        new.update({"a": xa, "b": yb, "len": round(x["len"] + y["len"], 2),
+                    "speed": max(1, round((x["len"] + y["len"]) / t)) if t > 0 else x["speed"],
+                    "geom": [round(v, 5) for xy in gx + gy[1:] for v in xy]})
+        for k in ("tracks", "lanes"):
+            if k in x and k in y:
+                new[k] = min(x[k], y[k])
+        if x.get("power") != y.get("power"):
+            new["power"] = "none" if "none" in (x.get("power"), y.get("power")) else x.get("power")
+        links[ids[0]] = new
+        alive[ids[1]] = False
+        at[yb] = [ids[0] if i == ids[1] else i for i in at[yb]]
+        merged += 1
+    log("chains re-merged", merged)
+    return [l for i, l in enumerate(links) if alive[i]]
 
 
 def heal_rail_gaps(nodes, links, station_nodes, max_km=0.45):
@@ -998,18 +1286,24 @@ def heal_rail_gaps(nodes, links, station_nodes, max_km=0.45):
 
 
 def drop_parallel_duplicates(links):
-    """같은 노선이 같은 두 노드 사이에 두 번 놓이면(상·하행 선로를 따로 그린 OSM) 하나만 남긴다.
-    둘 다 두면 노선이 두 줄로 그려지고, 배정은 한쪽만 써서 다른 쪽은 늘 이용객 0이 된다."""
+    """같은 노선이 같은 두 노드 사이에 두 번 놓이면(상·하행 선로를 따로 그린 OSM, 합친 왕복 차도) 하나만 남긴다.
+    둘 다 두면 노선이 두 줄로 그려지고, 배정은 한쪽만 써서 다른 쪽은 늘 이용객 0이 된다.
+    도로는 차로 수를 더하고(최대 10), 양 끝이 같은 노드인 고리는 뺀다."""
     best = {}
     for i, l in enumerate(links):
-        if l["mode"] == 0 or l["a"] == l["b"]:
+        if l["a"] == l["b"]:
             continue
-        k = (l["mode"], l["name"], min(l["a"], l["b"]), max(l["a"], l["b"]), l.get("open", 0))
+        k = (l["mode"], l["name"], min(l["a"], l["b"]), max(l["a"], l["b"]), l.get("open", 0), l.get("ext", 0))
         j = best.get(k)
-        if j is None or l["len"] < links[j]["len"]:
+        if j is None:
             best[k] = i
+            continue
+        keep, other = (i, j) if l["len"] < links[j]["len"] else (j, i)
+        if l["mode"] == 0:
+            links[keep]["lanes"] = min(10, links[keep].get("lanes", 2) + links[other].get("lanes", 2))
+        best[k] = keep
     keep = set(best.values())
-    out = [l for i, l in enumerate(links) if l["mode"] == 0 or l["a"] == l["b"] or i in keep]
+    out = [l for i, l in enumerate(links) if i in keep]
     log("parallel duplicate links dropped", len(links) - len(out))
     return out
 
@@ -1257,7 +1551,7 @@ def _ref_canon(ref):
     return canon
 
 
-def _ref_missing_stations(ref, stations, cellpts, rail_cls, rail_names):
+def _ref_missing_stations(ref, stations, cellpts, rail_cls, rail_names, both_names):
     """철도 DB에 있는데 OSM에 없는 역(주로 북측)을 그 노선 선로 칸에 더한다. 같은 이름 역이 1.5km 안에 있으면 건너뛴다."""
     if not ref:
         return []
@@ -1275,7 +1569,7 @@ def _ref_missing_stations(ref, stations, cellpts, rail_cls, rail_names):
         # 이름이 달라도 300m 안에 이미 역이 있으면 같은 역의 옛 이름으로 본다 (DB의 송산 = 서화성)
         if any(abs(c[0] - c0[0]) <= 3 and abs(c[1] - c0[1]) <= 3 for c in all_cells):
             continue
-        c = _snap_rail(lon, lat, rail_cls, rail_names=rail_names, allowed=lines, strict=True)
+        c = _snap_rail(lon, lat, rail_cls, rail_names=rail_names, allowed=lines, strict=True)             or _snap_rail(lon, lat, rail_cls, rail_names=both_names, allowed=lines, strict=True)
         if c is None:
             continue
         out.append((name, c, lines))
@@ -1353,10 +1647,82 @@ def _same_kind(e1, e2):
 
 
 DUAL_MERGE_DEG = 0.0009   # 약 80~100m: 왕복 분리 도로의 두 차도 사이
-RAIL_MERGE_DEG = 0.0008   # 약 80m: 같은 이름 철도의 나란한 선로(쌍굴·따로 그린 복선)
+RAIL_MERGE_DEG = 0.0015   # 약 150m: 같은 이름 철도의 나란한 선로(쌍굴·따로 그린 복선)
 
 
 MODE_KEY = {"road": "d", "rail": "r", "metro": "m"}
+
+
+def collapse_ramps(edges, modepts, ic_points, max_span_km=4.0):
+    """IC·JCT 연결로를 접속점 하나로 단순화한다 (국도 입체교차의 연결로도 같은 방법).
+    서로 이어진 연결로(ramp) 엣지 묶음마다, 그 묶음에 닿는 가장 높은 등급 본선 칸 가운데 IC 지점(없으면 묶음 가운데)에
+    가장 가까운 칸을 접속점으로 고르고, 묶음의 모든 칸을 그 칸으로 모은다. 연결로 엣지는 없어진다.
+    이렇게 해야 고속도로 구간이 IC–IC(JCT·휴게소) 단위가 되고, 지도에 연결로 고리가 어지럽게 남지 않는다."""
+    from scipy.spatial import cKDTree
+    rank = {"motorway": 4, "trunk": 3, "primary": 2, "secondary": 1}
+    parent = {}
+
+    def find(c):
+        while parent.get(c, c) != c:
+            parent[c] = parent.get(parent[c], parent[c])
+            c = parent[c]
+        return c
+    main_cls = defaultdict(int)   # 칸 → 닿는 본선(연결로 아닌) 도로 등급
+    for (mode, a, b, _), e in edges.items():
+        if mode != "road":
+            continue
+        if e["ramp_only"]:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+        else:
+            for c in (a, b):
+                main_cls[c] = max(main_cls[c], rank.get(e["cls"], 0))
+    groups = defaultdict(list)
+    for c in list(parent):
+        groups[find(c)].append(c)
+    ic_tree = cKDTree(np.array([[x * 0.8, y] for _, x, y in ic_points])) if ic_points else None
+
+    def xy(c):
+        cp = modepts.get(("d", c))
+        return (cp[0] / cp[2], cp[1] / cp[2]) if cp and cp[2] else (c[0] * UNIT, c[1] * UNIT)
+    rep = {}
+    skipped = 0
+    for cells in groups.values():
+        pts = [xy(c) for c in cells]
+        span = math.hypot((max(p[0] for p in pts) - min(p[0] for p in pts)) * 88, (max(p[1] for p in pts) - min(p[1] for p in pts)) * 111)
+        if span > max_span_km:
+            skipped += 1
+            continue
+        top = max(main_cls.get(c, 0) for c in cells)
+        mains = [c for c in cells if main_cls.get(c, 0) == top and top > 0]
+        if not mains:
+            continue
+        cx = sum(p[0] for p in pts) / len(pts); cy = sum(p[1] for p in pts) / len(pts)
+        if ic_tree is not None:
+            d, j = ic_tree.query([cx * 0.8, cy])
+            if d < 0.02:
+                cx, cy = ic_points[j][1], ic_points[j][2]
+        r = min(mains, key=lambda c: (xy(c)[0] - cx) ** 2 * 0.64 + (xy(c)[1] - cy) ** 2)
+        for c in cells:
+            if c != r:
+                rep[c] = r
+    out = {}
+    dropped = 0
+    for (mode, a, b, route), e in edges.items():
+        if mode == "road":
+            if e["ramp_only"]:
+                dropped += 1
+                continue
+            a, b = rep.get(a, a), rep.get(b, b)
+            if a == b:
+                continue
+        key = (mode, min(a, b), max(a, b), route)
+        cur = out.get(key)
+        if cur is None or rank.get(e["cls"], 0) > rank.get(cur["cls"], 0):
+            out[key] = e
+    log("ramps collapsed", dropped, "ramp edges in", len(groups) - skipped, "interchanges (skipped", skipped, "too wide)")
+    return out
 
 
 def merge_dual_carriageways(edges, modepts, junction):
@@ -1403,16 +1769,39 @@ def _merge_parallel(edges, modepts, junction, mode_name, label_of, max_deg, city
     if not cells:
         return edges
     pts = np.array([[modepts[(g, c)][0] / modepts[(g, c)][2] * 0.8, modepts[(g, c)][1] / modepts[(g, c)][2]] for c in cells])
+    # 같은 선로에서 이웃한 칸(바로 옆·한 칸 건너)은 합치지 않는다: 동서로 놓인 선은 이웃 칸이 80m 안이라 합치면 선이 줄어든다
+    nbrs = defaultdict(set)
+    for (mode, a, b, _), e in edges.items():
+        if mode == mode_name:
+            nbrs[a].add(b); nbrs[b].add(a)
+
+    def near_on_line(x, y):
+        return y in nbrs[x] or bool(nbrs[x] & nbrs[y])
+    # 묶기: 가까운 쌍부터 묶되 한 묶음의 크기를 약 160m로 제한한다 (복복선처럼 여러 선은 하나로 모이고,
+    # 선을 따라 연쇄로 묶여 노선 전체가 한 칸으로 줄어드는 일은 없다)
+    tree = cKDTree(pts)
+    pairs = sorted((float(np.hypot(*(pts[i] - pts[j]))), i, j) for i, j in tree.query_pairs(max_deg))
     parent = list(range(len(cells)))
+    box = {i: (pts[i][0], pts[i][1], pts[i][0], pts[i][1]) for i in range(len(cells))}
 
     def find(i):
         while parent[i] != i:
             parent[i] = parent[parent[i]]
             i = parent[i]
         return i
-    for i, j in cKDTree(pts).query_pairs(max_deg):
-        if tags[cells[i]] & tags[cells[j]]:
-            parent[find(i)] = find(j)
+    for _, i, j in pairs:
+        ci, cj = cells[i], cells[j]
+        if not (tags[ci] & tags[cj]) or near_on_line(ci, cj):
+            continue
+        ri, rj = find(i), find(j)
+        if ri == rj:
+            continue
+        a, b = box[ri], box[rj]
+        nb = (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+        if max(nb[2] - nb[0], nb[3] - nb[1]) > 0.0016:
+            continue
+        parent[rj] = ri
+        box[ri] = nb
     rep = {}
     for i, c in enumerate(cells):
         r = cells[find(i)]
