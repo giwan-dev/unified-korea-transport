@@ -25,6 +25,9 @@ def find_kmz(raw: Path) -> Path | None:
     return files[-1] if files else None
 
 
+LINE_ALIAS = {"대곡소사선": "서해선", "소사원시선": "서해선", "소사대곡선": "서해선"}
+
+
 def norm_line(name: str) -> str:
     """노선 이름 비교용: 운영사 접두어와 띄어쓰기를 뗀다 ('서울교통공사 6호선' → '6호선', '서울 경전철 동북선' → '동북선')"""
     n = re.sub(r"\s+", "", name or "")
@@ -34,6 +37,8 @@ def norm_line(name: str) -> str:
             n = n[len(pre):]
     if len(n) > 3 and n.endswith("본선"):
         n = n[:-2] + "선"
+    # DB의 옛 노선 이름 → 지금 이름 (서해선은 대곡소사선·소사원시선을 하나로 부른다)
+    n = LINE_ALIAS.get(n, n)
     # GTX 표기 맞추기: 'A노선'(DB) ↔ '에이선'(OSM)
     for a, b in (("A노선", "에이선"), ("B노선", "비선"), ("C노선", "씨선"), ("D노선", "디선"), ("E노선", "이선")):
         if n.endswith(a):
@@ -41,12 +46,17 @@ def norm_line(name: str) -> str:
     return n
 
 
-PREFIXES = ("SRT", "SR", "KTX", "ITX", "지티엑스", "GTX", "지하")
+PREFIXES = ("SRT", "SR", "KTX", "ITX", "지티엑스", "GTX", "지하", "트램")
+
+
+# 가칭으로 올라온 역 이름 → 실제 이름
+NAME_ALIAS = {"USKR": "국제테마파크"}
 
 
 def norm_station(name: str) -> str:
     """역 이름 비교용: 괄호·'역'·운영사 앞말을 뗀다 ('SR수서'·'KTX광명'·'지하서울' → '수서'·'광명'·'서울')"""
     n = (name or "").split("(")[0].strip()
+    n = NAME_ALIAS.get(n, n)
     for p in PREFIXES:
         if n.startswith(p) and len(n) > len(p) + 1:
             n = n[len(p):].strip()

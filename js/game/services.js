@@ -9,6 +9,7 @@ export const SERVICE_KINDS = {
   limited: { label: '특급', fareFactor: 1.3 },
   express: { label: '급행', fareFactor: 1.1 },
   local: { label: '보통', fareFactor: 1.0 },
+  commuter: { label: '광역', fareFactor: 0.75 },   // 광역 전철: 모든 역에 서고 요금이 싸다 (수도권 전철 등)
 };
 
 /**
@@ -129,7 +130,8 @@ export function railPath(links, from, to, line, mode = 1) {
   links.forEach((l, i) => {
     if (l.mode !== mode || !l.active || l.via || l.ext) return;
     // 제 노선(여러 노선을 잇는 계통이면 그 노선들)을 따라가고, 다른 노선은 끊긴 곳을 이을 때만 쓴다
-    const own = !line || (line instanceof Set ? line.has(l.name) : Array.isArray(line) ? line.includes(l.name) : l.name === line);
+    // 환승 선로(같은 역의 다른 노선 승강장 사이)는 제 노선처럼 친다
+    const own = !line || l.name?.endsWith(' 환승') || (line instanceof Set ? line.has(l.name) : Array.isArray(line) ? line.includes(l.name) : l.name === line);
     const t = (l.len / l.speed) * (own ? 1 : 4);
     for (const [u, v] of [[l.a, l.b], [l.b, l.a]]) {
       if (!adj.has(u)) adj.set(u, []);
@@ -256,24 +258,81 @@ export function serviceLinks(state, links) {
  * 대경선(대구권 광역철도): 2024년 12월 개통, 경부선 선로를 쓰는 구미–경산 광역 전철.
  */
 export const EXISTING_SERVICES = [
-  { name: '대경선', kind: 'local', type: 'commuter', sets: 6, lines: ['경부선'],
+  { name: '대경선', kind: 'commuter', type: 'commuter', sets: 6, lines: ['경부선'],
     stops: ['구미', '사곡', '북삼', '왜관', '서대구', '대구', '동대구', '경산'] },
+  // 코레일 선로를 함께 쓰는 수도권·지방 광역 전철: 두 끝 역 사이 모든 역에 선다 (from·to)
+  { name: '수도권 전철 1호선 (경부)', kind: 'commuter', type: 'commuter', sets: 30, lines: ['경부선'], from: '서울', to: '천안' },
+  { name: '수도권 전철 1호선 (경인)', kind: 'commuter', type: 'commuter', sets: 24, lines: ['경인선'], from: '구로', to: '인천' },
+  { name: '수도권 전철 1호선 (경원)', kind: 'commuter', type: 'commuter', sets: 20, lines: ['경원선'], from: '청량리', to: '소요산' },
+  { name: '경의·중앙선', kind: 'commuter', type: 'commuter', sets: 22, lines: ['경의선', '용산선', '경원선', '중앙선'], from: '문산', to: '용문' },
+  { name: '수인·분당선', kind: 'commuter', type: 'commuter', sets: 26, lines: ['분당선', '수인선'], from: '왕십리', to: '인천' },
+  { name: '경춘선', kind: 'commuter', type: 'commuter', sets: 12, lines: ['경춘선'], from: '상봉', to: '춘천' },
+  { name: '수도권 전철 4호선 (과천·안산)', kind: 'commuter', type: 'commuter', sets: 16, lines: ['과천선', '안산선'], from: '선바위', to: '오이도' },
+  { name: '경강선', kind: 'commuter', type: 'commuter', sets: 8, lines: ['경강선'], from: '이매', to: '여주' },
+  { name: '동해선 광역전철', kind: 'commuter', type: 'commuter', sets: 10, lines: ['동해선'], from: '부전', to: '태화강' },
+  { name: '서해선 광역 (대곡–원시)', kind: 'commuter', type: 'commuter', sets: 10, lines: ['서해선'], from: '대곡', to: '원시' },
+  { name: '서해선 일반 (서화성–홍성)', kind: 'local', type: 'intercity', sets: 6, lines: ['서해선'], from: '서화성', to: '홍성' },
+  { name: '중부내륙선 KTX-이음 (판교–문경)', kind: 'express', type: 'semi', sets: 6, lines: ['경강선', '중부내륙선'], from: '판교', to: '문경' },
+  // 선로가 열리면(원시–서화성 연결, OSM 개통 예정 2030) 그해부터 다니는 계통
+  { name: '서해선 광역 직통 (대곡–서화성)', kind: 'commuter', type: 'commuter', sets: 12, lines: ['서해선'], from: '대곡', to: '서화성', wait: true },
+  { name: '서해선 직통 (대곡–홍성)', kind: 'express', type: 'intercity', sets: 6, lines: ['서해선'], from: '대곡', to: '홍성', wait: true },
 ];
 
-/** 새 게임에 EXISTING_SERVICES를 운행 중으로 넣는다 (차량비 없음, 이름으로 역을 찾고 없는 역은 건너뛴다) */
+/** 계통 하나를 지금 선로로 짠다. strict면 정해진 노선 선로만으로 이어질 때만 (다른 노선으로 돌아가면 null) */
+function existingService(s, links, stations, stationSet, strict) {
+  const lineNodes = new Set();
+  for (const l of links) if (l.mode === 1 && s.lines.includes(l.name)) { lineNodes.add(l.a); lineNodes.add(l.b); }
+  const find = (nm) => stations.find((x) => x[0] === nm && lineNodes.has(x[1]))?.[1];
+  let stops;
+  if (s.stops) stops = s.stops.map(find).filter((n) => n != null);
+  else {
+    // 두 끝 역 사이 경로의 모든 역
+    const a = find(s.from), b = find(s.to);
+    const via = a != null && b != null ? railPath(links, a, b, new Set(s.lines)) : null;
+    if (!via) return null;
+    if (strict && via.some((i) => links[i].name && !s.lines.includes(links[i].name) && !links[i].name.endsWith(' 환승'))) return null;
+    stops = [a];
+    let node = a;
+    for (const i of via) {
+      const l = links[i];
+      node = l.a === node ? l.b : l.a;
+      if (stationSet.has(node) && stops[stops.length - 1] !== node) stops.push(node);
+    }
+  }
+  if (stops.length < 2) return null;
+  const plan = planService(links, stationSet, stops, s.kind, new Set(s.lines), s.type);
+  if (!plan) return null;
+  return { name: s.name, kind: s.kind, line: s.lines[0], lines: s.lines, cls: 'conv', stops, type: s.type, sets: s.sets,
+    runMin: plan.runMin, km: plan.km, segs: plan.segs, id: `svc-${s.name}`, trains: tripsPerDay(s.sets, plan.runMin), built: true, existing: true };
+}
+
+/** 새 게임에 EXISTING_SERVICES를 운행 중으로 넣는다 (차량비 없음, 이름으로 역을 찾고 없는 역은 건너뛴다).
+ * wait인 계통은 선로가 아직 없으면 기다리는 목록에 두고, 해마다 openWaitingServices가 확인한다 */
 export function seedServices(state, base, operator = 'korail') {
   if (state.servicesSeeded) return;
   state.servicesSeeded = true;
   const links = base.links.map((l) => ({ ...l, active: !l.open }));
   const stationSet = new Set(base.stations.map((s) => s[1]));
   for (const s of EXISTING_SERVICES) {
-    const lineNodes = new Set();
-    for (const l of links) if (l.mode === 1 && s.lines.includes(l.name)) { lineNodes.add(l.a); lineNodes.add(l.b); }
-    const stops = s.stops.map((nm) => base.stations.find((x) => x[0] === nm && lineNodes.has(x[1]))?.[1]).filter((n) => n != null);
-    if (stops.length < 2) continue;
-    const plan = planService(links, stationSet, stops, s.kind, new Set(s.lines), s.type);
-    if (!plan) continue;
-    (state.services ||= []).push({ name: s.name, kind: s.kind, line: s.lines[0], lines: s.lines, cls: 'conv', stops, type: s.type, sets: s.sets,
-      runMin: plan.runMin, km: plan.km, segs: plan.segs, id: `svc-${s.name}`, fund: operator, trains: tripsPerDay(s.sets, plan.runMin), built: true, existing: true });
+    const svc = existingService(s, links, base.stations, stationSet, !!s.wait);
+    if (svc) (state.services ||= []).push({ ...svc, fund: operator });
+    else if (s.wait) (state.waitingServices ||= []).push(s.name);
   }
+}
+
+/** 기다리는 계통 가운데 선로가 열린 것을 운행 시작한다. 시작한 계통 이름 목록을 돌려준다 */
+export function openWaitingServices(state, net, stations, operator = 'korail') {
+  const started = [];
+  if (!state.waitingServices?.length) return started;
+  const stationSet = new Set(stations.map((s) => s[1]));
+  state.waitingServices = state.waitingServices.filter((name) => {
+    const s = EXISTING_SERVICES.find((x) => x.name === name);
+    const svc = s && existingService(s, net.links, stations, stationSet, true);
+    if (!svc) return true;
+    (state.services ||= []).push({ ...svc, fund: operator });
+    state.log.unshift(`${state.year}년 선로 개통에 맞춰 운행 시작: ${name}`);
+    started.push(name);
+    return false;
+  });
+  return started;
 }

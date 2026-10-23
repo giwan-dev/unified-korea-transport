@@ -18,7 +18,7 @@ import { smoothSegments, polylineKm } from './game/curve.js';
 import { extendWorld, urbanLanes } from './game/world.js';
 import { autoLineName, cityStem, makeForeignTest } from './game/lines.js';
 import { saveSim, loadSim, clearSim } from './game/simstore.js';
-import { SERVICE_KINDS, TRAIN_TYPES, OPERATING, lineStations, planService, railPath, tripsPerDay, setCost, canRun, defaultTrainType, serviceBuyCost, startService, updateService, removeService, seedServices } from './game/services.js';
+import { SERVICE_KINDS, TRAIN_TYPES, OPERATING, lineStations, planService, railPath, tripsPerDay, setCost, canRun, defaultTrainType, serviceBuyCost, startService, updateService, removeService, seedServices, openWaitingServices } from './game/services.js';
 import { showLineDiagram, stopLineDiagram } from './ui/linediagram.js';
 import { P } from './sim/params.js';
 import { PPP_TYPES, PPP_DEFAULTS, initPPP, tollKind, linkToll, annualRevenue, evaluatePPP } from './game/ppp.js';
@@ -336,6 +336,8 @@ function nextYear() {
   else refreshLinks();
   pendingStep = true;
   setBusy(true, `${state.year}년 계산 중`, 0);
+  // 선로가 열리기를 기다리던 계통(서해선 원시–서화성 직통 등)은 그해부터 다닌다
+  openWaitingServices(state, effectiveNetwork(base, state), base.stations);
   const opened = done.some((p) => p.kind === 'new');   // 플레이어가 놓은 새 노선 (이어받은 공사는 해마다 열려서 뺀다)
   worker.postMessage({ type: 'step', net: effectiveNetwork(base, state), ctx: ctx(), opened });
 }
@@ -1799,7 +1801,7 @@ function stationRiders() {
  * 그래서 대전·동대구처럼 큰 도시 역은 서고 수도권 역이 몰리지 않는다
  */
 function defaultStops(nodes, kind) {
-  if (kind === 'local') return new Set(nodes);
+  if (kind === 'local' || kind === 'commuter') return new Set(nodes);
   const r = stationRiders();
   const spacing = kind === 'express' ? 8 : 25, perKm = kind === 'express' ? 15 : 45;
   const coord = new Map(nodes.map((n) => [n, nodeCoord(n)]));

@@ -602,6 +602,8 @@ def build_network(zones):
                 rail_names[k[1]].add(railref.norm_line(nm)); rail_names[k[2]].add(railref.norm_line(nm))
     ref = railref.load(RAW)
     ref_lines = _ref_station_lines(ref)
+    known_lines = {railref.norm_line(n) for v in rail_names.values() for n in v} \
+        | {railref.norm_line(k[3].split("@")[0]) for k in edges if k[0] == "metro"}
     canon = _ref_canon(ref)
     # 철도역: 선로 웨이에 찍힌 역은 그 칸에 바로 붙이고, 선로 옆에 따로 찍힌 역만 가까운 선로에 붙인다
     # (예전처럼 1km 안 아무 선로에 붙이면 범일·석수가 고속선 역이 된다)
@@ -629,6 +631,10 @@ def build_network(zones):
         else:
             # DB가 아는 역은 그 노선 선로에만 (없으면 도시철도역일 뿐이므로 철도역으로 두지 않는다: 경복궁·광화문 밑을 지나는 GTX)
             c = _snap_rail(st[1], st[2], rail_cls, rail_names=rail_names, allowed=allowed, strict=bool(allowed))
+            # DB의 노선 이름이 철도에도 도시철도에도 없으면(DB가 옛 이름: 원시의 '소사원시선') 가까운 선로에 붙인다.
+            # 도시철도 노선 이름이면(경복궁의 3호선) 그 밑을 지나는 다른 철도에는 붙이지 않는다
+            if c is None and allowed and not (allowed & known_lines):
+                c = _snap_rail(st[1], st[2], rail_cls)
             if c is None and hit and hit[0] in rail_cells and not allowed:
                 c = hit[0]
         if c is None:
@@ -813,6 +819,8 @@ def build_network(zones):
 
     out_links = drop_parallel_duplicates(out_links)
     heal_gaps(nodes, out_links)
+    heal_rail_gaps(nodes, out_links, {node_index[("r", c, rfind((c, ln)))] for _, c in stations for ln in station_lines[c]
+                                      if ("r", c, rfind((c, ln))) in node_index})
     # 이웃 칸에 둔 다른 노선 승강장과 본래 역 노드를 짧은 환승 선로로 잇는다 (오송: 충북선 ↔ 경부고속선)
     def station_node(c):
         for ln in sorted(station_lines[c]):
@@ -902,6 +910,41 @@ def draw_geom(pieces, tol=0.00015):
             out += [float("nan"), float("nan")]
         out += [round(v, 5) for xy in ln.simplify(tol).coords for v in xy]
     return out
+
+
+def heal_rail_gaps(nodes, links, station_nodes, max_km=0.45):
+    """역이 아닌 철도 막다른 끝이 400m 남짓 안의 다른 철도 노드와 이어지지 않았으면 짧은 연결 선로를 놓는다.
+    (한 구간을 두 선로로 따로 그리며 이름을 달리 붙인 OSM: 부발–가남의 경강선·중부내륙선)"""
+    from scipy.spatial import cKDTree
+    deg = defaultdict(int)
+    nb = defaultdict(set)
+    src = {}
+    for l in links:
+        if l["mode"] != 1:
+            continue
+        for x, y in ((l["a"], l["b"]), (l["b"], l["a"])):
+            deg[x] += 1
+            nb[x].add(y)
+            src.setdefault(x, l)
+    ids = sorted(deg)
+    pts = np.array([nodes[i] for i in ids]) * [88.0, 111.0]
+    tree = cKDTree(pts)
+    added = 0
+    for k, n in enumerate(ids):
+        if deg[n] != 1 or n in station_nodes:
+            continue
+        for d, j in zip(*tree.query(pts[k], k=6)):
+            m = ids[j]
+            if m == n or m in nb[n] or d > max_km:
+                continue
+            l0 = src[n]
+            links.append({"mode": 1, "cls": l0["cls"], "a": n, "b": m, "len": round(max(d, 0.05), 2), "tracks": l0["tracks"],
+                          "speed": min(l0["speed"], 60), "power": l0["power"], "name": l0["name"], "kp": l0["kp"],
+                          "geom": nodes[n] + nodes[m], "open": l0.get("open", 0)})
+            nb[n].add(m); nb[m].add(n); deg[n] += 1; deg[m] += 1
+            added += 1
+            break
+    log("healed rail gaps", added)
 
 
 def drop_parallel_duplicates(links):
@@ -1136,6 +1179,8 @@ def _ref_station_lines(ref):
 
 
 PLACEHOLDER = re.compile(r"\d{2,}$")
+# OSM에 가칭으로 올라온 역 이름 → 실제 이름
+NAME_ALIAS = {"USKR": "국제테마파크"}
 PREFIXES = ("KTX", "SRT", "SR", "지하", "ITX", "지티엑스", "GTX")
 
 
@@ -1147,7 +1192,7 @@ def _ref_canon(ref):
     tree = cKDTree(np.array([[s[2] * 0.8, s[3]] for s in st])) if st else None
 
     def canon(name, lon, lat):
-        n = railref.norm_station(name)
+        n = NAME_ALIAS.get(name.strip(), railref.norm_station(name))
         if tree is not None:
             cands = [st[i][0] for i in tree.query_ball_point([lon * 0.8, lat], 0.005) if st[i][0] and st[i][0] in n]
             if cands:
@@ -1169,12 +1214,16 @@ def _ref_missing_stations(ref, stations, cellpts, rail_cls, rail_names):
     have = defaultdict(list)
     for n, c in stations:
         have[railref.norm_station(n)].append(c)
+    all_cells = [c for _, c in stations]
     out = []
     for name, lines, lon, lat, status in ref["stations"]:
         if not name or name.isdigit():
             continue
         c0 = cell_of(lon, lat)
         if any(abs(c[0] - c0[0]) <= 15 and abs(c[1] - c0[1]) <= 15 for c in have.get(name, [])):
+            continue
+        # 이름이 달라도 300m 안에 이미 역이 있으면 같은 역의 옛 이름으로 본다 (DB의 송산 = 서화성)
+        if any(abs(c[0] - c0[0]) <= 3 and abs(c[1] - c0[1]) <= 3 for c in all_cells):
             continue
         c = _snap_rail(lon, lat, rail_cls, rail_names=rail_names, allowed=lines, strict=True)
         if c is None:
