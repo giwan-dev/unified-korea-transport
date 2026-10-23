@@ -1,5 +1,5 @@
 // 게임 진행과 화면 패널.
-import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView } from './ui/map.js';
+import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView, LAYER_VIEWS } from './ui/map.js';
 import { Namer } from './game/naming.js';
 import {
   newGame, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
@@ -14,6 +14,8 @@ import { AIRPORT } from './game/catalog.js';
 import { setNameResolver, refreshNames, setRegions, setLinks, paintHotspots } from './ui/map.js';
 import { isNarrow, twinPrimary, mergeTwins, ROAD_RANK, motorwayMainline, flattenMainline, connectJunctions, smoothMainlineEnds, mainlineBubbles } from './ui/traffic.js';
 import { subFold, initPanelUI, toast } from './ui/panel.js';
+import { initPalette, openPalette } from './ui/palette.js';
+import { startGuide, guideSeen } from './ui/guide.js';
 import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.js';
 import { kmBetween, routeKey } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
@@ -1189,6 +1191,16 @@ function bindUI() {
   document.querySelectorAll('#tabs button').forEach((b) => { b.onclick = () => switchTab(b.dataset.tab); });
   watchFolds();
   initPanelUI($('#side'));
+  initPalette(paletteCommands);
+  $('#btn-find').onclick = () => openPalette();
+  $('#btn-help').onclick = showGuide;
+  // 상단 바 숫자를 누르면 관련 탭으로 (예산·부채 → 사업, 지지율·통합도 → 현황)
+  document.querySelectorAll('#topbar [data-go]').forEach((d) => {
+    const go = () => switchTab(d.dataset.go);
+    d.onclick = go;
+    d.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+  });
+  if (!guideSeen()) setTimeout(showGuide, 600);
   $('#legend').addEventListener('change', (e) => {
     if (e.target.id === 'metric') { metric = e.target.value; paintZones(); renderLegend(); }
     if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); renderLegend(); }
@@ -1200,6 +1212,57 @@ function bindUI() {
     if (e.key === 'Backspace') removeLastPoint();
   });
 }
+
+/** 메뉴 찾기(Ctrl+K)에 넣는 동작. 탭·접는 묶음 제목은 palette.js가 화면에서 따로 모은다 */
+function paletteCommands() {
+  const cmds = [];
+  const add = (group, title, run, extra = {}) => cmds.push({ group, title, run, ...extra });
+  add('진행', '다음 해로 넘기기', () => $('#btn-next').click(), { hint: `${state.year}년 → ${state.year + 1}년`, keywords: '턴 진행 연도', order: 0 });
+  add('진행', '소요 시간 재기', () => $('#btn-measure').click(), { keywords: '측정 이동 시간 경로', order: 1 });
+  for (const [k, v] of Object.entries(NEW_BUILDS)) {
+    add('건설', `새로 놓기: ${v.label}`, () => { switchTab('build'); startDraft(k); }, { hint: `${formatWon(v.perKm)}/km`, keywords: '신설 그리기 노선', order: 2 });
+  }
+  add('건설', `새로 놓기: ${AIRPORT.build.label}`, () => { switchTab('build'); startDraft('airport'); }, { keywords: '공항 신설', order: 2 });
+  add('개량', '구간 개량하기', () => toast('지도에서 도로·철도 구간을 누르면 개량 메뉴가 열립니다. Shift를 누른 채 끌면 여러 구간을 한꺼번에 고릅니다.'), { keywords: '확장 복선화 전철화 차로', order: 3 });
+  add('개량', '확장 요구 (혼잡 민원) 보기', () => switchTab('requests'), { keywords: '민원 정체 요구', order: 3 });
+  add('운행', '역 골라 특급·급행 짜기', () => { switchTab('build'); startServicePick(); }, { keywords: '운행 계통 열차 노선 운행', order: 3 });
+  add('예산', '예산·사업 투입 속도', () => switchTab('projects'), { hint: `가용 ${formatWon(state.budget)}`, keywords: '돈 부채 공사 진행', order: 3 });
+  add('도움말', '처음 안내 다시 보기', showGuide, { keywords: '튜토리얼 도움말 사용법', order: 9 });
+  for (const [k, v] of Object.entries(LAYER_VIEWS)) {
+    add('보기', `지도 보기: ${v}`, () => { const sel = $('#layerview'); sel.value = k; sel.dispatchEvent(new Event('change', { bubbles: true })); }, { keywords: '레이어 표시', order: 6 });
+  }
+  for (const [k, v] of Object.entries(METRICS)) {
+    add('보기', `지도 색칠: ${v.label}`, () => { const sel = $('#metric'); sel.value = k; sel.dispatchEvent(new Event('change', { bubbles: true })); }, { keywords: '지표 색 범례', order: 6 });
+  }
+  for (const p of plans) {
+    add('계획 사업', p.name, () => { switchTab('build'); openPlan(p.id); }, { hint: p.group, keywords: `${p.group} 계획`, order: 5 });
+  }
+  zoneProps.forEach((z, i) => {
+    if (z.ext) return;
+    add('지역', zoneName(i), () => { map.flyTo({ center: [z.cx, z.cy], zoom: 9.5 }); select({ type: 'zone', id: i }); }, { hint: z.province, keywords: `${z.province} 시군구`, order: 7 });
+  });
+  // 철도·도시철도 노선 이름
+  const lines = new Map();
+  allLinks().forEach((_, i) => {
+    const e = linkAt(base, state, i);
+    if (e.mode >= 1 && e.name && !e.ext && !e.name.endsWith(' 환승')) { if (!lines.has(e.name)) lines.set(e.name, []); lines.get(e.name).push(i); }
+  });
+  for (const [name, ids] of lines) add('노선', name, () => gotoLinks(ids.slice(0, 400)), { keywords: '철도 노선 운행', order: 8 });
+  return cmds;
+}
+
+function showGuide() {
+  switchTab('status');
+  startGuide([
+    { target: '#map', title: '지도', body: '도로·철도 구간을 누르면 오른쪽에 개량·이름 바꾸기 메뉴가 열립니다. <b>Shift를 누른 채 끌면</b> 여러 구간을 한꺼번에 고릅니다. 역을 누르면 운행 계통과 노선도를 봅니다.' },
+    { target: '#tabs', title: '오른쪽 패널', body: GUIDE_TABS },
+    { target: '#topbar .stats', title: '예산과 지지율', body: '숫자를 누르면 관련 탭으로 갑니다. 예산은 해마다 들어오고, 공사비는 몇 해에 나눠 나갑니다.' },
+    { target: '#legend', title: '보기 메뉴', body: '도로만·철도만·항공만으로 걸러 보거나, 인구·소득·행복도 같은 지표로 지도를 색칠합니다.' },
+    { target: '#btn-find', title: '메뉴 찾기', body: '찾는 메뉴가 어디 있는지 모르겠으면 <b>Ctrl+K</b>(또는 /)로 이름 일부나 초성을 쳐 보세요. 탭·묶음·지역·노선·계획 사업으로 바로 갑니다.' },
+    { target: '#btn-next', title: '다음 해', body: '사업을 벌였으면 다음 해로 넘깁니다. 교통 수요와 인구 이동을 다시 계산합니다.' },
+  ]);
+}
+const GUIDE_TABS = '<b>현황</b>은 올해 성적, <b>건설</b>은 새 노선·계획 사업, <b>사업</b>은 진행 중인 공사와 예산 투입, <b>민원</b>은 혼잡 요구와 지자체 제안, <b>통계</b>는 순위와 추이, <b>설정</b>은 정책·행정구역·국가 대형 사업과 저장입니다.';
 
 function removeLastPoint() {
   const p = draft.points.pop();
