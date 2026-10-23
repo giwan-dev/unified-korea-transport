@@ -11,7 +11,9 @@ import {
 } from './game/state.js';
 import { MEGA, TSR_FREIGHT } from './game/mega.js';
 import { AIRPORT } from './game/catalog.js';
-import { setNameResolver, refreshNames } from './ui/map.js';
+import { setNameResolver, refreshNames, setLinks, paintHotspots } from './ui/map.js';
+import { isNarrow } from './ui/traffic.js';
+import { subFold, initPanelUI, toast } from './ui/panel.js';
 import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.js';
 import { kmBetween, routeKey } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
@@ -281,6 +283,7 @@ function applyResult(res) {
   for (let i = 0; i < vc.length; i++) {
     map.setFeatureState({ source: 'links', id: i }, { vc: vc[i], vol: vol[i] });
   }
+  paintHotspots(map, vc);
   paintZones();
   paintAir(res.air);
   refreshPoints();   // 역 중요도는 이용객으로 정한다
@@ -452,7 +455,7 @@ function linksFC() {
     const parts = smoothParts(l, i);
     return {
       type: 'Feature', id: i,
-      properties: { id: i, mode: eff.mode, cls: eff.cls, minor: eff.mode === 0 && eff.cls === 'secondary' && !eff.kp ? 1 : 0, building: building.has(i) || (i < base.links.length && linkPending(base, state, i)) ? 1 : 0, colour: eff.colour || '', ext: eff.ext ? 1 : 0 },
+      properties: { id: i, mode: eff.mode, cls: eff.cls, minor: eff.mode === 0 && eff.cls === 'secondary' && !eff.kp ? 1 : 0, building: building.has(i) || (i < base.links.length && linkPending(base, state, i)) ? 1 : 0, colour: eff.colour || '', ext: eff.ext ? 1 : 0, narrow: isNarrow(eff) ? 1 : 0 },
       geometry: parts.length > 1 ? { type: 'MultiLineString', coordinates: parts } : { type: 'LineString', coordinates: parts[0] },
     };
   });
@@ -539,10 +542,11 @@ function smoothParts(l, i) {
 }
 
 function refreshLinks() {
-  map.getSource('links').setData(linksFC());
+  setLinks(map, linksFC());
   if (result) {
     const { vc, vol } = result.links;
     for (let i = 0; i < vc.length; i++) map.setFeatureState({ source: 'links', id: i }, { vc: vc[i], vol: vol[i] });
+    paintHotspots(map, vc);
   }
 }
 
@@ -1092,9 +1096,10 @@ function bindUI() {
   $('#btn-measure').onclick = () => (measure ? endMeasure() : startMeasure());
   document.querySelectorAll('#tabs button').forEach((b) => { b.onclick = () => switchTab(b.dataset.tab); });
   watchFolds();
+  initPanelUI($('#side'));
   $('#legend').addEventListener('change', (e) => {
     if (e.target.id === 'metric') { metric = e.target.value; paintZones(); renderLegend(); }
-    if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); }
+    if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); renderLegend(); }
   });
   document.addEventListener('keydown', (e) => {
     if (!draft || e.target.tagName === 'INPUT') return;
@@ -1118,8 +1123,10 @@ function switchTab(tab) {
 }
 
 // ---- 접는 묶음: 패널의 소제목(h4, 설정은 h3)마다 그 아래 내용을 <details>로 묶는다. 펼침 상태는 이 브라우저에 남긴다
-const FOLD_KEY = 'ukt-folds';
+const FOLD_KEY = 'ukt-folds-v2';   // v2: 사업·설정 탭을 접힌 채로 시작하도록 예전 펼침 기록을 버린다
 const FOLD_CLOSED = new Set(['settings:저장 슬롯', 'settings:새 게임', 'settings:데이터', 'status:추이', 'stats:관광', 'stats:추이']);
+// 사업 탭(건설 사업 목록)과 설정 탭은 처음에 모두 접어 둔다
+const FOLD_CLOSED_PANELS = new Set(['projects', 'settings']);
 let folds = {};
 try { folds = JSON.parse(localStorage.getItem(FOLD_KEY) || '{}'); } catch { folds = {}; }
 
@@ -1132,7 +1139,7 @@ function foldSections(el, key, tag) {
       const title = c.textContent.trim(), id = `${key}:${title.replace(/\s*[\d(].*$/, '')}`;
       box = document.createElement('details');
       box.className = 'fold';
-      box.open = folds[id] ?? !FOLD_CLOSED.has(id);
+      box.open = folds[id] ?? !(FOLD_CLOSED.has(id) || FOLD_CLOSED_PANELS.has(key));
       box.ontoggle = () => { folds[id] = box.open; try { localStorage.setItem(FOLD_KEY, JSON.stringify(folds)); } catch { /* 저장 못 해도 된다 */ } };
       const sum = document.createElement('summary');
       sum.innerHTML = c.innerHTML;
@@ -2329,14 +2336,13 @@ function plansHTML() {
   const groups = [...new Set(plans.map((p) => p.group))];
   return `<h4>계획 사업</h4>
     <p class="hint">국가·광역 교통계획에 나온 노선입니다. 누르면 경유지가 찍힌 채로 그리기가 열리고, 사업비를 확인한 뒤 착공합니다 (경로는 고칠 수 있습니다).</p>
-    ${groups.map((g) => `<div class="m" style="margin:6px 0 2px">${esc(g)}</div><div class="list">${plans.filter((p) => p.group === g).map((p) => {
+    ${groups.map((g) => subFold(`plans:${g}`, `${esc(g)} <span class="cnt">${plans.filter((p) => p.group === g).length}</span>`, `<div class="list">${plans.filter((p) => p.group === g).map((p) => {
       let km = 0;
       for (let i = 1; i < p.points.length; i++) km += kmBetween(p.points[i - 1][1], p.points[i - 1][2], p.points[i][1], p.points[i][2]);
       const spec = NEW_BUILDS[p.type];
-      return `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
-        <span>${esc(p.name)} <span class="m">${spec.label.replace(/ 신설.*$/, '')} · 약 ${Math.round(km * 1.1)}km · ${formatWon(km * 1.1 * spec.perKm)}</span></span>
-        <button class="small" data-plan="${p.id}" ${started.has(p.id) ? 'disabled' : ''}>${started.has(p.id) ? '착공함' : '열기'}</button></div></div>`;
-    }).join('')}</div>`).join('')}`;
+      return `<div class="item line"><div class="n"><b>${esc(p.name)}</b><span class="m">${spec.label.replace(/ 신설.*$/, '')} · 약 ${Math.round(km * 1.1)}km · ${formatWon(km * 1.1 * spec.perKm)}</span></div>
+        <button class="small" data-plan="${p.id}" ${started.has(p.id) ? 'disabled' : ''}>${started.has(p.id) ? '착공함' : '열기'}</button></div>`;
+    }).join('')}</div>`)).join('')}`;
 }
 
 // ------------------------------------------------------------ 지방자치·선거·SOC 제안
@@ -2469,18 +2475,26 @@ function acceptProposal(id) {
   const L = state.local, pr = L.proposals.find((p) => p.id === id);
   const r = startUpgrade(base, state, proposalCheck(pr).targets, pr.fix);
   if (!r.ok) { alert(r.reason); renderRequests(); return; }
-  state.projects[state.projects.length - 1].proposal = pr.id;
+  const proj = state.projects[state.projects.length - 1];
+  proj.proposal = pr.id;
   pr.status = 'accepted';
+  pr.decided = state.year;
   const off = L.offices[pr.office];
   if (off) { off.accepted++; bumpApproval(off, 3); }
+  // 같은 구간의 확장 요구는 공사가 시작됐으므로 목록에서 뺀다
+  const work = linksUnderWork(state);
+  requests = requests.filter((q) => !q.links.every((lid) => work.has(lid)));
+  toast(`<b>받아들임</b> ${esc(pr.title)} · ${formatWon(proj.cost)} · ${proj.doneYear}년 완공 예정 (사업 탭)`);
   save(state); refreshLinks(); renderAll();
 }
 
 function rejectProposal(id) {
   const L = state.local, pr = L.proposals.find((p) => p.id === id);
   pr.status = 'rejected';
+  pr.decided = state.year;
   const off = L.offices[pr.office];
   if (off) bumpApproval(off, -4);
+  toast(`<b>거절</b> ${esc(pr.title)}`, 'no');
   save(state); renderAll();
 }
 
@@ -2511,10 +2525,21 @@ function proposalsHTML() {
     if (p.status === 'open' && !proposalCheck(p).targets.length) { p.status = 'moot'; state.log.unshift(`${state.year}년 지자체 제안 종결 (이미 공사·개량됨): ${p.title}`); }
   }
   const open = L.proposals.filter((p) => p.status === 'open');
-  if (!open.length) return '';
+  // 올해 답한 제안은 그 자리에 결과 카드로 남긴다 (누른 뒤 무엇이 바뀌었는지 바로 보이게, 다음 해에 빠진다)
+  const decided = L.proposals.filter((p) => p.decided === state.year && (p.status === 'accepted' || p.status === 'rejected'));
+  const shown = L.proposals.filter((p) => p.status === 'open' || decided.includes(p));
+  if (!open.length && !decided.length) return '';
+  const doneRow = (p) => {
+    const off = L.offices[p.office], proj = p.status === 'accepted' && state.projects.find((x) => x.proposal === p.id);
+    return `<div class="item decided ${p.status}"><div class="t">${p.status === 'accepted' ? '✓ ' : ''}${esc(p.title)}</div>
+      <div class="m">${off ? `${partyBadge(off.party)} ${esc(off.title)} · ` : ''}${p.status === 'accepted'
+        ? `<span class="pos">받아들임 · 공사 시작${proj ? ` · ${proj.doneYear}년 완공 예정` : ''}</span>` : '<span class="neg">거절함</span>'}</div></div>`;
+  };
   return `<h3>지자체 SOC 제안 (${open.length})</h3>
     <p class="hint">선거로 뽑힌 단체장이 자기 지역 사업을 중앙정부에 제안합니다. 받아들여 완공하면 그 단체장의 지지율이 올라 재선에 유리합니다. 2년 안에 답하지 않으면 거절한 것으로 봅니다.</p>
-    <div class="list">${open.map((p) => {
+    ${decided.length ? `<p class="hint">올해 답한 제안 ${decided.length}건: 받아들인 사업은 사업 탭에서 공사 진행을 볼 수 있습니다.</p>` : ''}
+    <div class="list">${shown.map((p) => {
+      if (p.status !== 'open') return doneRow(p);
       const off = L.offices[p.office], ck = proposalCheck(p);
       const partial = ck.targets.length < p.links.length ? ` · 일부 구간(${ck.targets.length}/${p.links.length})은 이미 공사 중` : '';
       return `<div class="item"><div class="t">${esc(p.title)}</div>
