@@ -40,6 +40,7 @@ export class Model {
     this.ccomp = new Float32Array(Z * Z);
     this.K = 0;
     this.railASC = P.railASC;
+    this.hsrASC = P.hsrASC;
     this.transitASC = P.transitASC;
     this.accessRef = 1;
     this.frontier = P.incomeKR;
@@ -54,6 +55,7 @@ export class Model {
     }
     this.K = s.K; this.accessRef = s.accessRef; this.frontier = s.frontier;
     this.railASC = s.railASC ?? P.railASC;
+    this.hsrASC = s.hsrASC ?? P.hsrASC;
     this.transitASC = s.transitASC ?? P.transitASC;
     for (const [nd, w] of s.waits || []) {
       const k = this.stationOf?.get(nd);
@@ -94,7 +96,7 @@ export class Model {
   }
 
   snapshot() {
-    const o = { K: this.K, railASC: this.railASC, transitASC: this.transitASC, accessRef: this.accessRef, frontier: this.frontier };
+    const o = { K: this.K, railASC: this.railASC, hsrASC: this.hsrASC, transitASC: this.transitASC, accessRef: this.accessRef, frontier: this.frontier };
     for (const k of ['pop', 'income', 'le', 'mys', 'eys', 'hdi', 'amenity']) o[k] = Array.from(this[k]);
     o.subW = Array.from(this.subW, (v) => Math.round(v * 1e6) / 1e6);
     o.subAmenity = Array.from(this.subAmenity, (v) => Math.round(v * 1e4) / 1e4);
@@ -152,8 +154,17 @@ export class Model {
         const dwell = P.railDwellMin * ((stationSet.has(l.a) ? 0.5 : 0) + (stationSet.has(l.b) ? 0.5 : 0));
         // 감편(freq < 1): 배차가 길어진 만큼의 기다림(freqWait)을 더하고 수송력을 줄인다
         this.freeTime[i] = (l.len / l.speed) * 60 * pen + dwell + (l.freqWait || 0);
-        this.capacity[i] = P.railTrainsPerDay[Math.min(l.tracks, 4)] * P.railPaxPerTrain[l.cls] * (l.freq || 1);
+        // 고속철도는 모두 복선이다 (OSM에서 방향별 선로를 따로 그린 구간이 단선으로 들어오는 것을 바로잡는다)
+        const tracks = l.cls === 'hsr' ? Math.max(2, l.tracks) : l.tracks;
+        this.capacity[i] = P.railTrainsPerDay[Math.min(tracks, 4)] * P.railPaxPerTrain[l.cls] * (l.freq || 1);
       }
+    }
+    // 운행 계통 열차(광역 통근 전동차 등)는 제 정원만큼 밑 선로 수송력을 늘린다.
+    // 선로 기본 용량은 보통 열차 정원(450명)으로 잡혀 있어, 정원 1,600명 전동차가 다니는 구간의 혼잡을 부풀린다
+    for (const v of this.virtual) {
+      const lv = L[v];
+      const extra = lv.trains * ((lv.seatCap || P.railPaxPerTrain[lv.cls]) - P.railPaxPerTrain[lv.cls]);
+      if (extra > 0) for (const u of new Set(lv.via)) this.capacity[u] += extra;
     }
     if (!this.volume || this.volume.length !== L.length) {
       const old = this.volume;
@@ -168,6 +179,7 @@ export class Model {
     if (sig !== this.netSig || !this.transit) {
       this.buildAccess();
       this.buildTransit();
+      this.metroLocal = this.metroLocalLoads();
       this.netSig = sig;
     } else {
       this.buildTransit();
@@ -246,6 +258,41 @@ export class Model {
   }
 
   /** 지점 주변 3×3km 평균 인구 밀도 (명/km²) */
+  /**
+   * 존(시군구) 안에서 도시철도를 타는 짧은 통행: 모형은 존 사이 통행만 배정하므로 같은 구 안 이용이 빠진다.
+   * 역마다 역세권(반경 약 800m) 인구 × metroLocalRate명이 타고, 평균 metroLocalKm만큼 노선을 따라 간다고 보고 구간에 얹는다.
+   * 갈림길에서는 갈래마다 나눈다. 보고하는 이용객과 혼잡도에만 더한다 (경로 선택에는 쓰지 않는다)
+   */
+  metroLocalLoads() {
+    const L = this.net.links, out = new Float32Array(L.length);
+    const adj = new Map();
+    L.forEach((l, i) => {
+      if (l.mode !== 2 || !l.active || l.via) return;
+      for (const [u, v] of [[l.a, l.b], [l.b, l.a]]) { if (!adj.has(u)) adj.set(u, []); adj.get(u).push([v, i]); }
+    });
+    const stations = new Set(this.net.stations);
+    const mean = P.metroLocalKm, maxKm = mean * 3;
+    for (const s of adj.keys()) {
+      if (!stations.has(s)) continue;
+      const [x, y] = this.net.nodes[s];
+      const riders = this.densityAt(x, y) * 2 * P.metroLocalRate;   // 밀도(명/km²) × 약 2km² (반경 800m)
+      if (!(riders > 0)) continue;
+      // 노선을 따라 퍼진다: [노드, 간 거리, 몫, 온 링크]
+      const stack = [[s, 0, 1, -1]], seen = new Set([s]);
+      while (stack.length) {
+        const [u, d, share, from] = stack.pop();
+        const next = adj.get(u).filter(([v, i]) => i !== from && !seen.has(v));
+        for (const [v, i] of next) {
+          const len = L[i].len, part = share / next.length;
+          out[i] += riders * part * Math.exp(-(d + len / 2) / mean);
+          seen.add(v);
+          if (d + len < maxKm) stack.push([v, d + len, part, i]);
+        }
+      }
+    }
+    return out;
+  }
+
   densityAt(x, y) {
     if (!this.densBins) return 0;
     const [i, j] = densCell(x, y);
@@ -367,6 +414,9 @@ export class Model {
         this.cost[i] = t * (P.roadPerceived[L[i].cls] ?? 1);
       } else {
         this.cost[i] = this.freeTime[i] * (1 + 0.5 * Math.max(0, vc - 1));
+        // 고속철도 구간은 비싼 운임(일반철도와의 차이)을 시간으로 바꿔 경로 비용에 넣는다:
+        // 그러지 않으면 일반열차로 갈 통행까지 모두 고속선으로 배정된다
+        if (L[i].mode === 1 && L[i].cls === 'hsr' && !L[i].via) this.cost[i] += (L[i].len * (P.railFarePerKm.hsr - P.railFarePerKm.conv)) / P.vot;
       }
       // 민자 구간의 통행료·추가 운임 (원/km): 시간 가치로 바꿔 더한다
       if (L[i].toll) this.cost[i] += (L[i].len * L[i].toll) / P.vot;
@@ -567,9 +617,11 @@ export class Model {
           for (let k = 0; k < pick.length; k += 3) {
             if (this.stationHsr[pick[k]] && this.stationHsr[pick[k + 1]]) hsrShare += pick[k + 2];
           }
-          const fare = P.railFarePerKm.conv + (P.railFarePerKm.hsr - P.railFarePerKm.conv) * hsrShare;
+          // 고속철 운임 차이는 경로 비용(updateCosts)에 들어 있으므로 여기서는 일반철도 운임만 더한다
+          const fare = P.railFarePerKm.conv;
           const kpShare = (this.isKP[i] + this.isKP[j]) / 2;
-          const gt = crail + (km * fare) / P.vot + this.railASC * (1 - kpShare * (1 - P.kpRailASCFactor)) + bc;
+          // 고속철도 몫(hsrShare)에는 따로 보정한 고속철 상수를 더한다 (일반철도와 고속철도 이용을 함께 맞추려고)
+          const gt = crail + (km * fare) / P.vot + this.railASC * (1 - kpShare * (1 - P.kpRailASCFactor)) + this.hsrASC * hsrShare + bc;
           const tfare = P.transitBaseFare + Math.max(0, km - 10) * P.transitFarePerKm;
           const gu = ctr[j] + tfare / P.vot + this.transitASC + bc;
           const air = this.airCost(i, j);
@@ -581,7 +633,9 @@ export class Model {
           const comp = sum > 0 ? -Math.log(sum) / lam : gr;
           this.ccomp[i * Z + j] = i === j ? 15 : comp;
           if (i === j || !(sum > 0)) continue;
-          const gravity = this.K * mass[i] / (comp + P.gravityOffsetMin) ** P.gravityPower;
+          // 북측 안 통행: 자동차·도로 사정으로 일반화비용이 크게 잡히지만 실제로는 철도로 다니므로 마찰을 덜 친다
+          const imp = this.isKP[i] && this.isKP[j] && !this.isExt[i] && !this.isExt[j] ? comp * P.kpGravityImpedance : comp;
+          const gravity = this.K * mass[i] / (imp + P.gravityOffsetMin) ** P.gravityPower;
           // 국외에서 오는 관광(입국)은 국외 존의 통행 발생 축소를 되돌려 따로 키운다
           const inbound = this.isExt[i] && !this.isExt[j] ? P.inboundTourism : 1;
           const T = gravity * (mass[j] + tmass[j] * inbound);
@@ -682,10 +736,16 @@ export class Model {
       const t = this.assign(integration);
       this.transitASC += P.transitASCStep * Math.log((t.krTransit / t.krTrips) / P.targetKrTransitShare);
       const road = this.meanVC((l) => l.mode === 0 && l.cls === 'motorway');
-      const rail = this.quantileVC((l) => l.mode === 1, P.railCalibQuantile);
-      if (!isFinite(road) || !isFinite(rail)) break;
+      // 철도는 일반철도와 고속철도를 따로 맞춘다: 한 상수로 맞추면 포화된 경부고속선에 끌려 일반철도 수요가 너무 낮아진다
+      const conv = this.quantileVC((l) => l.mode === 1 && l.cls === 'conv' && !l.via && !l.ext, P.railCalibQuantile);
+      const hsr = this.quantileVC((l) => l.mode === 1 && l.cls === 'hsr' && !l.via && !l.ext, P.railCalibQuantile);
+      if (!isFinite(road) || !isFinite(conv) || !isFinite(hsr)) break;
       this.K *= P.targetKrMotorwayVC / road;
-      this.railASC += P.railASCStep * Math.log(rail * (P.targetKrMotorwayVC / road) / P.targetKrRailVC);
+      const scale = P.targetKrMotorwayVC / road;
+      const dConv = P.railASCStep * Math.log(conv * scale / P.targetKrConvVC);
+      this.railASC += dConv;
+      // 고속철 상수는 일반철도 상수가 바뀐 만큼을 되돌린 뒤 고속철 혼잡에 맞춘다
+      this.hsrASC += -dConv + P.railASCStep * Math.log(hsr * scale / P.targetKrRailVC);
       if (progress) progress((it + 1) / P.calibrationRounds);
     }
     P.msaIterations = saved;
@@ -883,8 +943,8 @@ export class Model {
     const n = this.nPhys ?? this.net.links.length;
     const vol = new Float32Array(n), vc = new Float32Array(n), speed = new Float32Array(n);
     for (let i = 0; i < n; i++) {
-      vol[i] = this.volume[i];
-      vc[i] = this.capacity[i] > 0 ? this.volume[i] / this.capacity[i] : 0;
+      vol[i] = this.volume[i] + (this.metroLocal?.[i] || 0);
+      vc[i] = this.capacity[i] > 0 ? vol[i] / this.capacity[i] : 0;
       speed[i] = this.cost[i] > 0 ? this.net.links[i].len / (this.cost[i] / 60) : 0;
     }
     // 운행 계통 구간별 이용객 (가상 링크 순서 그대로)

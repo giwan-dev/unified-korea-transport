@@ -371,7 +371,7 @@ export function updateAirRoutes(state, air, name) {
     if (!r) continue;
     if (state.air.auto) r.freq = Math.max(1, Math.round(r.freq + 0.5 * (targetFreq(pax, air.seats) - r.freq)));
     r.low = pax < AIR.closePax ? (r.low || 0) + 1 : 0;
-    if (state.air.auto && r.origin !== 'manual' && r.low >= 2) {
+    if (state.air.auto && r.origin !== 'manual' && !r.keep && r.low >= 2) {
       delete routes[key];
       state.log.unshift(`${state.year}년 단항: ${name(r.a)}–${name(r.b)} (하루 ${Math.round(pax)}명)`);
     }

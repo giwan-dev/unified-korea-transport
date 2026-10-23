@@ -41,8 +41,10 @@ export const P = {
   serviceDayMin: 1440,        // 24시간 운행
   logitLambda: 0.03,          // 수단선택 민감도 (1/분)
   railASC: 10,                // 철도 고유 불편 (분)
-  kpRailASCFactor: 0.35,      // 북측 내부 통행은 철도가 주 수단이라 고유 불편을 덜 적용 (자동차·시외버스 부족)
-  kpWaitMaxMin: 45,           // 북측 역 대기시간 상한 (적어도 하루 몇 회는 다닌다)
+  hsrASC: 0,                  // 고속철도 몫에 더하는 상수 (분, 기준 연도 보정으로 정함)
+  kpRailASCFactor: 0,         // 북측 내부 통행은 철도가 주 수단이라 고유 불편을 두지 않는다 (자동차·시외버스 부족)
+  kpWaitMaxMin: 30,           // 북측 역 대기시간 상한 (적어도 하루 몇 회는 다닌다)
+  kpGravityImpedance: 0.4,    // 북측 안 통행의 중력모형 마찰: 일반화비용의 이만큼만 친다 (도로 사정 탓에 비용이 과대하게 잡힘)
   roadPerceived: { motorway: 0.85, trunk: 1.0, primary: 1.15, secondary: 1.3, ferry: 1.0 }, // 경로 선택 체감 비용 (고속도로 선호)
   gravityPower: 2.0,
   gravityOffsetMin: 30,
@@ -50,9 +52,11 @@ export const P = {
   personsPerCar: 1.4,
   freightPCUShare: 0.3,       // 여객 PCU 대비 화물차 PCU
   targetKrMotorwayVC: 0.65,   // 기준 연도 보정 목표: 남측 고속도로 평균 V/C
-  targetKrRailVC: 1.0,        // 기준 연도 보정 목표: 남측 철도 V/C 상위 5% 구간 (경부고속선 등 포화 구간)
+  targetKrRailVC: 1.2,        // 기준 연도 보정 목표: 남측 고속철도 V/C 상위 5% 구간 (경부고속선 평택–오송 등 포화 구간, 입석 포함)
+  targetKrConvVC: 0.65,       // 기준 연도 보정 목표: 남측 일반철도 V/C 상위 5% 구간 (경부선·경인선 수도권 구간)
   railCalibQuantile: 0.95,
-  calibrationRounds: 5,
+  calibrationRounds: 7,
+  calibVersion: 2,            // 보정 방식이 바뀌면 올린다: 예전 기준 연도(data/baseline.json)는 쓰지 않고 새로 보정한다
   railASCStep: 25,            // 보정 반복마다 철도 상수 조정 폭(분)
   msaIterations: 5,
   msaIterationsWarm: 2,       // 해마다 지난해 결과에서 이어 배정할 때 (한 번이면 경로가 해마다 이리저리 튄다)
@@ -66,6 +70,8 @@ export const P = {
   metroWaitMin: 4,
   metroCandidates: 3,
   metroRadiusKm: 6,
+  metroLocalRate: 0.2,        // 역세권(반경 800m) 주민 1명당 하루 구 안 도시철도 승차 (존 사이 통행은 따로 배정)
+  metroLocalKm: 5,            // 구 안 도시철도 통행 평균 거리 (km)
   metroTrainsPerDay: 500,     // 양방향
   metroPaxPerTrain: 1000,
   transferMin: 6,             // 도시철도역 ↔ 버스 환승

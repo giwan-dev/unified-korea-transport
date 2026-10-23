@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 48" role="img" aria-label="러시아철도 (게임 표시)">
+  <!-- 게임 안의 러시아 철도 표시: 실제 회사 로고가 아니다. 짙은 붉은 바탕에 넓은 궤간(광궤) 두 선로 -->
+  <rect x="0" y="0" width="160" height="48" rx="8" fill="#7A1E1E"/>
+  <g transform="translate(24 24)">
+    <circle r="17" fill="#A32626" stroke="#ECECEC" stroke-width="2"/>
+    <path d="M-9 12 L-5 -11 M9 12 L5 -11" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M-9 7 H9 M-8 1 H8 M-7 -5 H7" stroke="#ECECEC" stroke-width="1.6" opacity=".85"/>
+  </g>
+  <text x="50" y="23" font-family="'Pretendard','Noto Sans KR','Malgun Gothic',sans-serif" font-size="17" font-weight="800" fill="#fff" letter-spacing=".5">RZD</text>
+  <text x="50" y="38" font-family="'Pretendard','Noto Sans KR','Malgun Gothic',sans-serif" font-size="10" font-weight="600" fill="#ECECEC">러시아철도 (게임 표시)</text>
+</svg>

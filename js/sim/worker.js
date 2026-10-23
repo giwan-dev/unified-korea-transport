@@ -1,5 +1,6 @@
 // 시뮬레이션은 메인 스레드를 막지 않도록 워커에서 돈다.
 import { Model } from './model.js';
+import { P } from './params.js';
 
 let model = null;
 let lastNet = null, lastTotals = null;   // 미리보기 뒤 되돌릴 지금 상태
@@ -100,7 +101,8 @@ self.onmessage = (ev) => {
       model = new Model(msg.zones, new Float32Array(msg.grid));
       model.setNetwork(msg.net);
       const totals = calibrateFresh(msg.ctx);
-      const out = model.exportBaseline(totals, msg.meta);
+      // 보정 방식 판(calibVersion)을 함께 적어, 보정이 바뀌면 예전 기준 연도를 쓰지 않게 한다
+      const out = model.exportBaseline(totals, { ...msg.meta, calib: P.calibVersion });
       post('baseline', out, [out.bin]);
     }
   } catch (err) {

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 48" role="img" aria-label="중국국가철로 (게임 표시)">
+  <!-- 게임 안의 중국 철도 표시: 실제 회사 로고가 아니다. 붉은 바탕에 선로가 모이는 원형 엠블럼 -->
+  <rect x="0" y="0" width="160" height="48" rx="8" fill="#B22222"/>
+  <g transform="translate(24 24)">
+    <circle r="17" fill="#C9302C" stroke="#F4D03F" stroke-width="2"/>
+    <path d="M-9 12 L0 -10 L9 12" fill="none" stroke="#fff" stroke-width="2.6" stroke-linejoin="round"/>
+    <path d="M-5 4 H5 M-3 -2 H3" stroke="#F4D03F" stroke-width="1.8"/>
+  </g>
+  <text x="50" y="23" font-family="'Pretendard','Noto Sans KR','Malgun Gothic',sans-serif" font-size="16" font-weight="800" fill="#fff">中国铁路</text>
+  <text x="50" y="38" font-family="'Pretendard','Noto Sans KR','Malgun Gothic',sans-serif" font-size="10" font-weight="600" fill="#F4D03F">중국국가철로 (게임 표시)</text>
+</svg>
