@@ -80,6 +80,7 @@ bash pipeline/download.sh
 .venv/Scripts/python -X utf8 pipeline/build_grid.py      # 인구 격자·소구역·데이터 버전
 .venv/Scripts/python -X utf8 pipeline/build_names.py     # 옛 이름 되찾기 대상
 .venv/Scripts/python -X utf8 pipeline/build_roads.py     # 확대 시 보이는 OSM 도로 배경 (도별 파일)
+.venv/Scripts/python -X utf8 pipeline/build_water.py     # 큰 강·호수의 물 면 (한강·낙동강·대동강 등)
 ```
 
 (macOS·Linux에서는 `.venv/bin/python`)
@@ -111,7 +112,7 @@ docs/model.md           모델과 가정값 설명
 - 도로·철도·도시철도·북측 행정구역·지명: © [OpenStreetMap](https://www.openstreetmap.org/copyright) 기여자, ODbL 1.0.
   - `data/`의 파생 데이터도 ODbL을 따릅니다.
 - 인구 격자: [WorldPop](https://www.worldpop.org/) 2025 (R2025A) 1km constrained UN-adjusted, CC BY 4.0
-- 배경지도의 주변국 육지·하천·호수·도시: [Natural Earth](https://www.naturalearthdata.com/) (공공 영역)
+- 배경지도의 주변국 육지·하천 중심선·호수·도시: [Natural Earth](https://www.naturalearthdata.com/) (공공 영역). 강·호수의 물 면은 OpenStreetMap
 - 라벨 글꼴의 숫자·영문 글리프: [OpenFreeMap](https://openfreemap.org/) 글꼴 서버 (한글은 브라우저 글꼴)
 - 공항·항구·국외 도시 좌표와 용량, 옛 지명 대조표, 관광지 방문객 수(`data/air_sea.json`, `data/historic_names.json`, `data/tourism.json`)는 공개 자료를 바탕으로 직접 정리한 값이며 확인이 필요합니다.
 

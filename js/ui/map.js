@@ -133,6 +133,8 @@ export const METRICS = {
   hdi: { label: '인간개발지수 (HDI)', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [0.55, 0.65, 0.75, 0.85, 0.95], fmt: (v) => v.toFixed(2) },
   income: { label: '1인당 소득 (PPP $)', ramp: ['#f7f4ea', '#c7d9ee', '#5b8fd1', '#1d3f8f'], stops: [2000, 10000, 30000, 60000], fmt: (v) => `$${Math.round(v / 1000)}k` },
   happiness: { label: '주민 행복도', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [40, 50, 60, 70, 80], fmt: (v) => v.toFixed(0) },
+  partyMayor: { label: '정당 지도 (시군구청장)', ramp: ['#1f5fd1', '#f2f2f2', '#e0383e'], stops: [0, 0.5, 1], fmt: (v) => (v < 0.5 ? '민주당' : '국민의힘') },
+  partyGov: { label: '정당 지도 (광역단체장)', ramp: ['#1f5fd1', '#f2f2f2', '#e0383e'], stops: [0, 0.5, 1], fmt: (v) => (v < 0.5 ? '민주당' : '국민의힘') },
   access: { label: '접근성 (상대)', ramp: ['#f7f4ea', '#c8e0b4', '#5aa36b', '#1d5c3a'], stops: [0.2, 0.6, 1.2, 2.5], fmt: (v) => v.toFixed(1) },
 };
 
@@ -204,6 +206,10 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
         0, 'rgba(255,255,255,0)', 0.15, '#fde7b0', 0.4, '#f6a24a', 0.7, '#d9472b', 1, '#7a1414'],
     },
   }, below);
+
+  // 큰 강·호수의 물 면 (OSM): 인구·지표 색칠 위에 그려 한강·낙동강·대동강 등이 보이게 한다
+  map.addSource('waterarea', { type: 'geojson', data: 'data/base/waterarea.geojson' });
+  map.addLayer({ id: 'water-area', type: 'fill', source: 'waterarea', paint: { 'fill-color': (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? PALETTE.dark : PALETTE.light).water, 'fill-opacity': 0.95 } }, below);
 
   map.addSource('links', { type: 'geojson', data: linksFC, promoteId: 'id' });
   // 혼잡도 0~10: 1을 넘는 곳도 심한 정도가 구분되도록 1·2·4·7·10에서 점점 짙어진다
