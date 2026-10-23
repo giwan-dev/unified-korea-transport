@@ -128,7 +128,9 @@ export function railPath(links, from, to, line, mode = 1) {
   const adj = new Map();
   links.forEach((l, i) => {
     if (l.mode !== mode || !l.active || l.via || l.ext) return;
-    const t = (l.len / l.speed) * (line && l.name !== line ? 4 : 1);
+    // 제 노선(여러 노선을 잇는 계통이면 그 노선들)을 따라가고, 다른 노선은 끊긴 곳을 이을 때만 쓴다
+    const own = !line || (line instanceof Set ? line.has(l.name) : Array.isArray(line) ? line.includes(l.name) : l.name === line);
+    const t = (l.len / l.speed) * (own ? 1 : 4);
     for (const [u, v] of [[l.a, l.b], [l.b, l.a]]) {
       if (!adj.has(u)) adj.set(u, []);
       adj.get(u).push([v, t, i]);

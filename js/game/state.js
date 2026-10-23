@@ -597,6 +597,29 @@ export function startRestoreName(state, target) {
 }
 
 /** 새로 놓은 노선 이름 바꾸기 (같은 이름의 신설 구간 모두) */
+/** 북측 노선 이름을 분단 전·남측 기준 이름으로 (평부선·평의선은 경의선, 강원선은 경원선 등) */
+export const KP_LINE_RENAME = { 평부선: '경의선', 평의선: '경의선', 강원선: '경원선', 금강산청년선: '동해선', 황해청년선: '황해선' };
+export const LINE_RENAME_COST = 1500;   // 억원 (역·표지판·시간표·전산)
+
+export function renameKPLines(base, state) {
+  if (state.linesRenamed) return { ok: false, reason: '이미 바꿨습니다.' };
+  if (!canAfford(state, LINE_RENAME_COST, 1)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
+  pay(state, LINE_RENAME_COST);
+  let n = 0;
+  base.links.forEach((l, i) => {
+    const to = l.mode === 1 && l.kp && KP_LINE_RENAME[l.name];
+    if (to) { state.overrides[i] = { ...(state.overrides[i] || {}), name: to }; n++; }
+  });
+  for (const l of state.newLinks) if (l.kp && KP_LINE_RENAME[l.name]) l.name = KP_LINE_RENAME[l.name];
+  for (const s of state.services || []) {
+    if (KP_LINE_RENAME[s.line]) s.line = KP_LINE_RENAME[s.line];
+    if (s.lines) s.lines = [...new Set(s.lines.map((x) => KP_LINE_RENAME[x] || x))];
+  }
+  state.linesRenamed = true;
+  state.log.unshift(`${state.year}년 북측 노선 이름을 남측 기준으로 바꿨습니다: ${Object.entries(KP_LINE_RENAME).map(([a, b]) => `${a}→${b}`).join(', ')} (${n}개 구간)`);
+  return { ok: true };
+}
+
 export function renameLine(state, oldName, newName) {
   for (const l of state.newLinks) if (l.name === oldName) l.name = newName;
   for (const p of state.projects) if (p.label.startsWith(`${oldName} `)) p.label = p.label.replace(oldName, newName);
