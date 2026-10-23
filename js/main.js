@@ -951,11 +951,55 @@ function nameDraftPoint(pt) {
   }
 }
 
+/** 기존 노드에서 노선이 뻗는 방향(경위도 단위 벡터)들: 그 노드에 닿은 같은 수단 링크마다 약 1km 앞 점 쪽 */
+function nodeDirs(node, mode) {
+  const c = nodeCoord(node), out = [];
+  if (!c) return out;
+  allLinks().forEach((l, i) => {
+    if (l.ext || (l.a !== node && l.b !== node) || linkAt(base, state, i).mode !== mode || / 환승$/.test(l.name || '')) return;
+    const g = l.geom || [];
+    const pts = [];
+    for (let k = 0; k + 1 < g.length; k += 2) if (g[k] === g[k]) pts.push([g[k], g[k + 1]]);
+    if (pts.length < 2) return;
+    if (kmBetween(c[0], c[1], pts[0][0], pts[0][1]) > kmBetween(c[0], c[1], pts[pts.length - 1][0], pts[pts.length - 1][1])) pts.reverse();
+    let q = pts[1];
+    for (const p of pts) { q = p; if (kmBetween(c[0], c[1], p[0], p[1]) > 1) break; }
+    const d = Math.hypot(q[0] - c[0], q[1] - c[1]);
+    if (d > 0) out.push([(q[0] - c[0]) / d, (q[1] - c[1]) / d]);
+  });
+  return out;
+}
+
+/** 양 끝이 기존 노드에 붙으면 접선 방향(tan)을 붙인 점 목록: 끝선이면 그 선을 그대로 잇고,
+ *  중간이면 기존 선의 두 방향 중 다음 점 쪽 방향으로 갈라져 나간다 (분기·합류가 접선 방향) */
+function withTangents(points, mode) {
+  if (points.length < 2) return points;
+  const out = points.map((p) => ({ ...p }));
+  for (const [i, j] of [[0, 1], [out.length - 1, out.length - 2]]) {
+    const p = out[i], q = out[j];
+    delete p.tan;
+    if (p.node == null || p.split != null) continue;
+    const dirs = nodeDirs(p.node, mode);
+    if (!dirs.length) continue;
+    const to = [q.lon - p.lon, q.lat - p.lat], tl = Math.hypot(...to) || 1;
+    const cands = dirs.length === 1 ? [[-dirs[0][0], -dirs[0][1]]] : dirs.flatMap((d) => [d, [-d[0], -d[1]]]);
+    let best = null, bd = -2;
+    for (const d of cands) { const dot = (d[0] * to[0] + d[1] * to[1]) / tl; if (dot > bd) { bd = dot; best = d; } }
+    // 다음 점과 거의 반대(100° 넘게)면 억지로 돌리지 않는다
+    if (best && bd > -0.17) p.tan = best;
+  }
+  return out;
+}
+
+function draftPoints() {
+  return withTangents(draft.points, NEW_BUILDS[draft.type].mode);
+}
+
 function drawDraft() {
   // 선형 점(via)은 노선 모양만 잡고 역·IC가 아니므로 그리지 않는다
   const f = draft.points.filter((p) => !p.via).map((p) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [p.lon, p.lat] } }));
   if (draft.points.length > 1) {
-    const line = smoothSegments(draft.points).flatMap((seg, i) => (i ? seg.slice(1) : seg));
+    const line = smoothSegments(draftPoints()).flatMap((seg, i) => (i ? seg.slice(1) : seg));
     f.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } });
   }
   map.getSource('draft').setData({ type: 'FeatureCollection', features: f });
@@ -964,7 +1008,7 @@ function drawDraft() {
 function draftCost() {
   const spec = NEW_BUILDS[draft.type];
   let km = 0, cost = 0, foreignKm = 0;
-  const segs = smoothSegments(draft.points);
+  const segs = smoothSegments(draftPoints());
   const segFactor = [];
   for (let i = 0; i + 1 < draft.points.length; i++) {
     const a = draft.points[i], b = draft.points[i + 1];
@@ -1062,8 +1106,8 @@ function commitDraft() {
     p.node = splitLink(base, state, p.split, p.lon, p.lat);
     split = true;
   }
-  const restAreas = restPositions(smoothSegments(draft.points)).map(([lon, lat]) => ({ lon, lat, name: namer.suggest(lon, lat, 'rest') }));
-  const r = startNewBuild(base, state, { type: draft.type, points: draft.points, names, lineName, extendOf: draft.extendOf, plan: draft.plan, title: draft.planTitle,
+  const restAreas = restPositions(smoothSegments(draftPoints())).map(([lon, lat]) => ({ lon, lat, name: namer.suggest(lon, lat, 'rest') }));
+  const r = startNewBuild(base, state, { type: draft.type, points: draftPoints(), names, lineName, extendOf: draft.extendOf, plan: draft.plan, title: draft.planTitle,
     ppp: pp ? { type: pp.type, subsidy: pp.subsidy, toll: pp.toll } : null, segFactor: dc.segFactor, extraCost: dc.extraCost, restAreas });
   if (split) refreshLinks();
   if (!r.ok) { alert(r.reason); return; }
