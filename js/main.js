@@ -9,7 +9,7 @@ import {
   initAirRoutes, updateAirRoutes, startOpenRoute, closeRoute, AIR,
   closeLine, reopenLine, setLineFreq, FREQ_STEPS, CLOSE_APPROVAL, REOPEN_PER_KM, startMega, settleMega,
 } from './game/state.js';
-import { MEGA, TSR_FREIGHT } from './game/mega.js';
+import { MEGA, TSR_FREIGHT, megaGeometry, applyMega } from './game/mega.js';
 import { AIRPORT } from './game/catalog.js';
 import { setNameResolver, refreshNames } from './ui/map.js';
 import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.js';
@@ -17,6 +17,7 @@ import { kmBetween, routeKey } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
 import { smoothSegments, polylineKm } from './game/curve.js';
 import { trackHeadings, branchTangent, unitDir } from './game/branch.js';
+import { stationCost, startStationAdd, nearestLocalRoad, icCost, startICAdd } from './game/points.js';
 import { appraise, appraisalHTML, regionOf as appraisalRegion, opexFor } from './game/appraisal.js';
 import { extendWorld, urbanLanes } from './game/world.js';
 import { autoLineName, cityStem, makeForeignTest } from './game/lines.js';
@@ -146,7 +147,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { map, base, select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { map, base, select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 /** 관광지를 가장 가까운 존(국외는 같은 이름의 거점)에 하루 방문객으로 붙인다 */
@@ -671,6 +672,7 @@ function bindMap() {
     if (straight) { straightenClick(e.lngLat); return; }
     if (secPick) { sectionClick(e.lngLat); return; }
     if (svcPick) { servicePickClick(e.lngLat); return; }
+    if (pointAdd) { pointAddClick(e.lngLat); return; }
     if (draft?.type === 'airport') { placeAirport(e.lngLat); return; }
     if (draft) { addDraftPoint(e.lngLat); return; }
     const box = [[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]];
@@ -754,6 +756,7 @@ function select(sel) {
 
 function startDraft(type) {
   if (!namer) { alert('지명 데이터를 아직 불러오는 중입니다. 잠시 후 다시 눌러 주세요.'); return; }
+  if (pointAdd) endPointAdd();
   cancelDraft();
   select(null);
   draft = { type, points: [] };
@@ -812,7 +815,7 @@ function placeAirport(lngLat) {
 }
 
 /** 누른 곳에서 가까운 같은 수단 구간 위의 점 (화면 거리 maxPx 안) */
-function nearestOnLink(lngLat, mode, maxPx) {
+function nearestOnLink(lngLat, mode, maxPx, filter = null) {
   const p = map.project(lngLat);
   const layers = mode === 0 ? ['roads', 'roads-minor'] : mode === 1 ? ['rails'] : ['metro'];
   const box = [[p.x - maxPx, p.y - maxPx], [p.x + maxPx, p.y + maxPx]];
@@ -820,7 +823,7 @@ function nearestOnLink(lngLat, mode, maxPx) {
   let best = null;
   for (const f of map.queryRenderedFeatures(box, { layers })) {
     const id = f.properties.id;
-    if (work.has(id) || draft.points.some((q) => q.split === id)) continue;
+    if (work.has(id) || draft?.points.some((q) => q.split === id) || (filter && !filter(linkAt(base, state, id)))) continue;
     const g = allLinks()[id].geom;
     for (let k = 0; k + 3 < g.length; k += 2) {
       if (Number.isNaN(g[k]) || Number.isNaN(g[k + 2])) continue;
@@ -1273,7 +1276,8 @@ function renderBuild() {
   const tools = Object.entries(NEW_BUILDS).map(([k, v]) =>
     `<button data-build="${k}" class="${draft?.type === k ? 'on' : ''}">${v.label}<span class="c">${formatWon(v.perKm)}/km · ${v.years}년</span></button>`).join('')
     + `<button data-build="airport" class="${draft?.type === 'airport' ? 'on' : ''}">${AIRPORT.build.label}<span class="c">${formatWon(AIRPORT.build.cost)} · ${AIRPORT.build.years}년</span></button>`;
-  let body = `<button class="small svc-pick-b" style="margin-bottom:6px">역 골라 특급·급행 짜기</button>
+  let body = `<div class="row" style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px"><button class="small svc-pick-b">역 골라 특급·급행 짜기</button>
+    <button class="small" data-padd="station">역 신설 (노선 위 한 점)</button><button class="small" data-padd="ic">IC 신설 (고속도로 위 한 점)</button></div>
     <p class="hint">기존 도로·철도를 개량하려면 지도에서 구간을 누르세요. <b>Shift를 누른 채 끌면</b> 여러 구간을 한꺼번에 골라 개량할 수 있습니다. 새 노선을 놓으려면 아래에서 종류를 고른 뒤 지도를 차례로 누르세요.</p>`;
   if (draft) {
     if (draft.type === 'airport') {
@@ -1322,9 +1326,11 @@ function renderBuild() {
   const restore = historic.length ? `<h4>옛 이름 되찾기</h4>
     <p class="hint">북측에서 지도자 이름이나 선전 구호로 바뀐 지명을 바뀌기 전 이름으로 돌립니다. 표지판·행정 문서·지도를 바꾸는 데 예산이 들고, 완공되면 그 지역 주민 행복도가 오릅니다.</p>
     <div class="list">${historic.map((t) => restoreRow(t)).join('')}</div>` : '';
-  el.innerHTML = `<div class="tools">${tools}</div>${body}${draft ? '' : plansHTML() + restore}`;
+  el.innerHTML = `<div class="tools">${tools}</div>${body}${draft ? '' : plansHTML() + megaHTML() + restore}`;
+  if (!draft) bindMega(el);
   el.querySelectorAll('[data-plan]').forEach((b) => { b.onclick = () => openPlan(b.dataset.plan); });
   el.querySelectorAll('.svc-pick-b').forEach((b) => { b.onclick = startServicePick; });
+  el.querySelectorAll('[data-padd]').forEach((b) => { b.onclick = () => startPointAdd(b.dataset.padd); });
   bindRestore(el);
   el.querySelectorAll('[data-build]').forEach((b) => { b.onclick = () => startDraft(b.dataset.build); });
   if (draft) {
@@ -1640,8 +1646,6 @@ function renderSettings() {
     <p class="hint">통일 직후 대규모 남하를 막을지 정합니다. 통제할수록 북측 인구는 유지되지만 지지율과 통합 속도에 영향이 있습니다.</p>
     <h3 style="margin-top:16px">지방자치·행정구역</h3>
     ${localSettingsHTML()}
-    <h3 style="margin-top:16px">국가 대형 사업</h3>
-    ${megaHTML()}
     <h3 style="margin-top:16px">항공</h3>
     <label class="name-row"><input type="checkbox" id="air-auto" ${state.air?.auto ? 'checked' : ''}>
       <span>항공 노선 자동 운영 (수요에 따른 취항·증편·단항)</span></label>
@@ -1657,16 +1661,6 @@ function renderSettings() {
     <p class="hint">도로·철도·행정구역·지명: © OpenStreetMap 기여자 (ODbL)<br>인구 격자: WorldPop 2020 (CC BY 4.0)<br>소득·HDI 초기값과 공사비 단가는 게임용 가정값입니다. 자세한 내용은 저장소의 docs/model.md를 보세요.</p>`;
   $('#air-auto').onchange = (e) => { state.air.auto = e.target.checked; save(state); };
   bindLocalSettings(el);
-  el.querySelectorAll('[data-mega]').forEach((b) => {
-    b.onclick = () => {
-      const m = MEGA.find((x) => x.id === b.dataset.mega);
-      if (!confirm(`${m.label}을(를) 착공할까요?
-${formatWon(m.cost)} · ${m.years}년 (해마다 ${formatWon(m.cost / m.years)})`)) return;
-      const r = startMega(state, m.id);
-      if (!r.ok) { alert(r.reason); return; }
-      save(state); renderAll();
-    };
-  });
   bindSlots(el);
   $('#policy').onchange = (e) => { state.policy = e.target.value; state.log.unshift(`${state.year}년 이주 정책: ${POLICY_LABEL[state.policy]}`); save(state); renderStatus(); };
   $('#btn-new').onclick = () => {
@@ -1691,6 +1685,7 @@ function renderSelection() {
   else if (selection.type === 'multi') el.innerHTML = multiPanel(selection.ids);
   else if (selection.type === 'service') el.innerHTML = servicePanel();
   else if (selection.type === 'straighten') { el.innerHTML = straightenPanel(); bindStraighten(el); return; }
+  else if (selection.type === 'pointadd') { el.innerHTML = pointAddPanel(); bindPointAdd(el); return; }
   else if (selection.type === 'svcpick') {
     el.innerHTML = servicePickPanel();
     const end = () => { endServicePick(); select(null); };
@@ -2587,15 +2582,57 @@ function localSettingsHTML() {
       ${L.independent.length ? `<div class="m" style="margin-top:4px">독립·승격한 도시: ${L.independent.map(esc).join(', ')}</div>` : ''}</div>`;
 }
 
-/** 설정 탭: 국가 대형 사업 목록 (착공 전·공사 중·완공) */
+/** 건설 탭: 국가 대형 사업 목록 (착공 전·공사 중·완공). 선형 보기·효과 미리보기·착공 */
 function megaHTML() {
-  return `<div class="list">${MEGA.map((m) => {
+  return `<h4>국가 대형 사업</h4>
+    <p class="hint">해마다 예산을 들여 짓는 국가 단위 사업입니다. 선형을 지도에서 보고, 다 지었을 때의 효과와 예비타당성 평가를 미리 볼 수 있습니다.</p>
+    <div class="list">${MEGA.map((m) => {
     const p = state.projects.find((x) => x.kind === 'mega' && x.mega === m.id);
     const status = state.mega?.[m.id] ? `<span class="pos">${state.mega[m.id]}년 완공</span>`
       : p ? `공사 중 · ${p.doneYear}년 완공 예정`
-      : `<button class="small primary" data-mega="${m.id}" ${m.ready(state) ? '' : 'disabled'}>착공 ${formatWon(m.cost)} · ${m.years}년</button>${m.ready(state) || !m.need ? '' : ` <span class="m">조건: ${esc(m.need)}</span>`}`;
-    return `<div class="item"><div class="t">${esc(m.name)}</div><div class="m">${esc(m.desc)}${m.id === 'tsr' ? ` 화물 수입 연 ${formatWon(TSR_FREIGHT)}.` : ''}</div><div class="row">${status}</div></div>`;
+      : `<button class="small primary" data-mega="${m.id}" ${m.ready(state) ? '' : 'disabled'}>착공 ${formatWon(m.cost)} · ${m.years}년</button>
+        <button class="small" data-mega-prev="${m.id}">효과 미리보기</button>${m.ready(state) || !m.need ? '' : ` <span class="m">조건: ${esc(m.need)}</span>`}`;
+    return `<div class="item"><div class="t">${esc(m.name)} <button class="small" data-mega-show="${m.id}">선형 보기</button></div>
+      <div class="m">${esc(m.desc)}${m.id === 'tsr' ? ` 화물 수입 연 ${formatWon(TSR_FREIGHT)}.` : ''}</div><div class="row" style="display:flex;gap:4px;flex-wrap:wrap">${status}</div></div>`;
   }).join('')}</div>`;
+}
+
+function bindMega(el) {
+  el.querySelectorAll('[data-mega]').forEach((b) => {
+    b.onclick = () => {
+      const m = MEGA.find((x) => x.id === b.dataset.mega);
+      if (!confirm(`${m.label}을(를) 착공할까요?
+${formatWon(m.cost)} · ${m.years}년 (해마다 ${formatWon(m.cost / m.years)})`)) return;
+      const r = startMega(state, m.id);
+      if (!r.ok) { alert(r.reason); return; }
+      save(state); renderAll();
+    };
+  });
+  el.querySelectorAll('[data-mega-show]').forEach((b) => { b.onclick = () => showMegaLine(b.dataset.megaShow); });
+  el.querySelectorAll('[data-mega-prev]').forEach((b) => { b.onclick = () => previewMega(b.dataset.megaPrev); });
+}
+
+/** 대형 사업 선형을 지도에 그리고 그쪽으로 옮긴다 */
+function showMegaLine(id) {
+  const g = megaGeometry(base, id);
+  if (!g) return;
+  const line = smoothSegments(g.coords.map(([lon, lat]) => ({ lon, lat }))).flatMap((seg, i) => (i ? seg.slice(1) : seg));
+  map.getSource('draft').setData({ type: 'FeatureCollection', features: [
+    { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } },
+    ...[g.coords[0], g.coords[g.coords.length - 1]].map((c) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: c } })),
+  ] });
+  const xs = line.map((c) => c[0]), ys = line.map((c) => c[1]);
+  map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: 80, maxZoom: 10 });
+  return g;
+}
+
+function previewMega(id) {
+  const m = MEGA.find((x) => x.id === id);
+  const g = showMegaLine(id);
+  if (!m || !g) return;
+  const km = id === 'kj-tunnel' ? 230 : id === 'jeju-hsr' ? 167 : polylineKm(g.coords);
+  runPreview(`${m.name} 미리보기`, (c) => applyMega(base, c, id),
+    { kind: 'mega', cost: m.cost, years: m.years, km, cls: 'hsr', mode: 1, plan: true, border: id === 'tsr' });
 }
 
 function payEvent(cost) {
@@ -3010,6 +3047,117 @@ function afterStraighten(done) {
     const plan = planService(links, railStationSet(), s.stops, s.kind, new Set(s.lines || [s.line]), s.type);
     if (plan) { s.segs = plan.segs; s.runMin = plan.runMin; s.km = plan.km; s.trains = tripsPerDay(s.sets, plan.runMin); }
   }
+}
+
+// ------------------------------------------------------------ 역·IC 신설 (기존 노선 위 한 점)
+
+let pointAdd = null;   // {kind: 'station'|'ic', pick: {link, lon, lat, mode, name, road}}
+
+function startPointAdd(kind) {
+  cancelDraft();
+  if (!namer) { alert('지명 데이터를 아직 불러오는 중입니다. 잠시 후 다시 눌러 주세요.'); return; }
+  pointAdd = { kind, pick: null };
+  map.getCanvas().style.cursor = 'crosshair';
+  select({ type: 'pointadd' });
+}
+
+function endPointAdd() {
+  if (pointAdd?.pick?.reserved) namer.release(pointAdd.pick.name, pointAdd.kind === 'ic' ? 'IC' : 'station');
+  pointAdd = null;
+  map.getCanvas().style.cursor = '';
+  map.getSource('draft').setData({ type: 'FeatureCollection', features: [] });
+  if (selection?.type === 'pointadd') select(null);
+}
+
+function pointAddClick(ll) {
+  const isIC = pointAdd.kind === 'ic';
+  const on = isIC ? nearestOnLink(ll, 0, 16, (l) => l.cls === 'motorway')
+    : nearestOnLink(ll, 1, 16, (l) => !l.ext) || nearestOnLink(ll, 2, 16);
+  if (!on) return;
+  const lon = on.lngLat.lng, lat = on.lngLat.lat, l = linkAt(base, state, on.link);
+  if (pointAdd.pick?.reserved) namer.release(pointAdd.pick.name, isIC ? 'IC' : 'station');
+  const pick = { link: on.link, lon, lat, mode: l.mode, line: l.name || CLASS_LABEL[l.cls], name: namer.suggest(lon, lat, isIC ? 'IC' : 'station'), reserved: true };
+  if (isIC) {
+    const r = nearestLocalRoad(base, state, allLinks().map((_, i) => linkAt(base, state, i)), lon, lat);
+    pick.road = r?.node ?? null; pick.roadKm = r?.km ?? null;
+  }
+  pointAdd.pick = pick;
+  const f = [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [lon, lat] } }];
+  if (pick.road != null) f.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[lon, lat], nodeCoord(pick.road)] } });
+  map.getSource('draft').setData({ type: 'FeatureCollection', features: f });
+  renderSelection();
+}
+
+function pointAddCost() {
+  const pk = pointAdd.pick;
+  return pointAdd.kind === 'ic' ? icCost(pk.roadKm || 0, pk.lat, pk.lon) : stationCost({ mode: pk.mode }, pk.lat, pk.lon);
+}
+
+function pointAddPanel() {
+  const isIC = pointAdd.kind === 'ic', pk = pointAdd.pick;
+  const title = isIC ? 'IC 신설' : '역 신설';
+  if (!pk) {
+    return `${header(title)}<p class="hint">${isIC ? '고속도로 위 IC를 놓을 곳을 누르세요. 가장 가까운 일반도로(6km 안)까지 연결도로를 함께 놓습니다.'
+      : '역을 놓을 철도·도시철도 노선 위 한 점을 누르세요. 완공되면 그 자리에 역이 생겨 주변 읍면동에서 역까지 가까워집니다.'}</p>`;
+  }
+  const c = pointAddCost();
+  const noRoad = isIC && pk.road == null;
+  return `${header(title)}
+    <table class="kv">
+      <tr><td>노선</td><td>${esc(pk.line)}</td></tr>
+      <tr><td>이름</td><td><input type="text" id="padd-name" value="${esc(pk.name)}" style="width:9em"></td></tr>
+      ${isIC ? `<tr><td>연결도로</td><td>${noRoad ? '<span class="neg">6km 안에 이을 일반도로가 없습니다</span>' : `${(pk.roadKm * 1.2).toFixed(1)}km (4차로)`}</td></tr>` : ''}
+      <tr><td>사업비 · 공기</td><td>${formatWon(c.cost)} · ${c.years}년</td></tr>
+      <tr><td>주변 인구 (반경 1·3km)</td><td>${Math.round(popWithin(pk.lon, pk.lat, 1)).toLocaleString()} · ${Math.round(popWithin(pk.lon, pk.lat, 3)).toLocaleString()}명</td></tr>
+    </table>
+    <p class="hint">다른 곳을 누르면 자리를 옮깁니다.</p>
+    <div class="row" style="display:flex;gap:6px;margin-top:8px">
+      <button class="primary" id="padd-ok" ${noRoad ? 'disabled' : ''}>착공</button><button id="padd-prev" ${noRoad ? 'disabled' : ''}>효과 미리보기</button><button id="padd-cancel">취소</button></div>`;
+}
+
+function bindPointAdd(el) {
+  el.querySelector('.close')?.addEventListener('click', endPointAdd);
+  el.querySelector('#padd-cancel')?.addEventListener('click', endPointAdd);
+  const nm = el.querySelector('#padd-name');
+  if (nm) {
+    nm.onchange = () => {
+      const v = nm.value.trim();
+      if (!v) return;
+      if (pointAdd.pick.reserved) namer.release(pointAdd.pick.name, pointAdd.kind === 'ic' ? 'IC' : 'station');
+      pointAdd.pick.name = v; pointAdd.pick.reserved = false;
+    };
+  }
+  el.querySelector('#padd-ok')?.addEventListener('click', commitPointAdd);
+  el.querySelector('#padd-prev')?.addEventListener('click', previewPointAdd);
+}
+
+function doPointAdd(st) {
+  const pk = pointAdd.pick;
+  return pointAdd.kind === 'ic' ? startICAdd(base, st, { link: pk.link, lon: pk.lon, lat: pk.lat, road: pk.road, name: pk.name })
+    : startStationAdd(base, st, { link: pk.link, lon: pk.lon, lat: pk.lat, name: pk.name });
+}
+
+function commitPointAdd() {
+  if (!pointAdd?.pick) return;
+  const r = doPointAdd(state);
+  if (!r.ok) { alert(r.reason); return; }
+  pointAdd.pick.reserved = false;
+  endPointAdd();
+  save(state); refreshLinks(); refreshPoints(); renderAll();
+  switchTab('projects');
+}
+
+function previewPointAdd() {
+  const pk = pointAdd?.pick;
+  if (!pk) return;
+  const c = pointAddCost(), isIC = pointAdd.kind === 'ic';
+  runPreview(`${pk.name} ${isIC ? '' : '역 '}신설 미리보기`, (cl) => {
+    const n0 = cl.newLinks.length;
+    const r = doPointAdd(cl);
+    if (!r.ok) throw new Error(r.reason);
+    buildNow(cl, cl.projects[cl.projects.length - 1]);
+    return cl.newLinks.slice(n0).map((l) => l.id);
+  }, { kind: pointAdd.kind, cost: c.cost, years: c.years, mode: pk.mode, km: isIC ? (pk.roadKm || 0) * 1.2 : 0, cls: isIC ? 'primary' : undefined });
 }
 
 // ------------------------------------------------------------ 착공 전 효과 미리보기

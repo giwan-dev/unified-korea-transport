@@ -763,6 +763,8 @@ export function advanceBudgetYear(base, state) {
 }
 
 function completeProject(base, state, p) {
+  // 완공 때 붙는 이름 (역 신설·IC 신설)
+  for (const [n, nm] of Object.entries(p.newNames || {})) state.names[n] = nm;
   if (p.kind === 'service') {
     const s = (state.services || []).find((x) => x.id === p.service);
     if (s) s.built = true;
