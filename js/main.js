@@ -21,6 +21,7 @@ import { autoLineName, cityStem, makeForeignTest } from './game/lines.js';
 import { saveSim, loadSim, clearSim } from './game/simstore.js';
 import { SERVICE_KINDS, TRAIN_TYPES, OPERATING, lineStations, planService, railPath, tripsPerDay, setCost, canRun, defaultTrainType, serviceBuyCost, startService, updateService, removeService, seedServices, openWaitingServices } from './game/services.js';
 import { showLineDiagram, stopLineDiagram } from './ui/linediagram.js';
+import { addRailKindLayer, railKindLegend, railStd, syncRailKind } from './ui/railkind.js';
 import { P } from './sim/params.js';
 import { PPP_TYPES, PPP_DEFAULTS, initPPP, tollKind, linkToll, annualRevenue, evaluatePPP } from './game/ppp.js';
 import {
@@ -130,6 +131,7 @@ async function init() {
     window.__map = m;
     map = m;
     addLayers(map, zonesFC, linksFC(), { type: 'FeatureCollection', features: [] });
+    addRailKindLayer(map);
     setNameResolver((level, id, original) => placeName(state, level, id, original));
     refreshNames(map);
     subsReady.then(() => map.getSource('subs').setData(subsFC));
@@ -142,7 +144,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { map, base, select, selectBox, renderAll, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { map, base, select, selectBox, renderAll, refreshLinks, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 /** 관광지를 가장 가까운 존(국외는 같은 이름의 거점)에 하루 방문객으로 붙인다 */
@@ -452,7 +454,7 @@ function linksFC() {
     const parts = smoothParts(l, i);
     return {
       type: 'Feature', id: i,
-      properties: { id: i, mode: eff.mode, cls: eff.cls, minor: eff.mode === 0 && eff.cls === 'secondary' && !eff.kp ? 1 : 0, building: building.has(i) || (i < base.links.length && linkPending(base, state, i)) ? 1 : 0, colour: eff.colour || '', ext: eff.ext ? 1 : 0 },
+      properties: { id: i, mode: eff.mode, cls: eff.cls, minor: eff.mode === 0 && eff.cls === 'secondary' && !eff.kp ? 1 : 0, building: building.has(i) || (i < base.links.length && linkPending(base, state, i)) ? 1 : 0, colour: eff.colour || '', ext: eff.ext ? 1 : 0, rstd: railStd(eff) },
       geometry: parts.length > 1 ? { type: 'MultiLineString', coordinates: parts } : { type: 'LineString', coordinates: parts[0] },
     };
   });
@@ -1094,7 +1096,7 @@ function bindUI() {
   watchFolds();
   $('#legend').addEventListener('change', (e) => {
     if (e.target.id === 'metric') { metric = e.target.value; paintZones(); renderLegend(); }
-    if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); }
+    if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); syncRailKind(map); }
   });
   document.addEventListener('keydown', (e) => {
     if (!draft || e.target.tagName === 'INPUT') return;
@@ -1177,7 +1179,7 @@ function renderTop() {
 }
 
 let layerView = 'all';
-function renderLegend() { $('#legend').innerHTML = legendHTML(metric, layerView); }
+function renderLegend() { $('#legend').innerHTML = legendHTML(metric, layerView) + railKindLegend(); }
 
 function fmtPop(v) { return v >= 1e6 ? `${(v / 1e6).toFixed(2)}백만` : `${Math.round(v / 1000).toLocaleString()}천`; }
 function pct(v, d = 1) { return `${(v * 100).toFixed(d)}%`; }
@@ -3504,6 +3506,7 @@ function linkPanel(id) {
        <tr><td>교통량</td><td>${Math.round(vol).toLocaleString()} PCU/일</td></tr>`
     : `<tr><td>선로</td><td>${l.tracks === 1 ? '단선' : l.tracks === 2 ? '복선' : l.tracks + '선'}</td></tr>
        <tr><td>전력</td><td>${{ AC: '교류 25kV', DC: '직류 3kV', none: '비전철' }[l.power]}</td></tr>
+       <tr><td>규격</td><td>${railStd(l) ? '개량 전 북측 철도 (교류 25kV 전철화하면 남측 규격)' : '남측 규격'}</td></tr>
        <tr><td>최고 운행 속도</td><td>${l.speed} km/h</td></tr>
        <tr><td>이용객</td><td>${Math.round(vol).toLocaleString()} 명/일</td></tr>`;
   // 누른 곳이 속한 역–역(IC–IC) 구간
