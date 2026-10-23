@@ -32,7 +32,66 @@ export const HISTORIC_CITIES = ['평양시', '남포시'];
 export const PROMOTE_MIN_POP = 1_000_000;
 
 export const ELECTION = { firstYear: 2030, every: 4 };
-export const EVENT_COST = { historic: 5000, autonomy: 2000, independence: 1000 };   // 억원 (표지판·행정 전산·청사)
+export const EVENT_COST = { historic: 5000, autonomy: 2000, independence: 1000, admin: 3000 };   // 억원 (표지판·행정 전산·청사)
+
+/**
+ * 남북 행정구역 정리: 게임을 시작할 때 고르고, 진행 중에는 이벤트(비용·선거)로 바꾼다.
+ * 계산용 존은 그대로 두고 소속 광역 단체와 이름만 바꾼다 (합친 군은 같은 이름·같은 단체로 묶인다).
+ */
+export const ADMIN_OPTIONS = [
+  { key: 'kaesong', label: '개성 지역 (개성시·개풍·판문·장풍)', choices: [['keep', '개성특급시로 둔다'], ['gyeonggi', '경기도에 편입']] },
+  { key: 'propaganda', label: '선전용 지명 (김정숙군·김책시 등)', choices: [['keep', '그대로 둔다'], ['restore', '옛 이름으로 되돌린다']] },
+  { key: 'workers', label: '노동자구', choices: [['keep', '그대로 둔다'], ['abolish', '폐지 (리로 바꾼다)']] },
+  { key: 'ongjin', label: '옹진군 (인천·황해남도)', choices: [['separate', '남북 따로 둔다'], ['hwanghae', '하나로 합쳐 황해(남)도에'], ['incheon', '하나로 합쳐 인천광역시에']] },
+  { key: 'goseong', label: '고성군 (강원 남·북)', choices: [['separate', '남북 따로 둔다'], ['ganseong', '남측 고성군을 간성군으로'], ['south', '하나로 합쳐 남측 강원에'], ['north', '하나로 합쳐 북측 강원에']] },
+  { key: 'cheorwon', label: '철원군 (강원 남·북)', choices: [['separate', '남북 따로 둔다'], ['south', '하나로 합쳐 남측 강원에'], ['north', '하나로 합쳐 북측 강원에']] },
+  { key: 'jagang', label: '자강도·량강도 (1945년 이전 도 복원 때)', choices: [['merge', '평안북도·함경남도로 합친다'], ['keep', '도로 남겨 둔다']] },
+  { key: 'dueum', label: '북측 지명 두음법칙', choices: [['keep', '북측 표기 그대로 (량강도·룡천)'], ['apply', '남측 표기로 (양강도·용천)']] },
+];
+
+/** 두음법칙: 첫 음절의 ㄹ·ㄴ을 남측 표기로 (량강→양강, 룡천→용천, 락원→낙원, 녕변→영변) */
+export function dueum(name) {
+  if (!name) return name;
+  const c = name.charCodeAt(0) - 0xac00;
+  if (c < 0 || c >= 11172) return name;
+  const L = Math.floor(c / 588), V = Math.floor((c % 588) / 28), T = c % 28;
+  const iy = [2, 6, 7, 12, 17, 20].includes(V);   // ㅑ ㅕ ㅖ ㅛ ㅠ ㅣ
+  let nl = L;
+  if (L === 5) nl = iy ? 11 : 2;                    // ㄹ → ㅇ / ㄴ
+  else if (L === 2 && iy && V !== 2) nl = 11;       // ㄴ → ㅇ (녀·뇨·뉴·니)
+  if (nl === L) return name;
+  return String.fromCharCode(0xac00 + nl * 588 + V * 28 + T) + name.slice(1);
+}
+export const ADMIN_DEFAULT = Object.fromEntries(ADMIN_OPTIONS.map((o) => [o.key, o.choices[0][0]]));
+
+const KR_GANGWON = ['강원특별자치도', '강원도'];
+const isZone = (z, name, country, provs) => z.name === name && z.country === country && provs.includes(z.province);
+
+/** 행정구역 정리로 바뀐 소속: {province, side} (side는 도 이름 규칙을 따를 쪽: 'KR' | 'KP') 또는 null */
+export function adminOverride(state, z) {
+  const A = state.local?.admin;
+  if (!A || z.ext) return null;
+  if (A.kaesong === 'gyeonggi' && z.country === 'KP' && z.province === '개성시') return { province: '경기도', side: 'KR' };
+  if (z.name === '옹진군') {
+    if (A.ongjin === 'hwanghae' && z.country === 'KR') return { province: '황해남도', side: 'KP' };
+    if (A.ongjin === 'incheon' && z.country === 'KP') return { province: '인천광역시', side: 'KR' };
+  }
+  for (const key of ['goseong', 'cheorwon']) {
+    const name = key === 'goseong' ? '고성군' : '철원군';
+    if (A[key] === 'south' && isZone(z, name, 'KP', ['강원도'])) return { province: '강원특별자치도', side: 'KR' };
+    if (A[key] === 'north' && isZone(z, name, 'KR', KR_GANGWON)) return { province: '강원도', side: 'KP' };
+  }
+  return null;
+}
+
+/** 행정구역 정리로 바뀌는 시군 이름 (존 번호 → 새 이름). 선전용 지명은 targets(data/historic_targets.json)에서 */
+export function adminNames(admin, zones, targets = []) {
+  const out = {};
+  if (admin.dueum === 'apply') zones.forEach((z, i) => { if (z.country === 'KP' && !z.ext && dueum(z.name) !== z.name) out[`z:${i}`] = dueum(z.name); });
+  if (admin.goseong === 'ganseong') zones.forEach((z, i) => { if (isZone(z, '고성군', 'KR', KR_GANGWON)) out[`z:${i}`] = '간성군'; });
+  if (admin.propaganda === 'restore') for (const t of targets) out[`${t.level === 'zone' ? 'z' : 'u'}:${t.id}`] = t.historic;
+  return out;
+}
 
 export function initLocal(state) {
   state.local ||= { autonomyKP: false, historic: false, independent: [], offices: {}, proposals: [], elections: [] };
@@ -42,11 +101,16 @@ export function initLocal(state) {
 /** 존이 속한 광역 단체 이름 */
 export function regionOf(state, z) {
   const L = initLocal(state);
-  const prov = z.province || z.name;
+  const o = adminOverride(state, z);
+  const prov = o?.province || z.province || z.name, side = o?.side || z.country;
   // 독립(승격)한 도시는 그 자체가 광역 단체
   for (const c of L.independent) if (prov === c || z.city === c || z.name === c) return c;
-  if (L.historic) return (z.country === 'KP' ? HISTORIC[prov] : HISTORIC_KR[prov]) || prov;
-  return prov;
+  const A = L.admin || {};
+  let r = prov;
+  if (L.historic && !(A.jagang === 'keep' && side === 'KP' && ['자강도', '량강도', '양강도'].includes(prov))) {
+    r = (side === 'KP' ? HISTORIC[prov] : HISTORIC_KR[prov]) || prov;
+  }
+  return A.dueum === 'apply' && side === 'KP' ? dueum(r) : r;
 }
 
 export function isMetroCity(name) { return /(특별시|광역시|직할시|특별자치시)$/.test(name) || ['평양시', '남포시', '라선시', '개성시'].includes(name); }

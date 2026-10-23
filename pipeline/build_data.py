@@ -1022,6 +1022,11 @@ def final_cleanup(nodes, links, stations, metro_stations, junctions, zone_nodes)
         for item in lst:
             item[1] = nmap.get(item[1], item[1])
     zone_nodes.clear(); zone_nodes.update(nmap.get(n, n) for n in list(zone_nodes))
+    # 같은 역의 노드가 여럿(수서 6개, 서울 5개: 노선·승강장마다)이면 600m 안에서 링크로 이어진 것끼리 하나로
+    nmap = merge_station_twins(nodes, links, names)
+    for lst in (stations, metro_stations, junctions):
+        for item in lst:
+            item[1] = nmap.get(item[1], item[1])
     st = {n for _, n in stations}
     mst = {n for _, n in metro_stations}
     links = drop_parallel_duplicates(links)   # 틈 잇기·환승 선로가 기존 링크와 겹친 곳
@@ -1112,6 +1117,45 @@ def collapse_close_nodes(nodes, links, keep_first, names=None, dist_km=0.07, max
             l["geom"] = list(nodes[a]) + g[2:-2] + list(nodes[b]) if len(g) >= 4 else list(nodes[a]) + list(nodes[b])
             l["a"], l["b"] = a, b
     log("close nodes collapsed", len(nmap))
+    return nmap
+
+
+def merge_station_twins(nodes, links, names, max_km=0.6):
+    """이름이 같은 두 역 노드를 잇는 짧은 링크(600m 안)가 있으면 두 노드를 하나로 모은다.
+    한 역이 노선·승강장마다 노드를 따로 가져 GTX-A 수서→수서→수서처럼 같은 역이 줄줄이 찍히는 것을 막는다.
+    링크로 이어진 노드끼리만 모으므로 이름만 같은 먼 역(구성: 용인·북측)은 합치지 않는다"""
+    parent = {}
+
+    def find(n):
+        while parent.get(n, n) != n:
+            parent[n] = parent.get(parent[n], parent[n])
+            n = parent[n]
+        return n
+    for l in links:
+        if l["mode"] not in (1, 2) or l.get("ext") or l["len"] > max_km:
+            continue
+        na, nb = names.get(l["a"]), names.get(l["b"])
+        if na and na == nb and l["a"] != l["b"]:
+            ra, rb = find(l["a"]), find(l["b"])
+            if ra != rb:
+                parent[max(ra, rb)] = min(ra, rb)
+    nmap = {n: find(n) for n in parent if find(n) != n}
+    if not nmap:
+        return nmap
+    # 대표 자리는 묶음 노드들의 가운데
+    groups = defaultdict(list)
+    for n, r in nmap.items():
+        groups[r].append(n)
+    for r, ns in groups.items():
+        pts = [nodes[r]] + [nodes[n] for n in ns]
+        nodes[r] = [sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)]
+    for l in links:
+        a, b = nmap.get(l["a"], l["a"]), nmap.get(l["b"], l["b"])
+        if (a, b) != (l["a"], l["b"]) or a in groups or b in groups:
+            g = l["geom"]
+            l["geom"] = list(nodes[a]) + g[2:-2] + list(nodes[b]) if len(g) >= 4 else list(nodes[a]) + list(nodes[b])
+            l["a"], l["b"] = a, b
+    log("same-name station nodes merged", len(nmap))
     return nmap
 
 

@@ -19,7 +19,7 @@ import { startGuide, guideShouldAutoShow, guideOnNewGame, getGuideMode, setGuide
 import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.js';
 import { kmBetween, routeKey } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
-import { smoothSegments, polylineKm } from './game/curve.js';
+import { smoothSegments, polylineKm, splineLine } from './game/curve.js';
 import { extendWorld, urbanLanes } from './game/world.js';
 import { autoLineName, cityStem, makeForeignTest } from './game/lines.js';
 import { saveSim, loadSim, clearSim } from './game/simstore.js';
@@ -29,7 +29,7 @@ import { P } from './sim/params.js';
 import { PPP_TYPES, PPP_DEFAULTS, initPPP, tollKind, linkToll, annualRevenue, evaluatePPP } from './game/ppp.js';
 import {
   PARTIES, initLocal, regionOf, hasAutonomy, leanP, runElection, bumpApproval, governorTitle, mayorTitle, isMetroCity,
-  HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST,
+  HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST, ADMIN_OPTIONS, ADMIN_DEFAULT, adminNames,
 } from './game/local.js';
 import { initRail, operatorOf, opInfo, opBadge, OPERATORS, MERGE_MIN_INTEGRATION, EQUITY_STEP } from './game/operators.js';
 
@@ -525,8 +525,54 @@ function dropParallel(parts) {
   return kept;
 }
 
-/** 화면용 도형: 꺾인 점을 부드럽게 (Chaikin 1회, 양 끝은 노드에 그대로). 기본 구간은 한 번만 계산해 둔다 */
+/** 화면용 도형: 노드와 노드 사이를 모든 점을 지나는 곡선으로 (양 끝은 노드에 그대로).
+ *  노드에서는 곧게 이어지는 같은 수단 구간의 점을 앞뒤 제어점으로 써서 구간 사이도 꺾이지 않게 한다.
+ *  기본 구간은 한 번만 계산해 둔다 */
 const smoothCache = new Map();
+let nodeAdj = null;
+
+/** 노드 n에서 링크 i가 곧게 이어지는(120° 넘게 펴진) 같은 수단 링크의, 노드 바로 너머 점 */
+function beyondPoint(i, l, n, inward) {
+  if (!nodeAdj) {
+    nodeAdj = new Map();
+    allLinks().forEach((x, k) => {
+      if (x.ext) return;
+      for (const m of [x.a, x.b]) { if (!nodeAdj.has(m)) nodeAdj.set(m, []); nodeAdj.get(m).push(k); }
+    });
+  }
+  const c = nodeCoord(n);
+  if (!c) return null;
+  const dir = (q) => [(q[0] - c[0]) * 0.8, q[1] - c[1]];
+  const v = dir(inward), vl = Math.hypot(...v);
+  if (!vl) return null;
+  let best = null, bc = -0.5;
+  for (const k of nodeAdj.get(n) || []) {
+    if (k === i) continue;
+    const x = allLinks()[k];
+    if (x.mode !== l.mode || x.cls === 'ferry') continue;
+    const q = nextVertex(x.geom, c);
+    if (!q) continue;
+    const w = dir(q), wl = Math.hypot(...w);
+    const cos = wl ? (v[0] * w[0] + v[1] * w[1]) / (vl * wl) : 0;
+    if (cos < bc) { bc = cos; best = q; }
+  }
+  return best;
+}
+
+/** 도형에서 점 c에 가까운 끝의 바로 다음 점 (20m 안의 점은 건너뛴다) */
+function nextVertex(g, c) {
+  if (!g || g.length < 4 || Number.isNaN(g[0])) return null;
+  const n = g.length / 2;
+  const at = (k) => [g[2 * k], g[2 * k + 1]];
+  const d = (q) => kmBetween(q[0], q[1], c[0], c[1]);
+  const fromStart = d(at(0)) <= d(at(n - 1));
+  for (let s = 1; s < n; s++) {
+    const q = at(fromStart ? s : n - 1 - s);
+    if (Number.isNaN(q[0])) return null;
+    if (d(q) > 0.02) return q;
+  }
+  return null;
+}
 function smoothParts(l, i) {
   if (i < base.links.length && smoothCache.has(i)) return smoothCache.get(i);
   const g = l.geom;
@@ -561,6 +607,19 @@ function smoothParts(l, i) {
     }
     parts.push(...link);
   }
+  // 한 조각으로 이어진 보통 구간: 노드–노드 곡선 (앞뒤 구간과 매끄럽게 이어진다)
+  const single = parts.filter((p) => p.length > 1);
+  if (single.length === 1 && l.a != null && l.b != null && l.cls !== 'ferry' && !l.ext) {
+    const p = single[0];
+    const A = nodeCoord(l.a), B = nodeCoord(l.b);
+    const startsAtA = A && kmBetween(p[0][0], p[0][1], A[0], A[1]) <= kmBetween(p[p.length - 1][0], p[p.length - 1][1], A[0], A[1]);
+    const line = startsAtA ? p : [...p].reverse();
+    const before = A && line.length > 1 ? beyondPoint(i, l, l.a, line[1]) : null;
+    const after = B && line.length > 1 ? beyondPoint(i, l, l.b, line[line.length - 2]) : null;
+    const out = [splineLine(line, before, after).map(([x, y]) => [Math.round(x * 1e5) / 1e5, Math.round(y * 1e5) / 1e5])];
+    if (i < base.links.length) smoothCache.set(i, out);
+    return out;
+  }
   const out = parts.filter((p) => p.length > 1).map((p) => {
     if (p.length < 3) return p;
     const q = [p[0]];
@@ -577,6 +636,7 @@ function smoothParts(l, i) {
 }
 
 function refreshLinks() {
+  nodeAdj = null;   // 새 구간이 생기면 노드에서 곧게 이어지는 구간이 바뀐다
   setLinks(map, linksFC());
   if (result) paintVolumes();
 }
@@ -1833,7 +1893,9 @@ function renderSettings() {
     <h3 style="margin-top:16px">새 게임</h3>
     <div class="name-row"><span style="flex:1">난이도</span>
       <select id="difficulty">${Object.entries(DIFFICULTY).map(([k, v]) => `<option value="${k}" ${state.difficulty === k ? 'selected' : ''}>${v.label} (연 ${formatWon(v.annualBudget)})</option>`).join('')}</select></div>
-    <button id="btn-new" style="margin-top:6px">이 난이도로 새로 시작</button>
+    <p class="hint" style="margin-top:8px">남북 행정구역 정리 (시작할 때 정하면 비용·선거 없이 적용됩니다)</p>
+    ${adminSelectsHTML('new', ADMIN_DEFAULT)}
+    <button id="btn-new" style="margin-top:6px">이 설정으로 새로 시작</button>
     <p class="hint">진행 상황은 이 브라우저에 자동 저장됩니다.</p>
     <h3 style="margin-top:16px">데이터</h3>
     <p class="hint">도로·철도·행정구역·지명: © OpenStreetMap 기여자 (ODbL)<br>인구 격자: WorldPop 2020 (CC BY 4.0)<br>소득·HDI 초기값과 공사비 단가는 게임용 가정값입니다. 자세한 내용은 저장소의 docs/model.md를 보세요.</p>`;
@@ -1848,7 +1910,9 @@ function renderSettings() {
     clearSave();
     clearSim();
     const d = $('#difficulty').value;
+    const admin = readAdminSelects(el, 'new');
     state = newGame(d);
+    setAdmin(admin);
     save(state);
     location.reload();
   };
@@ -1894,7 +1958,7 @@ function renderOps() {
     <td>${x.s.trains}</td><td>${Math.round(x.peak).toLocaleString()}</td><td>${Math.round(x.load * 100)}%</td><td class="${x.ratio > 100 ? 'neg' : ''}">${fmtRatio(x.ratio)}</td></tr>`).join('');
   el.innerHTML = `
     <h3>철도 운행 계통</h3>
-    <div class="row" style="margin-top:0"><button class="small primary svc-pick-b">역 골라 특급·급행 짜기</button></div>
+    <div class="actions"><button class="small primary svc-pick-b">역 골라 특급·급행 짜기</button></div>
     <p class="hint">역을 누르면 그 역을 지나는 노선의 노선도·운행 계통을 보고 고칠 수 있습니다.</p>
     ${svcRows ? `<table class="cmp"><tr><th>계통</th><th>회/일</th><th>최대 구간</th><th>승차율</th><th>영업계수</th></tr>${svcRows}</table>` : '<p class="hint">아직 짠 계통이 없습니다.</p>'}
     ${railStatsHTML()}
@@ -2837,6 +2901,10 @@ function localSettingsHTML() {
     ${L.autonomyKP ? '<p class="hint">북측 지방자치 시행 중.</p>' : `<div class="item"><div class="t">북측 지방자치 도입</div>
       <div class="m">북측에도 도지사·시장·군수를 선거로 뽑습니다. 남북 통합도 30% 이상 · ${formatWon(EVENT_COST.autonomy)}</div>
       <button class="small primary" id="ev-autonomy" ${state.integration >= 0.3 ? '' : 'disabled'}>도입</button></div>`}
+    <div class="item"><div class="t">남북 행정구역 정리</div>
+      <div class="m">개성 지역 편입, 선전용 지명·노동자구 정리, 남북으로 갈린 옹진·고성·철원군의 통합과 소속을 정합니다. 소속이 바뀐 광역 단체는 단체장을 새로 뽑습니다 · ${formatWon(EVENT_COST.admin)}</div>
+      ${adminSelectsHTML('ev', L.admin || ADMIN_DEFAULT)}
+      <button class="small primary" id="ev-admin">정리</button></div>
     ${L.historic ? '<p class="hint">북측 행정구역을 1945년 이전으로 되돌렸습니다 (강원북도·강원남도).</p>' : `<div class="item"><div class="t">북측 행정구역 1945년 이전으로 복원</div>
       <div class="m">북측의 신설 도·직할시(자강·량강·평양·남포·라선·황해남북도 등)를 1945년 이전의 도로 되돌립니다. 강원도는 강원북도(북측)와 강원남도(남측)로 부르고, 개성은 경기도로 돌아갑니다. 바뀐 곳의 광역단체장을 새로 뽑고, 북측 주민 행복도가 조금 오릅니다 · ${formatWon(EVENT_COST.historic)}</div>
       <button class="small primary" id="ev-historic">복원</button></div>`}
@@ -2875,30 +2943,22 @@ function bindLocalSettings(el) {
     holdElection('kp', '북측 첫 지방선거');
     save(state); renderAll();
   });
+  el.querySelector('#ev-admin')?.addEventListener('click', () => {
+    const admin = readAdminSelects(el, 'ev');
+    const cur = L.admin || ADMIN_DEFAULT;
+    const diff = ADMIN_OPTIONS.filter((o) => admin[o.key] !== cur[o.key]);
+    if (!diff.length) { alert('바뀐 항목이 없습니다.'); return; }
+    const lines = diff.map((o) => `${o.label}: ${o.choices.find((c) => c[0] === admin[o.key])[1]}`);
+    if (!confirm(['행정구역을 정리할까요?', ...lines].join('\n'))) return;
+    if (!payEvent(EVENT_COST.admin)) return;
+    reorganize(() => setAdmin(admin), `${state.year}년 남북 행정구역 정리: ${diff.map((o) => o.choices.find((c) => c[0] === admin[o.key])[1]).join(', ')}`);
+    refreshNames(map);
+  });
   el.querySelector('#ev-historic')?.addEventListener('click', () => {
     if (!confirm('북측 행정구역을 1945년 이전으로 되돌릴까요? 바뀐 곳의 광역단체장을 새로 뽑습니다.')) return;
     if (!payEvent(EVENT_COST.historic)) return;
-    // 구성(소속 시군구)이 바뀌는 광역 단체만 새로 뽑는다
-    const key = (m) => new Map([...m].map(([r, zs]) => [r, zs.join(',')]));
-    const before = key(regions());
-    L.historic = true;
     zoneProps.forEach((z, i) => { if (z.country === 'KP' && !z.ext) state.happyBonus[i] = (state.happyBonus[i] || 0) + 3; });
-    // 이름만 바뀐 단체(강원특별자치도 → 강원남도)는 단체장을 그대로 이어 간다
-    const byZones = new Map([...before].map(([r, zs]) => [zs, r]));
-    const changed = [];
-    for (const [r, zs] of key(regions())) {
-      if (before.get(r) === zs) continue;
-      const old = byZones.get(zs), off = old && L.offices[`g:${old}`];
-      if (off) {
-        L.offices[`g:${r}`] = { ...off, region: r, title: governorTitle(r) };
-        delete L.offices[`g:${old}`];
-        for (const pr of L.proposals || []) if (pr.office === `g:${old}`) pr.office = `g:${r}`;
-      } else changed.push(r);
-    }
-    for (const k of Object.keys(L.offices)) if (k.startsWith('g:') && !regions().has(k.slice(2))) delete L.offices[k];
-    holdElection(changed, '행정구역 개편 뒤 광역단체장 선거');
-    state.log.unshift(`${state.year}년 북측 행정구역을 1945년 이전으로 되돌렸습니다 (강원북도·강원남도).`);
-    save(state); renderAll();
+    reorganize(() => { L.historic = true; }, `${state.year}년 북측 행정구역을 1945년 이전으로 되돌렸습니다 (강원북도·강원남도).`);
   });
   el.querySelector('#ev-rename')?.addEventListener('click', () => {
     const r = renameKPLines(base, state);
@@ -2917,6 +2977,47 @@ function bindLocalSettings(el) {
       save(state); renderAll();
     };
   });
+}
+
+/** 행정구역 정리 선택 칸 (prefix: 'new' 새 게임 / 'ev' 이벤트) */
+function adminSelectsHTML(prefix, cur) {
+  return ADMIN_OPTIONS.map((o) => `<div class="name-row"><span style="flex:1">${esc(o.label)}</span>
+    <select id="${prefix}-adm-${o.key}">${o.choices.map(([v, t]) => `<option value="${v}" ${cur[o.key] === v ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></div>`).join('');
+}
+
+function readAdminSelects(el, prefix) {
+  return Object.fromEntries(ADMIN_OPTIONS.map((o) => [o.key, el.querySelector(`#${prefix}-adm-${o.key}`)?.value || ADMIN_DEFAULT[o.key]]));
+}
+
+/** 행정구역 정리 적용: 소속은 regionOf가, 이름은 state.adminNames가 맡는다 */
+function setAdmin(admin) {
+  initLocal(state).admin = { ...ADMIN_DEFAULT, ...admin };
+  state.adminNames = adminNames(state.local.admin, zoneProps, historic);
+}
+
+/** 광역 단체 구성을 바꾸고, 구성(소속 시군구)이 바뀐 단체만 단체장을 새로 뽑는다.
+ *  이름만 바뀐 단체(강원특별자치도 → 강원남도)는 단체장을 그대로 이어 간다 */
+function reorganize(change, logMsg) {
+  const L = state.local;
+  const key = (m) => new Map([...m].map(([r, zs]) => [r, zs.join(',')]));
+  const before = key(regions());
+  change();
+  // 이름만 바뀐 단체(강원특별자치도 → 강원남도)는 단체장을 그대로 이어 간다
+  const byZones = new Map([...before].map(([r, zs]) => [zs, r]));
+  const changed = [];
+  for (const [r, zs] of key(regions())) {
+    if (before.get(r) === zs) continue;
+    const old = byZones.get(zs), off = old && L.offices[`g:${old}`];
+    if (off) {
+      L.offices[`g:${r}`] = { ...off, region: r, title: governorTitle(r) };
+      delete L.offices[`g:${old}`];
+      for (const pr of L.proposals || []) if (pr.office === `g:${old}`) pr.office = `g:${r}`;
+    } else changed.push(r);
+  }
+  for (const k of Object.keys(L.offices)) if (k.startsWith('g:') && !regions().has(k.slice(2))) delete L.offices[k];
+  holdElection(changed, '행정구역 개편 뒤 광역단체장 선거');
+  state.log.unshift(logMsg);
+  save(state); renderAll();
 }
 
 /** 존 패널: 광역·기초 단체장 */
@@ -3913,7 +4014,8 @@ function zonePanel(id) {
 function restoreRow(t) {
   const r = RENAME[t.level];
   const proj = state.projects.find((p) => p.kind === 'rename' && p.key === `${t.level === 'zone' ? 'z' : 'u'}:${t.id}`);
-  const status = proj ? (proj.status === 'done' ? '완료' : `${proj.doneYear}년 완료 예정`) : '';
+  const restored = state.adminNames?.[`${t.level === 'zone' ? 'z' : 'u'}:${t.id}`];
+  const status = restored ? '완료 (행정구역 정리)' : proj ? (proj.status === 'done' ? '완료' : `${proj.doneYear}년 완료 예정`) : '';
   return `<div class="item"><div class="t">${esc(t.current)} → ${esc(t.historic)}</div>
     <div class="m">${t.year}년 개칭 · ${esc(t.reason)}</div>
     <div class="row">${status ? `<span class="m">${status}</span>`
