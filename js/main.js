@@ -72,7 +72,7 @@ async function init() {
   // 지명은 새 역·IC 이름을 지을 때만 필요하므로 첫 화면 뒤에 받는다
   const placesReady = fetch('data/places.json').then((r) => r.json()).then((p) => { places = p; });
   fetch('data/base/world.geojson').then((r) => r.json()).then((w) => { isForeign = makeForeignTest(w); }).catch(() => {});
-  fetch('data/plans.json').then((r) => (r.ok ? r.json() : { plans: [] })).then((p) => { plans = p.plans || []; if (map) renderBuild(); }).catch(() => {});
+  fetch('data/plans.json').then((r) => (r.ok ? r.json() : { plans: [] })).then((p) => { plans = p.plans || []; migratePlanLines(); if (map) renderBuild(); }).catch(() => {});
   fetch('data/historic_targets.json').then((r) => (r.ok ? r.json() : [])).then((h) => { historic = h; }).catch(() => {});
   subPop0 = zoneProps.flatMap((zp) => zp.subs.map((s) => s[2] * zp.pop));
   state = load();
@@ -287,7 +287,7 @@ function applyResult(res) {
   happiness = computeHappiness(res);
   if (stepped) {
     if (DIFFICULTY[state.difficulty].autoApprove) autoApprove();
-    updateApproval(state, requests, res.summary, prevSummary);
+    updateApproval(state, requests, res.summary, prevSummary, roadCongestedKm(vc));
     // 철도 운영사 한 해 결산
     settleRail(state, operatorEconomics());
     // 지방선거·단체장 SOC 제안
@@ -1044,7 +1044,7 @@ function commitDraft() {
     split = true;
   }
   const restAreas = restPositions(smoothSegments(draft.points)).map(([lon, lat]) => ({ lon, lat, name: namer.suggest(lon, lat, 'rest') }));
-  const r = startNewBuild(base, state, { type: draft.type, points: draft.points, names, lineName, extendOf: draft.extendOf, plan: draft.plan,
+  const r = startNewBuild(base, state, { type: draft.type, points: draft.points, names, lineName, extendOf: draft.extendOf, plan: draft.plan, title: draft.planTitle,
     ppp: pp ? { type: pp.type, subsidy: pp.subsidy, toll: pp.toll } : null, segFactor: dc.segFactor, extraCost: dc.extraCost, restAreas });
   if (split) refreshLinks();
   if (!r.ok) { alert(r.reason); return; }
@@ -1110,7 +1110,7 @@ function foldSections(el, key, tag) {
   let box = null;
   for (const c of kids) {
     if (c.tagName === tag) {
-      const title = c.textContent.trim(), id = `${key}:${title.replace(/\s*\(.*$/, '')}`;
+      const title = c.textContent.trim(), id = `${key}:${title.replace(/\s*[\d(].*$/, '')}`;
       box = document.createElement('details');
       box.className = 'fold';
       box.open = folds[id] ?? !FOLD_CLOSED.has(id);
@@ -1186,6 +1186,9 @@ function renderStatus() {
   el.innerHTML = `
     <h3>${state.year}년 현황</h3>
     <div class="kpis">${tiles.map(([k, v, d]) => `<div><span class="k">${k}</span><span class="v">${v}</span>${d ? `<span class="d">${d}</span>` : ''}</div>`).join('')}</div>
+    ${state.approvalWhy ? `<h4>지지율 ${state.approval.toFixed(0)}% (목표 ${state.approvalTarget.toFixed(0)}%)</h4>
+    <table class="kv">${state.approvalWhy.map(([k, v], i) => `<tr><td>${esc(k)}</td><td class="${i && v > 0 ? 'pos' : v < 0 ? 'neg' : ''}">${i && v > 0 ? '+' : ''}${v}</td></tr>`).join('')}</table>
+    <p class="hint">지지율은 해마다 목표치 쪽으로 35%씩 움직입니다. 정체를 줄이고, 오래된 민원을 풀고, 예산을 남기지 않고 사업을 마치면 오릅니다.</p>` : ''}
     <h4>인구·소득</h4>
     <table class="cmp">
       <tr><th></th><th>남</th><th>북</th><th>전체</th></tr>
@@ -2147,6 +2150,16 @@ function resolveWaypoint([name, lon, lat], mode) {
   return nearestNode({ lng: lon, lat }, mode, null, mode === 0 ? 4 : 1.5);
 }
 
+/** 예전 저장: 복원 사업 구간이 계획 이름으로 따로 놓였으면 이어지는 노선 이름으로 바꾼다 (계통이 경의선 → 평부선처럼 이어지게) */
+function migratePlanLines() {
+  if (!state) return;
+  for (const p of state.projects) {
+    const pl = p.plan && plans.find((x) => x.id === p.plan);
+    if (!pl?.line) continue;
+    for (const l of state.newLinks) if (l.name === pl.name) l.name = pl.line;
+  }
+}
+
 /** 계획 노선을 그리기로 연다 (경유지가 찍힌 상태). 확인하고 고친 뒤 착공한다 */
 function openPlan(id) {
   const plan = plans.find((p) => p.id === id);
@@ -2162,8 +2175,10 @@ function openPlan(id) {
     // 새 역이면 계획에 적힌 역 이름을 쓴다
     if (spec.mode >= 1 && !pt.existing && wp[0]) { if (pt.reserved) namer.release(pt.name, 'station'); pt.name = wp[0]; pt.auto = false; }
   }
-  draft.lineName = plan.name;
+  // 복원 사업처럼 기존 노선을 잇는 계획은 그 노선 이름을 이어 쓴다 (사업 이름은 계획 이름)
+  draft.lineName = plan.line || plan.name;
   draft.lineNameEdited = true;
+  if (plan.line) { draft.extendOf = plan.line; draft.planTitle = plan.name; }
   draft.plan = plan.id;
   drawDraft();
   renderBuild();
@@ -2416,7 +2431,18 @@ function bindLocalSettings(el) {
     const before = key(regions());
     L.historic = true;
     zoneProps.forEach((z, i) => { if (z.country === 'KP' && !z.ext) state.happyBonus[i] = (state.happyBonus[i] || 0) + 3; });
-    const changed = [...key(regions())].filter(([r, zs]) => before.get(r) !== zs).map(([r]) => r);
+    // 이름만 바뀐 단체(강원특별자치도 → 강원남도)는 단체장을 그대로 이어 간다
+    const byZones = new Map([...before].map(([r, zs]) => [zs, r]));
+    const changed = [];
+    for (const [r, zs] of key(regions())) {
+      if (before.get(r) === zs) continue;
+      const old = byZones.get(zs), off = old && L.offices[`g:${old}`];
+      if (off) {
+        L.offices[`g:${r}`] = { ...off, region: r, title: governorTitle(r) };
+        delete L.offices[`g:${old}`];
+        for (const pr of L.proposals || []) if (pr.office === `g:${old}`) pr.office = `g:${r}`;
+      } else changed.push(r);
+    }
     for (const k of Object.keys(L.offices)) if (k.startsWith('g:') && !regions().has(k.slice(2))) delete L.offices[k];
     holdElection(changed, '행정구역 개편 뒤 광역단체장 선거');
     state.log.unshift(`${state.year}년 북측 행정구역을 1945년 이전으로 되돌렸습니다 (강원북도·강원남도).`);

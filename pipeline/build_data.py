@@ -614,7 +614,6 @@ def build_network(zones):
                               "name": name, "kp": int(country == "KP"), "geom": geom, "open": e.get("opening", 0)})
 
     heal_gaps(nodes, out_links)
-    link_border_rail(nodes, out_links)
 
     out_stations = _dedupe_named([(n, node_index[c]) for n, c in stations if c in node_index])
     out_junctions = _dedupe_named([(n, node_index[c]) for n, c in junctions if c in node_index])
@@ -699,38 +698,6 @@ def heal_gaps(nodes, links, max_km=0.6):
             added += 1
             break
     log("healed road gaps", added)
-
-
-# 군사분계선에서 끊긴 남북 연결 철도: (남측 노선, 북측 노선). OSM은 분계선 양쪽 선로를 따로 그려 서로 닿지 않는다.
-# 2007년에 이어진 경의선(도라산–판문)과 동해선(제진–감호)만 잇는다. 경원선(백마고지–평강)은 선로가 없어 플레이어가 놓는다.
-BORDER_RAIL = [("경의선", "평부선"), ("동해북부선", "금강산청년선")]
-
-
-def link_border_rail(nodes, links, max_km=8):
-    """남북 연결 철도의 막다른 끝끼리 (분계선을 사이에 두고 max_km 안) 한 링크로 잇는다."""
-    deg = defaultdict(int)
-    names = defaultdict(set)
-    for l in links:
-        if l["mode"] != 1 or l.get("open"):
-            continue
-        for x in (l["a"], l["b"]):
-            deg[x] += 1
-            names[x].add((l["name"], l["kp"]))
-    ends = [n for n, d in deg.items() if d == 1]
-    km = lambda n, m: math.hypot((nodes[n][0] - nodes[m][0]) * 88.0, (nodes[n][1] - nodes[m][1]) * 111.0)
-    for kr, kp in BORDER_RAIL:
-        a = [n for n in ends if (kr, 0) in names[n]]
-        b = [n for n in ends if (kp, 1) in names[n]]
-        pairs = sorted((km(n, m), n, m) for n in a for m in b)
-        if not pairs or pairs[0][0] > max_km:
-            log("border rail not linked", kr, kp)
-            continue
-        d, n, m = pairs[0]
-        src = next(l for l in links if l["mode"] == 1 and n in (l["a"], l["b"]))
-        links.append({"mode": 1, "cls": src["cls"], "a": n, "b": m, "len": round(d * 1.1, 2),
-                      "tracks": src["tracks"], "speed": min(src["speed"], 80), "power": src["power"],
-                      "name": kr, "kp": 0, "geom": nodes[n] + nodes[m], "open": 0})
-        log("border rail linked", kr, kp, round(d, 1), "km")
 
 
 def _dedupe_named(items):

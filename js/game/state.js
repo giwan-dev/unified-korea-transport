@@ -528,7 +528,7 @@ export function startNewBuild(base, state, plan) {
   // 끝점 이름이 없으면(이름 없는 도로 노드) 길이만 적는다
   const e0 = endName(0), e1 = endName(nodeIds.length - 1);
   const span = `${e0 && e1 ? `${e0}–${e1} ` : ''}(${kmTotal.toFixed(0)}km)`;
-  const label = plan.extendOf ? `${plan.extendOf} 연장 ${span}` : `${plan.lineName ? `${plan.lineName} · ` : ''}${spec.label} ${span}`;
+  const label = plan.title ? `${plan.title} ${span}` : plan.extendOf ? `${plan.extendOf} 연장 ${span}` : `${plan.lineName ? `${plan.lineName} · ` : ''}${spec.label} ${span}`;
   startProject(state, {
     id: crypto.randomUUID(), kind: 'new', type: plan.type, links: links.map((l) => l.id), extension: !!plan.extendOf,
     stations: spec.mode >= 1 ? nodeIds.filter((_, i) => plan.names[i]?.kind === 'station') : [],
@@ -647,9 +647,10 @@ export function advanceBudgetYear(base, state) {
   state.year += 1;
   // 쓰지 않은 예산은 한 해 치까지만 이월하고 나머지는 불용 처리한다 (국고로 돌아간다)
   if (state.budget > d.annualBudget) {
-    state.log.unshift(`${state.year - 1}년 예산 불용: ${formatWon(state.budget - d.annualBudget)} (이월은 연 예산 ${formatWon(d.annualBudget)}까지)`);
+    state.lastLapse = state.budget - d.annualBudget;
+    state.log.unshift(`${state.year - 1}년 예산 불용: ${formatWon(state.lastLapse)} (이월은 연 예산 ${formatWon(d.annualBudget)}까지)`);
     state.budget = d.annualBudget;
-  }
+  } else state.lastLapse = 0;
   state.budget += d.annualBudget;
   if (state.debt > 0) {
     const interest = Math.round(state.debt * d.interest);
@@ -784,15 +785,29 @@ export function defaultFix(link) {
   return null;
 }
 
-/** 지지율: 민원 방치·부채는 깎고, 북측 HDI 개선은 올린다 */
-export function updateApproval(state, requests, summary, prevSummary) {
-  let a = state.approval;
-  a -= Math.min(requests.length, 15) * 0.3;
+/**
+ * 지지율: 해마다 요인으로 정한 목표치 쪽으로 35%씩 움직인다 (요인은 state.approvalWhy에 남겨 화면에 보인다).
+ * - 기본 55
+ * - 도로 정체: 시작 연도보다 늘면 깎이고 줄면 오른다 (지금 수준의 정체는 이미 감안된 것으로 본다)
+ * - 오래 방치한 민원 (정체가 3년 넘게 이어진 노선)
+ * - 최근 2년 완공한 사업 (이어받은 공사 제외), 예산 불용, 부채, 남북 HDI 개선
+ */
+export function updateApproval(state, requests, summary, prevSummary, congestedKm) {
   const d = DIFFICULTY[state.difficulty];
-  a -= (state.debt / d.borrowLimit) * 3;
-  if (prevSummary) a += (summary.KP.hdi - prevSummary.KP.hdi) * 400 + (summary.KR.hdi - prevSummary.KR.hdi) * 200;
-  a += (60 - a) * 0.05;
-  state.approval = Math.max(0, Math.min(100, a));
+  const why = [['기본', 55]];
+  const cong0 = state.history[0]?.congestedKm || congestedKm || 1;
+  if (congestedKm != null) why.push(['도로 정체 (시작 대비)', Math.max(-8, Math.min(12, -(congestedKm / cong0 - 1) * 40))]);
+  const old = requests.filter((r) => r.years >= CONGESTION_YEARS + 2).length;
+  if (old) why.push([`오래 방치한 민원 ${old}건`, -Math.min(5, old * 0.1)]);
+  const built = state.projects.filter((p) => p.status === 'done' && p.kind !== 'osm' && p.doneYear >= state.year - 1).length;
+  if (built) why.push([`최근 2년 완공 ${built}건`, Math.min(10, built * 2)]);
+  if (state.lastLapse > 0) why.push(['예산 불용', -Math.min(6, (state.lastLapse / d.annualBudget) * 8)]);
+  if (state.debt > 0) why.push(['부채', -(state.debt / d.borrowLimit) * 8]);
+  if (prevSummary) why.push(['남북 HDI 개선', Math.max(-5, Math.min(8, (summary.KP.hdi - prevSummary.KP.hdi) * 300 + (summary.KR.hdi - prevSummary.KR.hdi) * 300))]);
+  const target = why.reduce((s0, [, v]) => s0 + v, 0);
+  state.approvalWhy = why.map(([k, v]) => [k, Math.round(v * 10) / 10]);
+  state.approvalTarget = target;
+  state.approval = Math.max(0, Math.min(100, state.approval + (target - state.approval) * 0.35));
 }
 
 export { upgradeCost, UPGRADES, NEW_BUILDS };
