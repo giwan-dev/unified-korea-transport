@@ -124,10 +124,11 @@ export class Model {
       const l = L[i];
       if (l.via) {
         // 정차역 사이: 밑 선로 주행시간에서 통과역 정차 시간을 빼고, 열차 등급만큼 빠르다
+        // 열차 종류의 최고 속도가 선로 속도보다 낮으면 그만큼 느리다
         let t = 0;
-        for (const v of l.via) t += this.freeTime[v];
-        this.freeTime[i] = Math.max(1, (t - l.skip * P.railDwellMin) * (P.serviceTimeFactor[l.kind] ?? 1));
-        this.capacity[i] = l.trains * P.railPaxPerTrain[l.cls];
+        for (const v of l.via) t += this.freeTime[v] * Math.max(1, L[v].speed / (l.speedCap || 999));
+        this.freeTime[i] = Math.max(1, t - l.skip * P.railDwellMin);
+        this.capacity[i] = l.trains * (l.seatCap || P.railPaxPerTrain[l.cls]);
         this.virtual.push(i);
         continue;
       }

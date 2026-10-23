@@ -17,7 +17,7 @@ import { smoothSegments, polylineKm } from './game/curve.js';
 import { extendWorld, urbanLanes } from './game/world.js';
 import { autoLineName, cityStem, makeForeignTest } from './game/lines.js';
 import { saveSim, loadSim, clearSim } from './game/simstore.js';
-import { SERVICE_KINDS, OPERATING, lineStations, planService, railPath, trainsets, setCost, startService, updateService, removeService } from './game/services.js';
+import { SERVICE_KINDS, TRAIN_TYPES, OPERATING, lineStations, planService, railPath, tripsPerDay, setCost, canRun, defaultTrainType, serviceBuyCost, startService, updateService, removeService } from './game/services.js';
 import { showLineDiagram, stopLineDiagram } from './ui/linediagram.js';
 import { P } from './sim/params.js';
 import { initRail, operatorOf, opInfo, opBadge, OPERATORS, MERGE_MIN_INTEGRATION, EQUITY_STEP } from './game/operators.js';
@@ -1487,39 +1487,48 @@ function openServiceEditor(line, cls, id = null) {
   const nodes = lineStations(net, railStationSet(), line);
   if (nodes.length < 2) { alert('이 노선에는 역이 둘 이상 있어야 운행 계통을 짤 수 있습니다.'); return; }
   const s = id && state.services.find((x) => x.id === id);
+  const under = net.links.filter((l) => l.name === line && l.mode === 1 && !l.via);
   svcEdit = s
-    ? { line, cls, kind: s.kind, name: s.name, trains: s.trains, nodes, stops: new Set(s.stops), id, nameEdited: true }
-    : { line, cls, kind: 'limited', name: `${line} ${SERVICE_KINDS.limited.label}`, trains: 20, nodes, stops: defaultStops(nodes, 'limited'), id: null };
+    ? { line, cls, kind: s.kind, name: s.name, type: s.type || defaultTrainType(cls, under), sets: s.sets, nodes, stops: new Set(s.stops), id, nameEdited: true }
+    : { line, cls, kind: 'limited', name: `${line} ${SERVICE_KINDS.limited.label}`, type: defaultTrainType(cls, under), sets: 4, nodes, stops: defaultStops(nodes, 'limited'), id: null };
   select({ type: 'service' });
 }
 
 function servicePlan() {
   const stops = svcEdit.nodes.filter((n) => svcEdit.stops.has(n));
-  const plan = stops.length >= 2 ? planService(effectiveNetwork(base, state).links, railStationSet(), stops, svcEdit.kind, svcEdit.line) : null;
+  const links = effectiveNetwork(base, state).links;
+  const plan = stops.length >= 2 ? planService(links, railStationSet(), stops, svcEdit.kind, svcEdit.line, svcEdit.type) : null;
+  if (plan) plan.under = plan.segs.flatMap((sg) => sg.via.map((i) => links[i]));
   return { stops, plan };
 }
 
 function servicePanel() {
   const e = svcEdit, nn = nodeNames(), r = stationRiders();
   const { stops, plan } = servicePlan();
-  const sets = plan ? trainsets(e.trains, plan.runMin) : 0;
   const cur = e.id ? state.services.find((x) => x.id === e.id) : null;
-  const buy = cur ? Math.max(0, sets - cur.sets) : sets;
-  const cost = Math.round(buy * setCost(e.kind, e.cls));
+  const trains = plan ? tripsPerDay(e.sets, plan.runMin) : 0;
+  const cost = serviceBuyCost(cur && { ...cur, type: cur.type || e.type }, { type: e.type, sets: e.sets });
+  const runnable = (t) => !plan || canRun(t, plan.under);
+  const typeOk = runnable(e.type);
   const rows = e.nodes.map((n) => `<label class="name-row" style="margin:2px 0"><input type="checkbox" data-stop="${n}" ${e.stops.has(n) ? 'checked' : ''}>
       <span>${esc(nn.get(n)?.name || `역 ${n}`)}</span><span class="m" style="margin-left:auto">${Math.round(r.get(n) || 0).toLocaleString()}명/일</span></label>`).join('');
   return `${header(e.id ? `운행 계통: ${e.name}` : `${e.line} 운행 계통 짜기`)}
     <div class="name-row"><span class="kind">이름</span><input type="text" id="svc-name" value="${esc(e.name)}"></div>
     <div class="name-row"><span class="kind">등급</span><select id="svc-kind">${Object.entries(SERVICE_KINDS)
       .map(([k, v]) => `<option value="${k}" ${k === e.kind ? 'selected' : ''}>${v.label}</option>`).join('')}</select>
-      <span class="kind">하루</span><input type="number" id="svc-trains" min="2" max="300" step="2" value="${e.trains}" style="width:70px"><span>회 (양방향)</span></div>
+      <span class="m">정차 방식·요금</span></div>
+    <div class="name-row"><span class="kind">열차</span><select id="svc-type">${Object.entries(TRAIN_TYPES)
+      .map(([k, v]) => `<option value="${k}" ${k === e.type ? 'selected' : ''} ${runnable(k) ? '' : 'disabled'}>${v.label}${runnable(k) ? '' : ' (비전철 구간 있음)'}</option>`).join('')}</select></div>
+    <div class="name-row"><span class="kind">편성</span><input type="range" id="svc-sets" min="1" max="60" value="${e.sets}" style="flex:1">
+      <b>${e.sets}편성</b></div>
+    <p class="hint">${TRAIN_TYPES[e.type].label}: 정원 ${TRAIN_TYPES[e.type].cap.toLocaleString()}명, 편성당 ${formatWon(TRAIN_TYPES[e.type].setCost)}. 편성을 늘리면 운행 횟수가 저절로 늘어납니다.</p>
     <table class="kv">
       <tr><td>정차역</td><td>${stops.length} / ${e.nodes.length}개</td></tr>
       ${plan ? `<tr><td>운행 거리 · 시간</td><td>${plan.km.toFixed(0)}km · ${fmtMin(plan.runMin)}</td></tr>
       <tr><td>표정 속도</td><td>${(plan.km / (plan.runMin / 60)).toFixed(0)} km/h</td></tr>
-      <tr><td>배차 간격 (한 방향)</td><td>약 ${Math.round(SERVICE_DAY_MIN / Math.max(1, e.trains / 2))}분</td></tr>
-      <tr><td>필요 차량</td><td>${sets}편성${cur ? ` (보유 ${cur.sets})` : ''}</td></tr>
-      <tr><td>차량 구입비</td><td>${cost ? formatWon(cost) : '없음'}</td></tr>` : '<tr><td colspan="2">정차역을 둘 이상 고르세요.</td></tr>'}
+      <tr><td>하루 운행 (24시간)</td><td>${trains}회 · 한 방향 약 ${Math.max(1, Math.round(SERVICE_DAY_MIN / Math.max(1, trains / 2)))}분 간격</td></tr>
+      <tr><td>하루 수송력</td><td>${(trains * TRAIN_TYPES[e.type].cap).toLocaleString()}명</td></tr>
+      <tr><td>차량 구입비</td><td>${cost ? formatWon(cost) : '없음'}${cur ? ` (보유 ${cur.sets}편성)` : ''}</td></tr>` : '<tr><td colspan="2">정차역을 둘 이상 고르세요.</td></tr>'}
     </table>
     <p class="hint">특급·급행은 고른 역에만 서서 통과역마다 정차 시간을 줄이고, 정차역의 배차 간격이 짧아집니다. 열차는 같은 선로 용량을 나눠 씁니다. 고친 내용은 다음 해부터 반영됩니다.</p>
     <div class="row" style="display:flex;gap:6px;margin:8px 0">
@@ -1528,7 +1537,7 @@ function servicePanel() {
     <div style="max-height:240px;overflow:auto">${rows}</div>
     ${e.id ? '' : fundSelect(plan ? [serviceOperator({ segs: plan.segs })] : [])}
     <div class="row" style="display:flex;gap:6px;margin-top:8px">
-      <button class="primary" id="svc-ok" ${plan ? '' : 'disabled'}>${e.id ? (cost ? `저장 (차량 ${formatWon(cost)})` : '저장') : `운행 시작 (차량 ${formatWon(cost)} · 1년)`}</button>
+      <button class="primary" id="svc-ok" ${plan && typeOk ? '' : 'disabled'}>${e.id ? (cost ? `저장 (차량 ${formatWon(cost)})` : '저장') : `운행 시작 (차량 ${formatWon(cost)} · 1년)`}</button>
       ${e.id ? '<button id="svc-del">운행 중단</button>' : ''}
     </div>`;
 }
@@ -1543,7 +1552,9 @@ function bindService(el) {
     if (!e.id) e.stops = defaultStops(e.nodes, e.kind);
     renderSelection();
   };
-  el.querySelector('#svc-trains').onchange = (ev) => { e.trains = Math.max(2, Math.min(300, Math.round(+ev.target.value || 2))); renderSelection(); };
+  el.querySelector('#svc-type').onchange = (ev) => { e.type = ev.target.value; renderSelection(); };
+  el.querySelector('#svc-sets').oninput = (ev) => { e.sets = +ev.target.value; ev.target.nextElementSibling.textContent = `${e.sets}편성`; };
+  el.querySelector('#svc-sets').onchange = () => renderSelection();
   el.querySelectorAll('[data-stop]').forEach((c) => {
     c.onchange = () => { const n = +c.dataset.stop; if (c.checked) e.stops.add(n); else e.stops.delete(n); renderSelection(); };
   });
@@ -1551,8 +1562,8 @@ function bindService(el) {
   el.querySelector('#svc-ok').onclick = () => {
     const { stops, plan } = servicePlan();
     if (!plan) return;
-    const rec = { name: e.name, kind: e.kind, line: e.line, cls: e.cls, stops, trains: e.trains, runMin: plan.runMin, km: plan.km, segs: plan.segs,
-      underLinks: plan.segs.flatMap((sg) => sg.via.map((i) => linkAt(base, state, i))) };
+    const rec = { name: e.name, kind: e.kind, line: e.line, cls: e.cls, stops, type: e.type, sets: e.sets, runMin: plan.runMin, km: plan.km, segs: plan.segs,
+      underLinks: plan.under };
     const r = e.id ? updateService(state, e.id, rec) : startService(state, rec);
     if (!r.ok) { alert(r.reason); return; }
     svcEdit = null;
@@ -1574,7 +1585,7 @@ function serviceSection(l) {
   const list = (state.services || []).filter((s) => s.line === l.name);
   return `<h4>노선도 · 운행 계통 · 수익성</h4>${diagram}${econ}
     <div class="list">${list.map((s) => `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
-      <span>${esc(s.name)} <span class="m">${s.name.includes(SERVICE_KINDS[s.kind].label) ? "" : `${SERVICE_KINDS[s.kind].label} · `}${s.stops.length}개 역 · 하루 ${s.trains}회${s.built ? '' : ' · 차량 제작 중'}</span></span>
+      <span>${esc(s.name)} <span class="m">${s.name.includes(SERVICE_KINDS[s.kind].label) ? "" : `${SERVICE_KINDS[s.kind].label} · `}${s.stops.length}개 역 · ${TRAIN_TYPES[s.type]?.label.split(' ')[0] || ''} ${s.sets}편성 · 하루 ${s.trains}회${s.built ? '' : ' · 차량 제작 중'}</span></span>
       <button class="small" data-svc-edit="${s.id}">고치기</button></div></div>`).join('')}</div>
     <button class="small" id="svc-new" data-line="${esc(l.name)}" data-cls="${l.cls}">새 운행 계통 짜기 (특급·급행·보통)</button>`;
 }
@@ -1597,8 +1608,9 @@ function svcStats() {
     const cls = s.cls === 'hsr' ? 'hsr' : 'conv', fare = OPERATING.fareKm[cls] * SERVICE_KINDS[s.kind].fareFactor;
     const rev = pkm * fare * 365;
     // 비용: 열차-km 운행비 + 차량 감가상각(25년)
-    const cost = s.trains * s.km * OPERATING.trainKmCost[cls] * 365 + (s.sets * setCost(s.kind, s.cls) * 1e8) / 25;
-    return { s, peak, load: pkm / Math.max(1, s.trains * OPERATING.paxPerTrain[cls] * s.km), rev, cost,
+    const tt = TRAIN_TYPES[s.type] || TRAIN_TYPES.intercity;
+    const cost = s.trains * s.km * tt.kmCost * 365 + (s.sets * tt.setCost * 1e8) / 25;
+    return { s, peak, load: pkm / Math.max(1, s.trains * tt.cap * s.km), rev, cost,
       ratio: rev > 0 ? (cost / rev) * 100 : Infinity, premium: pkm * OPERATING.fareKm[cls] * (SERVICE_KINDS[s.kind].fareFactor - 1) * 365 };
   });
 }
@@ -1699,12 +1711,14 @@ function openLineDiagram(id) {
     const v = segVols.get(s.id);
     const segVC = [];
     if (v) {
-      const cap = s.trains * OPERATING.paxPerTrain[s.cls === 'hsr' ? 'hsr' : 'conv'];
+      const cap = s.trains * (TRAIN_TYPES[s.type]?.cap || OPERATING.paxPerTrain[s.cls === 'hsr' ? 'hsr' : 'conv']);
       for (let j = 0; j + 1 < stopIdx.length; j++) for (let i = stopIdx[j]; i < stopIdx[j + 1]; i++) segVC[i] = (v[j] || 0) / cap;
     }
-    rows.push({ name: s.name, kind: s.kind, first, last, stops, trains: s.built ? s.trains : 0, times: timesFor(first, last, stops, P.serviceTimeFactor[s.kind]),
+    // 열차 종류 최고 속도만큼 늦춘다: 계통 편도 시간에 맞춰 구간 시간을 늘린다
+    const baseRun = timesFor(first, last, stops, 1)[last] || 1;
+    rows.push({ name: s.name, kind: s.kind, first, last, stops, trains: s.built ? s.trains : 0, times: timesFor(first, last, stops, Math.max(1, (s.runMin || baseRun) / baseRun)),
       segVC: v ? segVC : null,
-      label: `${SERVICE_KINDS[s.kind].label} · ${s.trains}회/일 · ${stops.size}역${s.built ? '' : ' · 제작 중'}` });
+      label: `${SERVICE_KINDS[s.kind].label} · ${TRAIN_TYPES[s.type]?.label.split(' ')[0] || ''} ${s.sets}편성 · ${s.trains}회/일${s.built ? '' : ' · 제작 중'}` });
   }
   // 보통(자동): 모든 노선에 저절로 다니는 모든 역 정차 열차. 운행 횟수는 이용객을 승차율 65%로 실을 만큼
   const baseTrains = autoLocalTrains(line, mode === 2 ? 'metro' : l0.cls, Math.max(0, ...segs.map((s) => s.vol)));
@@ -1745,7 +1759,7 @@ function operatorEconomics() {
     const op = serviceOperator(x.s);
     const e = (out[op] ||= { rev: 0, cost: 0, km: 0 });
     e.rev += x.premium;
-    e.cost += (x.s.sets * setCost(x.s.kind, x.s.cls) * 1e8) / 25;
+    e.cost += (x.s.sets * setCost(x.s.type) * 1e8) / 25;
   }
   return out;
 }

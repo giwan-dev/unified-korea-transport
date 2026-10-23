@@ -539,6 +539,7 @@ function completeProject(base, state, p) {
     if (s) s.built = true;
     return;
   }
+  if (p.kind === 'vehicles') return;   // 계통 차량 추가 구입 (편성 수는 고칠 때 이미 바뀌었다)
   if (p.kind === 'airRoute') {
     state.air.routes[p.key] = { a: p.a, b: p.b, freq: AIR.manualFreq, origin: 'manual', low: 0 };
     state.air.banned = state.air.banned.filter((k) => k !== p.key);

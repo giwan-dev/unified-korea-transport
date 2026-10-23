@@ -1,14 +1,39 @@
-// 운행 계통: 일본 재래선처럼 같은 선로 위에 특급·급행·보통 열차를 정차역 패턴과 하루 운행 횟수로 짠다.
+// 운행 계통: 시티즈: 스카이라인의 철도 노선처럼 정차역, 열차 종류, 편성 수만 정하면 운행 횟수는 저절로 정해진다
+// (편성 수 × 하루 24시간 ÷ 편도 시간). 등급(특급·급행·보통)은 정차 패턴과 요금을 나타낸다.
 // 시뮬레이션에서는 정차역 사이를 잇는 가상 철도 링크가 되고, 그 이용객은 밑의 실제 선로 용량을 함께 쓴다.
 
 import { P } from '../sim/params.js';
 import { canAfford, startProject, fundFor } from './state.js';
 
 export const SERVICE_KINDS = {
-  limited: { label: '특급', setCost: 300, fareFactor: 1.3 },   // 편성당 차량비 (억원)
-  express: { label: '급행', setCost: 200, fareFactor: 1.1 },
-  local: { label: '보통', setCost: 150, fareFactor: 1.0 },
+  limited: { label: '특급', fareFactor: 1.3 },
+  express: { label: '급행', fareFactor: 1.1 },
+  local: { label: '보통', fareFactor: 1.0 },
 };
+
+/**
+ * 열차 종류 (게임용 일반 모델). maxKmh: 최고 속도(선로 속도보다 빠를 수는 없다), cap: 편성 정원,
+ * setCost: 편성당 차량비(억원), kmCost: 열차-km당 운행비(원), electric: 전철 구간에서만 다닌다
+ */
+export const TRAIN_TYPES = {
+  hsr: { label: '고속열차 (300km/h급)', maxKmh: 300, cap: 900, setCost: 450, kmCost: 50000, electric: true },
+  semi: { label: '준고속 전동차 (250km/h급)', maxKmh: 250, cap: 400, setCost: 250, kmCost: 36000, electric: true },
+  intercity: { label: '간선 전동차 (180km/h급)', maxKmh: 180, cap: 420, setCost: 160, kmCost: 30000, electric: true },
+  commuter: { label: '광역 통근 전동차 (110km/h급)', maxKmh: 110, cap: 1600, setCost: 120, kmCost: 26000, electric: true },
+  diesel: { label: '디젤 객차 (120km/h급, 비전철 가능)', maxKmh: 120, cap: 450, setCost: 100, kmCost: 34000, electric: false },
+};
+
+/** 그 선로에 다닐 수 있는 열차 종류인지 (전동차는 비전철 구간을 지날 수 없다) */
+export function canRun(typeId, underLinks) {
+  const t = TRAIN_TYPES[typeId];
+  return !t.electric || underLinks.every((l) => l.power && l.power !== 'none');
+}
+
+/** 노선에 맞는 기본 열차 종류 */
+export function defaultTrainType(cls, underLinks) {
+  if (cls === 'hsr') return 'hsr';
+  return canRun('intercity', underLinks) ? 'intercity' : 'diesel';
+}
 const SERVICE_DAY_MIN = 1440;   // 하루 운행 시간: 24시간 운행
 const TURNAROUND_MIN = 20;      // 종착역 회차
 
@@ -132,7 +157,8 @@ export function railPath(links, from, to, line, mode = 1) {
  * 계통의 구간들: 정차역 사이마다 실제 선로 링크 목록과 지나치는 역 수
  * @returns {{segs:{a,b,via,skip}[], km:number, runMin:number}|null}
  */
-export function planService(links, stationSet, stops, kind, line) {
+export function planService(links, stationSet, stops, kind, line, typeId = 'intercity') {
+  const cap = TRAIN_TYPES[typeId]?.maxKmh ?? 999;
   const segs = [];
   let km = 0, min = 0;
   for (let k = 0; k + 1 < stops.length; k++) {
@@ -144,50 +170,57 @@ export function planService(links, stationSet, stops, kind, line) {
       node = l.a === node ? l.b : l.a;
       if (node !== stops[k + 1] && stationSet.has(node)) skip++;
       km += l.len;
-      min += (l.len / l.speed) * 60;
+      min += (l.len / Math.min(l.speed, cap)) * 60;
     }
     segs.push({ a: stops[k], b: stops[k + 1], via, skip });
   }
-  min = min * P.serviceTimeFactor[kind] + (stops.length - 1) * P.railDwellMin;
+  min += (stops.length - 1) * P.railDwellMin;
   return { segs, km, runMin: min };
 }
 
-/** 필요한 편성 수: 하루 운행(양방향 합계)을 왕복 시간으로 나눈 것 + 예비 1편성 */
-export function trainsets(trainsPerDay, runMin) {
-  const tripsPerSet = SERVICE_DAY_MIN / (runMin + TURNAROUND_MIN);
-  return Math.ceil(trainsPerDay / Math.max(tripsPerSet, 0.5)) + 1;
+/** 편성 수로 하루 운행 횟수(양방향 합계): 편성마다 24시간 동안 편도(+회차 20분)를 되풀이한다 */
+export function tripsPerDay(sets, runMin) {
+  return Math.max(2, 2 * Math.floor((sets * SERVICE_DAY_MIN) / (2 * (runMin + TURNAROUND_MIN))));
 }
 
-export function setCost(kind, cls) {
-  return SERVICE_KINDS[kind].setCost * (cls === 'hsr' ? 1.4 : 1);
+export function setCost(typeId) {
+  return (TRAIN_TYPES[typeId] || TRAIN_TYPES.intercity).setCost;
 }
 
 /** 새 계통 편성: 차량을 사서(1년) 운행을 시작한다 */
 export function startService(state, svc) {
-  const sets = trainsets(svc.trains, svc.runMin);
-  const cost = Math.round(sets * setCost(svc.kind, svc.cls));
+  const sets = svc.sets;
+  const cost = Math.round(sets * setCost(svc.type));
   const fund = fundFor(state, svc.underLinks || []);
   if (!canAfford(state, cost, 1, fund)) return { ok: false, reason: fund === 'gov' ? '예산과 차입 한도가 부족합니다.' : '운영사 잔액이 부족합니다.' };
   const id = `svc${Date.now().toString(36)}`;
   const { underLinks, ...rec } = svc;
-  (state.services ||= []).push({ ...rec, id, sets, built: false });
+  (state.services ||= []).push({ ...rec, id, sets, fund, trains: tripsPerDay(sets, svc.runMin), built: false });
   startProject(state, { id: crypto.randomUUID(), kind: 'service', service: id, links: [], cost, years: 1, fund,
-    label: `운행 계통 ${svc.name} (${svc.stops.length}개 역, 하루 ${svc.trains}회, 차량 ${sets}편성)` });
+    label: `운행 계통 ${svc.name} (${TRAIN_TYPES[svc.type].label} ${sets}편성, ${svc.stops.length}개 역)` });
   return { ok: true };
 }
 
-/** 운행 중인 계통 고치기: 정차역·이름은 바로, 증편에 모자란 차량은 사들인다 */
+/** 새로 사야 하는 차량비: 열차 종류를 바꾸면 편성 전부, 아니면 늘린 편성만 (줄이면 그대로 둔다) */
+export function serviceBuyCost(svc, next) {
+  if (!svc) return Math.round(next.sets * setCost(next.type));
+  if (next.type !== svc.type) return Math.round(next.sets * setCost(next.type));
+  return Math.round(Math.max(0, next.sets - svc.sets) * setCost(next.type));
+}
+
+/** 운행 중인 계통 고치기: 정차역·이름·편성 수·열차 종류. 모자란 차량은 사들인다 */
 export function updateService(state, id, patch) {
   const svc = state.services.find((s) => s.id === id);
-  const next = { ...svc, ...patch };
-  const need = trainsets(next.trains, next.runMin);
-  const extra = Math.max(0, need - svc.sets);
-  const cost = Math.round(extra * setCost(next.kind, next.cls));
-  if (cost > 0 && !canAfford(state, cost, 1)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
-  Object.assign(svc, patch, { sets: Math.max(svc.sets, need) });
+  const { underLinks, ...rec } = patch;
+  const next = { ...svc, ...rec };
+  const cost = serviceBuyCost(svc, next);
+  const fund = svc.fund || 'gov';
+  if (cost > 0 && !canAfford(state, cost, 1, fund)) return { ok: false, reason: fund === 'gov' ? '예산과 차입 한도가 부족합니다.' : '운영사 잔액이 부족합니다.' };
+  Object.assign(svc, rec, { trains: tripsPerDay(next.sets, next.runMin) });
   if (cost > 0) {
-    state.budget -= cost;
-    state.log.unshift(`${state.year}년 차량 구입: ${svc.name} ${extra}편성 (${Math.round(cost).toLocaleString()}억원)`);
+    // 차량은 1년 안에 들어온다 (그동안은 지금 차량으로 다닌다)
+    startProject(state, { id: crypto.randomUUID(), kind: 'vehicles', service: id, links: [], cost, years: 1, fund,
+      label: `차량 구입: ${svc.name} ${TRAIN_TYPES[svc.type].label} (${next.sets}편성)` });
   }
   return { ok: true, cost };
 }
@@ -207,6 +240,7 @@ export function serviceLinks(state, links) {
       const under = s.via.map((i) => links[i]);
       out.push({
         a: s.a, b: s.b, mode: 1, cls: svc.cls, via: s.via, skip: s.skip, kind: svc.kind, trains: svc.trains,
+        speedCap: TRAIN_TYPES[svc.type]?.maxKmh ?? 999, seatCap: TRAIN_TYPES[svc.type]?.cap,
         service: svc.id, seg: k, len: under.reduce((sum, l) => sum + (l?.len || 0), 0),
         tracks: 2, power: 'AC', speed: 100, active: under.every((l) => l && l.active),
       });
