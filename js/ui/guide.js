@@ -1,7 +1,10 @@
 // 처음 시작할 때의 짧은 안내: 화면의 주요 자리를 차례로 밝히고 한두 문장으로 설명한다.
-// 처음 한 번만 저절로 뜨고, 그 뒤에는 상단 바의 "?" 단추나 메뉴 찾기의 "처음 안내 다시 보기"로 연다.
+// 저절로 뜨는 때는 설정 › 도움말에서 고른다: 처음 한 번만(기본) / 새 게임마다 / 보지 않기.
+// 언제든 상단 바의 "?" 단추나 메뉴 찾기의 "처음 안내 다시 보기"로 연다.
 
 const SEEN_KEY = 'ukt-guide-v1';
+const MODE_KEY = 'ukt-guide-mode';
+export const GUIDE_MODES = { once: '처음 한 번만', newgame: '새 게임을 시작할 때마다', off: '보지 않기' };
 
 let box = null, idx = 0, steps = [], onEnd = null;
 
@@ -24,7 +27,8 @@ function render() {
     <h3>${s.title}</h3><p>${s.body}</p>
     <div class="gd-btns"><button class="small" data-gd="skip">건너뛰기</button><span style="flex:1"></span>
       ${idx ? '<button class="small" data-gd="prev">이전</button>' : ''}
-      <button class="small primary" data-gd="next">${idx === steps.length - 1 ? '시작하기' : '다음'}</button></div>`;
+      <button class="small primary" data-gd="next">${idx === steps.length - 1 ? '시작하기' : '다음'}</button></div>
+    <button class="gd-never" data-gd="never">다시 보지 않기 (설정 › 도움말에서 바꿀 수 있습니다)</button>`;
   // 카드 자리: 좁은 화면은 아래쪽에 붙이고, 넓은 화면은 대상 옆(공간이 남는 쪽)에
   const W = innerWidth, H = innerHeight, cw = Math.min(340, W - 24);
   card.style.width = `${cw}px`;
@@ -64,6 +68,7 @@ export function startGuide(list, end) {
     const b = e.target.closest('[data-gd]');
     if (!b) return;
     if (b.dataset.gd === 'skip') return close(false);
+    if (b.dataset.gd === 'never') { setGuideMode('off'); return close(false); }
     if (b.dataset.gd === 'prev') idx = Math.max(0, idx - 1);
     if (b.dataset.gd === 'next') { if (idx === steps.length - 1) return close(true); idx++; }
     steps[idx].before?.();
@@ -79,6 +84,22 @@ export function startGuide(list, end) {
   render();
 }
 
-export function guideSeen() {
-  try { return localStorage.getItem(SEEN_KEY) === '1'; } catch { return true; }
+export function getGuideMode() {
+  try { return localStorage.getItem(MODE_KEY) || 'once'; } catch { return 'once'; }
+}
+
+export function setGuideMode(mode) {
+  try { localStorage.setItem(MODE_KEY, mode); } catch { /* 저장 못 해도 된다 */ }
+}
+
+/** 게임을 열 때 안내를 저절로 띄울지 (보지 않기면 띄우지 않고, 아니면 아직 안 본 경우만) */
+export function guideShouldAutoShow() {
+  if (getGuideMode() === 'off') return false;
+  try { return localStorage.getItem(SEEN_KEY) !== '1'; } catch { return false; }
+}
+
+/** 새 게임을 시작할 때: '새 게임마다'면 다음에 열 때 다시 뜨게 한다 */
+export function guideOnNewGame() {
+  if (getGuideMode() !== 'newgame') return;
+  try { localStorage.removeItem(SEEN_KEY); } catch { /* 저장 못 해도 된다 */ }
 }

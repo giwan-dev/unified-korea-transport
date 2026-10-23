@@ -15,7 +15,7 @@ import { setNameResolver, refreshNames, setRegions, setLinks, paintHotspots } fr
 import { isNarrow, twinPrimary, mergeTwins, ROAD_RANK, motorwayMainline, flattenMainline, connectJunctions, smoothMainlineEnds, mainlineBubbles } from './ui/traffic.js';
 import { subFold, initPanelUI, toast } from './ui/panel.js';
 import { initPalette, openPalette, goSection } from './ui/palette.js';
-import { startGuide, guideSeen } from './ui/guide.js';
+import { startGuide, guideShouldAutoShow, guideOnNewGame, getGuideMode, setGuideMode, GUIDE_MODES } from './ui/guide.js';
 import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.js';
 import { kmBetween, routeKey } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
@@ -1200,7 +1200,7 @@ function bindUI() {
     d.onclick = go;
     d.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
   });
-  if (!guideSeen()) setTimeout(showGuide, 600);
+  if (guideShouldAutoShow()) setTimeout(showGuide, 600);
   $('#legend').addEventListener('change', (e) => {
     if (e.target.id === 'metric') { metric = e.target.value; paintZones(); renderLegend(); }
     if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); renderLegend(); }
@@ -1280,7 +1280,7 @@ function showGuide() {
     { target: '#legend', title: '보기 메뉴', body: '도로만·철도만·항공만으로 걸러 보거나, 인구·소득·행복도 같은 지표로 지도를 색칠합니다.' },
     { target: '#btn-find', title: '메뉴 찾기', body: '찾는 메뉴가 어디 있는지 모르겠으면 <b>Ctrl+K</b>(또는 /)로 이름 일부나 초성을 쳐 보세요. 탭·묶음·지역·노선·계획 사업으로 바로 갑니다.' },
     { target: '#btn-next', title: '다음 해', body: '사업을 벌였으면 다음 해로 넘깁니다. 교통 수요와 인구 이동을 다시 계산합니다.' },
-  ]);
+  ], () => { const sel = $('#guide-mode'); if (sel) sel.value = getGuideMode(); });   // "다시 보지 않기"를 누르면 설정 칸도 맞춘다
 }
 const GUIDE_TABS = '<b>현황</b>은 올해 성적, <b>건설</b>은 새 노선·계획 사업, <b>사업</b>은 진행 중인 공사와 예산 투입, <b>운영</b>은 운행 계통·철도 회사·노선 수지·항공, <b>민원·정책</b>은 혼잡 요구·지자체 제안·행정구역·국가 대형 사업, <b>통계</b>는 순위와 추이, <b>설정</b>은 저장과 새 게임입니다.';
 
@@ -1475,7 +1475,7 @@ function renderBuild() {
       <p class="hint">노란 점(◆)은 중국·러시아·일본 거점 도시입니다. 끝점을 거점에 붙이면 국제 노선이 됩니다.
         기존 ${spec.mode ? '선로' : '도로'} 중간을 누르면 그 자리에 ${spec.mode === 0 ? 'IC·JCT를' : '역을'} 만들고 이어집니다.</p>
       ${!affordable && draft.points.length > 1 ? '<p class="hint neg">예산과 차입 한도를 넘습니다.</p>' : ''}
-      <div class="row" style="display:flex;gap:6px;margin-top:8px">
+      <div class="actions">
         <button class="primary" id="draft-ok" ${draft.points.length < 2 || !affordable ? 'disabled' : ''}>착공</button>
         <button id="draft-prev" ${draft.points.length < 2 ? 'disabled' : ''}>효과 미리보기</button>
         <button id="draft-cancel">취소</button>
@@ -1767,7 +1767,7 @@ function econPanelHTML() {
     }).join('') || '<p class="hint">노선이 없습니다.</p>'}</div>
     ${rows.length > 20 ? `<button class="small" data-econ="all:${!econView.all}" style="margin-top:6px">${econView.all ? '20개만 보기' : `모두 보기 (${rows.length})`}</button>` : ''}
     ${idle.length ? `<p class="hint">여객 이용이 없는 노선 ${idle.length}개(화물선, 역이 없는 선로: ${idle.slice(0, 6).map((e) => esc(e.name)).join(', ')}${idle.length > 6 ? ' 등' : ''})는 순위에서 뺐습니다. 여객 열차 없이 선로 유지비 연 ${formatWon(idle.reduce((a, e) => a + e.cost, 0) / 1e8)}만 셉니다.</p>` : ''}
-    ${closed.length ? `<h4>폐선한 노선</h4><div class="list">${closed.map(([n, y]) => `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
+    ${closed.length ? `<h4>폐선한 노선</h4><div class="list">${closed.map(([n, y]) => `<div class="item opt"><div class="opt-row">
       <span>${esc(n)} <span class="m">${y}년 폐선 · ${Math.round(lineKmOf(n))}km</span></span>
       <button class="small" data-reopen="${esc(n)}">재개통 ${formatWon(lineKmOf(n) * REOPEN_PER_KM)}</button></div></div>`).join('')}</div>` : ''}
     <p class="hint">영업계수 = 영업비용 ÷ 영업수입 × 100 (100 미만이면 흑자, 200 이상이면 수입의 두 배를 씁니다). 수입은 구간 이용객 × 거리 × km당 운임, 비용은 운행 열차-km와 선로 유지비로 셈한 추정입니다. 도시철도는 같은 구 안 이용을 역세권 인구로 어림해 더했습니다.<br>
@@ -1823,7 +1823,9 @@ function renderSettings() {
   const el = $('[data-panel=settings]');
   el.innerHTML = `
     <h3>도움말</h3>
-    <div class="row"><button class="small" id="help-guide">처음 안내 다시 보기</button><button class="small" id="help-find">메뉴 찾기 (Ctrl+K)</button></div>
+    <div class="actions"><button class="small" id="help-guide">처음 안내 다시 보기</button><button class="small" id="help-find">메뉴 찾기 (Ctrl+K)</button></div>
+    <div class="name-row"><span style="flex:1">게임을 열 때 처음 안내</span>
+      <select id="guide-mode">${Object.entries(GUIDE_MODES).map(([k, v]) => `<option value="${k}" ${getGuideMode() === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
     <p class="hint">정책·지방자치·행정구역·국가 대형 사업은 <a href="#" data-goto-tab="requests">민원·정책 탭</a>, 항공 자동 운영·철도 회사·노선 정리는 <a href="#" data-goto-tab="ops">운영 탭</a>에 있습니다.</p>
     <h3 style="margin-top:16px">저장 슬롯</h3>
     <p class="hint">진행은 자동 저장되고, 여기에 따로 세 개까지 남겨 두었다가 되돌릴 수 있습니다.</p>
@@ -1837,10 +1839,12 @@ function renderSettings() {
     <p class="hint">도로·철도·행정구역·지명: © OpenStreetMap 기여자 (ODbL)<br>인구 격자: WorldPop 2020 (CC BY 4.0)<br>소득·HDI 초기값과 공사비 단가는 게임용 가정값입니다. 자세한 내용은 저장소의 docs/model.md를 보세요.</p>`;
   $('#help-guide').onclick = showGuide;
   $('#help-find').onclick = () => openPalette();
+  $('#guide-mode').onchange = (e) => { setGuideMode(e.target.value); toast(`처음 안내: ${GUIDE_MODES[e.target.value]}`); };
   el.querySelectorAll('[data-goto-tab]').forEach((a) => { a.onclick = (e) => { e.preventDefault(); switchTab(a.dataset.gotoTab); }; });
   bindSlots(el);
   $('#btn-new').onclick = () => {
     if (!confirm('지금 게임을 지우고 새로 시작할까요?')) return;
+    guideOnNewGame();
     clearSave();
     clearSim();
     const d = $('#difficulty').value;
@@ -2198,7 +2202,7 @@ function servicePanel() {
       <tr><td>차량 구입비</td><td>${cost ? formatWon(cost) : '없음'}${cur ? ` (보유 ${cur.sets}편성)` : ''}</td></tr>` : '<tr><td colspan="2">정차역을 둘 이상 고르세요.</td></tr>'}
     </table>
     <p class="hint">특급·급행은 고른 역에만 서서 통과역마다 정차 시간을 줄이고, 정차역의 배차 간격이 짧아집니다. 열차는 같은 선로 용량을 나눠 씁니다. 고친 내용은 다음 해부터 반영됩니다.</p>
-    <div class="row" style="display:flex;gap:6px;margin:8px 0">
+    <div class="actions">
       <button class="small" data-svc-preset="local">모든 역</button><button class="small" data-svc-preset="express">큰 역 절반</button>
       <button class="small" data-svc-preset="limited">주요 역만</button></div>
     <div class="name-row"><span class="kind">노선</span><span>${e.lines.map(esc).join(' → ')}</span></div>
@@ -2211,7 +2215,7 @@ function servicePanel() {
     })()}
     <div style="max-height:240px;overflow:auto">${rows}</div>
     ${e.id ? '' : fundSelect(plan ? [serviceOperator({ segs: plan.segs })] : [])}
-    <div class="row" style="display:flex;gap:6px;margin-top:8px">
+    <div class="actions">
       <button class="primary" id="svc-ok" ${plan && typeOk ? '' : 'disabled'}>${e.id ? (cost ? `저장 (차량 ${formatWon(cost)})` : '저장') : `운행 시작 (차량 ${formatWon(cost)} · 1년)`}</button>
       ${e.id ? '<button id="svc-del">운행 중단</button>' : ''}
     </div>`;
@@ -2257,15 +2261,15 @@ function serviceSection(l) {
   const ec = lineEconomics().find((x) => x.name === l.name);
   const econ = ec ? `<p class="hint">이 노선: 연 수입 ${formatWon(ec.rev / 1e8)} · 비용 ${formatWon(ec.cost / 1e8)} · 영업계수 <b class="${ec.ratio > 100 ? 'neg' : ''}">${fmtRatio(ec.ratio)}</b></p>` : '';
   const diagram = '<button class="small" id="line-diagram">노선도 보기 (열차 위치·정차역·혼잡도)</button>';
-  if (l.mode === 2) return `<h4>노선도 · 수익성</h4>${diagram}${econ}<p class="hint">도시철도 수입에는 같은 구 안 이용을 역세권 인구로 어림해 더했습니다.</p>`;
+  if (l.mode === 2) return `<h4>노선도 · 수익성</h4><div class="actions">${diagram}</div>${econ}<p class="hint">도시철도 수입에는 같은 구 안 이용을 역세권 인구로 어림해 더했습니다.</p>`;
   const list = (state.services || []).filter((s) => s.line === l.name || s.lines?.includes(l.name));
-  return `<h4>노선도 · 운행 계통 · 수익성</h4>${diagram}
-    <button class="small" id="st-start" title="두 역 사이를 단순한 곡선으로 새로 놓고 옛 구간은 폐선">구간 직선화 (두 역 고르기)</button>${econ}
-    <div class="list">${list.map((s) => `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
+  return `<h4>노선도 · 운행 계통 · 수익성</h4><div class="actions">${diagram}
+    <button class="small" id="st-start" title="두 역 사이를 단순한 곡선으로 새로 놓고 옛 구간은 폐선">구간 직선화 (두 역 고르기)</button></div>${econ}
+    <div class="list">${list.map((s) => `<div class="item opt"><div class="opt-row">
       <span>${esc(s.name)} <span class="m">${s.name.includes(SERVICE_KINDS[s.kind].label) ? "" : `${SERVICE_KINDS[s.kind].label} · `}${s.stops.length}개 역 · ${TRAIN_TYPES[s.type]?.label.split(' ')[0] || ''} ${s.sets}편성 · 하루 ${s.trains}회${s.built ? '' : ' · 차량 제작 중'}</span></span>
       <button class="small" data-svc-edit="${s.id}">고치기</button></div></div>`).join('')}</div>
-    <button class="small" id="svc-new" data-line="${esc(l.name)}" data-cls="${l.cls}">새 운행 계통 짜기 (특급·급행·보통)</button>
-    <button class="small svc-pick" title="설 역을 지도에서 차례로 눌러 여러 노선을 지나는 계통을 만듭니다">역 골라 계통 짜기</button>`;
+    <div class="actions"><button class="small" id="svc-new" data-line="${esc(l.name)}" data-cls="${l.cls}">새 운행 계통 짜기 (특급·급행·보통)</button>
+    <button class="small svc-pick" title="설 역을 지도에서 차례로 눌러 여러 노선을 지나는 계통을 만듭니다">역 골라 계통 짜기</button></div>`;
 }
 
 function fmtRatio(r) { return isFinite(r) ? Math.round(r).toLocaleString() : '–'; }
@@ -2488,7 +2492,7 @@ function railStatsHTML() {
       <td class="${e.rev < e.cost ? 'neg' : ''}">${formatWon((e.rev - e.cost) / 1e8)}</td><td class="${ratio > 100 ? 'neg' : ''}">${fmtRatio(ratio)}</td><td>${formatWon(o.cash)}</td></tr>`;
   }).join('');
   const charts = ops.map((op) => (r.ops[op].hist.length > 1 ? chart(`${opInfo(state, op).name} 잔액 (억원)`, r.ops[op].hist.map((h) => [h.year, h.cash])) : '')).join('');
-  const actions = ops.map((op) => `<div class="row" style="display:flex;gap:6px;margin:4px 0;align-items:center">${opBadge(state, op)}
+  const actions = ops.map((op) => `<div class="actions">${opBadge(state, op)}
       <button class="small" data-rail-div="${op}" ${r.ops[op].cash > 0 ? '' : 'disabled'}>배당 (잔액 절반 → 정부)</button>
       <button class="small" data-rail-eq="${op}">출자 ${formatWon(EQUITY_STEP)}</button></div>`).join('');
   const canMerge = !r.merged && state.integration >= MERGE_MIN_INTEGRATION;
@@ -2805,7 +2809,7 @@ function proposalsHTML() {
       const partial = ck.targets.length < p.links.length ? ` · 일부 구간(${ck.targets.length}/${p.links.length})은 이미 공사 중` : '';
       return `<div class="item"><div class="t">${esc(p.title)}</div>
         <div class="m">${off ? `${partyBadge(off.party)} ${esc(off.title)}` : ''} · ${p.year}년 제안 · ${formatWon(ck.cost)}${partial}</div>
-        <div class="row" style="display:flex;gap:6px;margin-top:4px"><button class="small primary" data-prop-ok="${p.id}" ${ck.afford ? '' : 'disabled title="예산과 차입 한도가 부족합니다"'}>${ck.afford ? '받아들이기' : '받아들이기 (예산 부족)'}</button>
+        <div class="actions"><button class="small primary" data-prop-ok="${p.id}" ${ck.afford ? '' : 'disabled title="예산과 차입 한도가 부족합니다"'}>${ck.afford ? '받아들이기' : '받아들이기 (예산 부족)'}</button>
         <button class="small" data-prop-no="${p.id}">거절</button></div></div>`;
     }).join('')}</div>`;
 }
@@ -3181,7 +3185,7 @@ function straightenPanel() {
     ${merged.length ? `<div class="m" style="margin-top:4px">합치는 역: ${merged.join(' · ')}</div>` : ''}
     <p class="hint">완공되면 옛 구간 ${pl.via.length}개는 폐선하고, 역 이름과 운행 계통의 정차역은 새 자리로 이어집니다.</p>
     ${fundSelect([operatorOf(state, { mode: 1, kp: isKP(nodeCoord(pl.A)[1], nodeCoord(pl.A)[0]) ? 1 : 0 })])}
-    <div class="row" style="display:flex;gap:6px;margin-top:8px">
+    <div class="actions">
       <button class="primary" id="st-ok">착공</button><button id="st-prev">효과 미리보기</button><button id="st-cancel">취소</button></div>`;
 }
 
@@ -3408,7 +3412,7 @@ function slotInfo(n) {
 function slotsHTML() {
   return `<div class="list">${Array.from({ length: SLOTS }, (_, k) => {
     const v = slotInfo(k + 1);
-    return `<div class="item"><div class="row" style="margin:0;justify-content:space-between;align-items:center">
+    return `<div class="item opt"><div class="opt-row">
       <span>슬롯 ${k + 1} <span class="m">${v ? `${v.state.year}년 · ${new Date(v.savedAt).toLocaleString('ko-KR')}` : '비어 있음'}</span></span>
       <span><button class="small" data-slot-save="${k + 1}">저장</button> <button class="small" data-slot-load="${k + 1}" ${v ? '' : 'disabled'}>불러오기</button></span></div></div>`;
   }).join('')}</div>`;
@@ -3727,7 +3731,7 @@ function servicePickPanel() {
   return `${header('역 골라 계통 짜기')}
     <p class="hint">특급·급행이 설 역을 지도에서 차례로 누르세요 (다시 누르면 빠집니다). 노선이 달라도 됩니다 — 사이 경로와 지나는 노선은 저절로 잡습니다.</p>
     <div class="m">${picks.map((n, i) => `${i + 1}. ${esc(nn.get(n)?.name || '')}`).join(' → ') || '아직 고른 역이 없습니다.'}</div>
-    <div class="row" style="display:flex;gap:6px;margin-top:8px">
+    <div class="actions">
       <button class="primary" id="sp-ok" ${picks.length >= 2 ? '' : 'disabled'}>이 역들로 계통 만들기</button><button id="sp-cancel">취소</button></div>`;
 }
 
@@ -3766,7 +3770,7 @@ function commitServicePick() {
 }
 
 function header(title) {
-  return `<div style="display:flex;justify-content:space-between;align-items:center"><h3>${esc(title)}</h3><button class="small close">닫기</button></div>`;
+  return `<div class="sel-head"><h3>${esc(title)}</h3><button class="small close" title="닫기 (Esc)">닫기</button></div>`;
 }
 
 function linkPanel(id) {
@@ -3815,7 +3819,7 @@ function linkPanel(id) {
     : l.ext ? '<p class="hint">국외 거점과 잇는 국경 연결 구간입니다. 개량 대상이 아닙니다.</p>'
     : l.cls === 'ferry' ? '<p class="hint">여객선 항로입니다. 개량 대상이 아닙니다.</p>'
     : busyProj ? `<p class="hint">공사 중: ${esc(busyProj.label)} (${busyProj.doneYear}년 완공)</p>` : `<h4>개량</h4>
-    <button class="small sec-start" title="두 역·IC를 차례로 눌러 그 사이만 고릅니다">구간 선택 (${l.mode === 0 ? 'IC' : '역'} 두 곳 누르기)</button>
+    <div class="actions"><button class="small sec-start" title="두 역·IC를 차례로 눌러 그 사이만 고릅니다">구간 선택 (${l.mode === 0 ? 'IC' : '역'} 두 곳 누르기)</button></div>
     ${l.mode === 1 ? fundSelect([operatorOf(state, l)]) : ''}
     ${route.length > 1 ? `<label class="name-row"><input type="checkbox" id="whole-route" ${wholeRoute ? 'checked' : ''}>
       <span>같은 이름 노선 전체 (${route.length}개 구간, ${routeKm.toFixed(0)}km)</span></label>` : ''}
@@ -3823,9 +3827,9 @@ function linkPanel(id) {
       const ids = (wholeRoute && route.length > 1 ? route : secIds).filter((x) => u.applies(linkAt(base, state, x)));
       const cost = ids.reduce((sum, x) => sum + upgradeCost(u, linkAt(base, state, x)), 0);
       const ok = canAfford(state, cost, u.years, fundFor(state, ids.map((x) => linkAt(base, state, x))));
-      return `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
+      return `<div class="item opt"><div class="opt-row">
         <span>${resolve(u.label, l)}${ids.length > 1 ? ` · ${ids.length}개 구간` : ''}</span>
-        <span><button class="small" data-prev-up="${u.id}" title="다 지었을 때 효과">미리보기</button>
+        <span class="btns"><button class="small" data-prev-up="${u.id}" title="다 지었을 때 효과">미리보기</button>
         <button class="small ${ok ? 'primary' : ''}" data-up="${u.id}" ${ok ? '' : 'disabled'}>${formatWon(cost)} · ${u.years}년</button></span></div></div>`;
     }).join('') || '<p class="hint">가능한 개량이 없습니다.</p>'}</div>`}`;
 }
@@ -3852,12 +3856,12 @@ function multiPanel(ids) {
   const nn = nodeNames();
   const title = sc ? `${nn.get(sc.A)?.name || '교차점'} – ${nn.get(sc.B)?.name || '교차점'} 구간` : `${label} ${pool.length}개 구간 선택`;
   return `${header(title)}
-    ${sc ? `<div class="row" style="display:flex;gap:6px;margin:4px 0">${sc.mode === 1 ? '<button class="small" id="sec-straight">이 구간 직선화</button>' : ''}
+    ${sc ? `<div class="actions">${sc.mode === 1 ? '<button class="small" id="sec-straight">이 구간 직선화</button>' : ''}
       <button class="small" id="sec-prev">첫 개량 효과 미리보기</button><button class="small sec-start">다른 구간 고르기</button></div>` : ''}
     <p class="hint">${km[mode].toFixed(0)}km · ${names.map(esc).join(', ')}${names.length === 6 ? ' 등' : ''}${pool.length < ids.length ? ` (다른 수단·공사 중 구간 ${ids.length - pool.length}개 제외)` : ''}</p>
     <div class="list">${ups.map(({ u, app, cost, len }) => {
       const ok = canAfford(state, cost, u.years);
-      return `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
+      return `<div class="item opt"><div class="opt-row">
         <span>${resolve(u.label, linkAt(base, state, app[0]))} · ${app.length}개 구간 ${len.toFixed(0)}km</span>
         <button class="small ${ok ? 'primary' : ''}" data-mup="${u.id}" data-ids="${JSON.stringify(app)}" ${ok ? '' : 'disabled'}>${formatWon(cost)} · ${u.years}년</button></div></div>`;
     }).join('') || '<p class="hint">고른 구간에 가능한 개량이 없습니다.</p>'}</div>`;
@@ -3949,7 +3953,7 @@ function airportPanel(id) {
       <tr><td>혼잡도 (V/C)</td><td class="${pax > cap ? 'neg' : ''}">${(pax / cap).toFixed(2)}</td></tr>
     </table>
     ${ap.ext ? '' : busyProj ? `<p class="hint">공사 중: ${esc(busyProj.label)} (${busyProj.doneYear}년 완공)</p>`
-      : `<div class="row" style="margin-top:8px"><button class="small primary" id="ap-expand">${AIRPORT.expand.label} ${formatWon(cost)} · ${AIRPORT.expand.years}년</button></div>`}
+      : `<div class="actions"><button class="small primary" id="ap-expand">${AIRPORT.expand.label} ${formatWon(cost)} · ${AIRPORT.expand.years}년</button></div>`}
     ${routePanel(id, k)}`;
 }
 
@@ -3974,14 +3978,14 @@ function routePanel(id, k) {
       const key = routeKey(id, other);
       const r = state.air.routes[key];
       const load = pax / (2 * f * seats);
-      return `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
+      return `<div class="item opt"><div class="opt-row">
         <span>${esc(airportName(other))} · 하루 ${f}회 · ${pax.toLocaleString()}명 · 탑승률 <span class="${load > 1 ? 'neg' : ''}">${Math.round(load * 100)}%</span>
           <span class="m">${ORIGIN[r?.origin] || ''}</span></span>
         <button class="small" data-close-route="${key}">운항 중단</button></div></div>`;
     }).join('') || '<p class="hint">운항 중인 노선이 없습니다.</p>'}</div>
     ${latent.length ? `<h4>잠재 수요가 큰 미취항 노선</h4><div class="list">${latent.map(([a, b, pax]) => {
       const other = air.ids[a === k ? b : a];
-      return `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
+      return `<div class="item opt"><div class="opt-row">
         <span>${esc(airportName(other))} · 하루 약 ${pax.toLocaleString()}명</span>
         <button class="small primary" data-open-route="${other}">개설 ${formatWon(AIR.openCost * (here.country !== aps.find((x) => x.id === other)?.country ? 1.5 : 1))}</button></div></div>`;
     }).join('')}</div>` : ''}
@@ -4000,7 +4004,7 @@ function nodePanel(id) {
     ${n.kind === 'station' ? stationPanel(id, n) : ''}
     <h4>이름</h4>
     <div class="name-row"><input type="text" id="node-name" value="${esc(n.name)}">
-      <button class="small primary" id="node-save">이름 변경</button>
+      <button class="small" id="node-save">바꾸기</button>
       <button class="small" id="node-auto" title="자동 이름">↻</button></div>`;
 }
 

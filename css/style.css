@@ -424,3 +424,28 @@ details > summary.flash { animation: flash 1.4s ease-out; }
 @keyframes flashbox { 0%, 40% { box-shadow: 0 0 0 3px var(--brand-gold); } 100% { box-shadow: 0 0 0 0 transparent; } }
 /* 탭 7개가 넓은 화면에서 한 줄에 들어가게 */
 #tabs button { padding: 0 4px; font-size: 13px; }
+
+/* ---- 선택 패널·목록 단추 배치 통일
+   1) 동작 줄(.actions): 주 동작이 먼저, 취소·중단은 오른쪽 끝
+   2) 이름 + 단추 항목(.item.opt > .opt-row): 이름은 왼쪽, 단추 묶음은 오른쪽, 좁으면 단추가 아래 줄 오른쪽으로
+   3) 패널 머리(.sel-head): 제목 + 닫기 */
+.sel-head { display: flex; justify-content: space-between; align-items: center; gap: var(--s2); }
+.sel-head h3 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: var(--s2) 0 var(--s1); }
+.actions > button + button, .actions > span + button { margin-left: 0; }
+.actions > button[id$="-cancel"], .actions > button#svc-del { margin-left: auto; }
+.actions + .actions { margin-top: 0; }
+.item.opt { padding: var(--s2) var(--s3); }
+.opt-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s1) var(--s2); }
+.opt-row > span:first-child { flex: 1 1 150px; min-width: 0; font-size: 13px; line-height: 1.45; }
+.opt-row > button, .opt-row > .btns { flex: none; margin-left: auto; }
+.opt-row .btns { display: inline-flex; gap: var(--s2); flex-wrap: wrap; justify-content: flex-end; }
+.opt-row .btns > button + button { margin-left: 0; }
+.name-row > input + button, .name-row > button + button { margin-left: 0; }
+@media (max-width: 760px) {
+  /* 좁은 화면: 최종 동작 단추는 손가락으로 누르기 쉽게 키운다 */
+  .actions > button:not(.small) { flex: 1 1 auto; min-height: 40px; }
+  .actions > button[id$="-cancel"] { flex: 0 1 auto; }
+}
+#guide .gd-never { all: unset; display: block; margin-top: 10px; font-size: 11px; color: var(--muted); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+#guide .gd-never:hover, #guide .gd-never:focus-visible { color: var(--accent); }
