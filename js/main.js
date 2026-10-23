@@ -11,7 +11,7 @@ import {
 } from './game/state.js';
 import { MEGA, TSR_FREIGHT } from './game/mega.js';
 import { AIRPORT } from './game/catalog.js';
-import { setNameResolver, refreshNames, setLinks, paintHotspots } from './ui/map.js';
+import { setNameResolver, refreshNames, setRegions, setLinks, paintHotspots } from './ui/map.js';
 import { isNarrow, twinPrimary, mergeTwins, ROAD_RANK, motorwayMainline, flattenMainline, connectJunctions, smoothMainlineEnds, mainlineBubbles } from './ui/traffic.js';
 import { subFold, initPanelUI, toast } from './ui/panel.js';
 import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.js';
@@ -460,7 +460,9 @@ function linksFC() {
   const mainline = motorwayMainline(all.map((l, i) => (state.replaced?.[i] || l.replaced ? null : linkAt(base, state, i))), nodeCoord, (i) => i >= base.links.length);
   const features = all.map((l, i) => {
     const eff = linkAt(base, state, i);
-    if (state.replaced?.[i] || l.replaced || linkTwins[i] !== i || mainline[i] === 2) {
+    // 같은 역의 다른 노선 승강장을 잇는 환승 선로는 계산에만 쓰고 그리지 않는다 (서울역·용산역 주변이 지저분해진다)
+    // 같은 두 노드를 잇는 쌍(대표만)·JC 연결로도 그리지 않는다
+    if (state.replaced?.[i] || l.replaced || eff.name?.endsWith(' 환승') || linkTwins[i] !== i || mainline[i] === 2) {
       const p0 = [l.geom[0], l.geom[1]];   // 길이 0인 선: 그려지지 않는다
       return { type: 'Feature', id: i, properties: { id: i, mode: -1 }, geometry: { type: 'LineString', coordinates: [p0, p0] } };
     }
@@ -606,9 +608,11 @@ function nodeNames() {
   for (const [name, node] of base.metro_stations || []) if (!out.has(node)) out.set(node, { name, kind: 'station', isNew: 0, metro: 1 });
   for (const [name, node] of base.junctions) {
     if (out.has(node)) continue;
-    out.set(node, { name, kind: /JCT|분기점/.test(name) ? 'JCT' : 'IC', isNew: 0 });
+    out.set(node, { name, kind: /JCT|분기점/.test(name) ? 'JCT' : /휴게소|졸음쉼터|SA$/.test(name) ? 'rest' : 'IC', isNew: 0 });
   }
   for (const f of base.foreignNodes || []) out.set(f.node, { name: f.name, kind: 'city', isNew: 0, country: f.country });
+  // 도로 없는 섬의 항구(독도): 어느 축척에서나 보이게 도시처럼 둔다
+  for (const [name, node] of base.ports || []) out.set(node, { name, kind: 'city', isNew: 0 });
   for (const [k, v] of Object.entries(state.names)) out.set(+k, { name: v.name, kind: v.kind, isNew: 1 });
   (state.restAreas || []).forEach((r, i) => out.set(`rest${i}`, { name: r.name + (r.built ? '' : ' (공사 중)'), kind: 'rest', isNew: 1, coord: [r.lon, r.lat] }));
   return out;
@@ -998,11 +1002,55 @@ function nameDraftPoint(pt) {
   }
 }
 
+/** 기존 노드에서 노선이 뻗는 방향(경위도 단위 벡터)들: 그 노드에 닿은 같은 수단 링크마다 약 1km 앞 점 쪽 */
+function nodeDirs(node, mode) {
+  const c = nodeCoord(node), out = [];
+  if (!c) return out;
+  allLinks().forEach((l, i) => {
+    if (l.ext || (l.a !== node && l.b !== node) || linkAt(base, state, i).mode !== mode || / 환승$/.test(l.name || '')) return;
+    const g = l.geom || [];
+    const pts = [];
+    for (let k = 0; k + 1 < g.length; k += 2) if (g[k] === g[k]) pts.push([g[k], g[k + 1]]);
+    if (pts.length < 2) return;
+    if (kmBetween(c[0], c[1], pts[0][0], pts[0][1]) > kmBetween(c[0], c[1], pts[pts.length - 1][0], pts[pts.length - 1][1])) pts.reverse();
+    let q = pts[1];
+    for (const p of pts) { q = p; if (kmBetween(c[0], c[1], p[0], p[1]) > 1) break; }
+    const d = Math.hypot(q[0] - c[0], q[1] - c[1]);
+    if (d > 0) out.push([(q[0] - c[0]) / d, (q[1] - c[1]) / d]);
+  });
+  return out;
+}
+
+/** 양 끝이 기존 노드에 붙으면 접선 방향(tan)을 붙인 점 목록: 끝선이면 그 선을 그대로 잇고,
+ *  중간이면 기존 선의 두 방향 중 다음 점 쪽 방향으로 갈라져 나간다 (분기·합류가 접선 방향) */
+function withTangents(points, mode) {
+  if (points.length < 2) return points;
+  const out = points.map((p) => ({ ...p }));
+  for (const [i, j] of [[0, 1], [out.length - 1, out.length - 2]]) {
+    const p = out[i], q = out[j];
+    delete p.tan;
+    if (p.node == null || p.split != null) continue;
+    const dirs = nodeDirs(p.node, mode);
+    if (!dirs.length) continue;
+    const to = [q.lon - p.lon, q.lat - p.lat], tl = Math.hypot(...to) || 1;
+    const cands = dirs.length === 1 ? [[-dirs[0][0], -dirs[0][1]]] : dirs.flatMap((d) => [d, [-d[0], -d[1]]]);
+    let best = null, bd = -2;
+    for (const d of cands) { const dot = (d[0] * to[0] + d[1] * to[1]) / tl; if (dot > bd) { bd = dot; best = d; } }
+    // 다음 점과 거의 반대(100° 넘게)면 억지로 돌리지 않는다
+    if (best && bd > -0.17) p.tan = best;
+  }
+  return out;
+}
+
+function draftPoints() {
+  return withTangents(draft.points, NEW_BUILDS[draft.type].mode);
+}
+
 function drawDraft() {
   // 선형 점(via)은 노선 모양만 잡고 역·IC가 아니므로 그리지 않는다
   const f = draft.points.filter((p) => !p.via).map((p) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [p.lon, p.lat] } }));
   if (draft.points.length > 1) {
-    const line = smoothSegments(draft.points).flatMap((seg, i) => (i ? seg.slice(1) : seg));
+    const line = smoothSegments(draftPoints()).flatMap((seg, i) => (i ? seg.slice(1) : seg));
     f.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } });
   }
   map.getSource('draft').setData({ type: 'FeatureCollection', features: f });
@@ -1011,7 +1059,7 @@ function drawDraft() {
 function draftCost() {
   const spec = NEW_BUILDS[draft.type];
   let km = 0, cost = 0, foreignKm = 0;
-  const segs = smoothSegments(draft.points);
+  const segs = smoothSegments(draftPoints());
   const segFactor = [];
   for (let i = 0; i + 1 < draft.points.length; i++) {
     const a = draft.points[i], b = draft.points[i + 1];
@@ -1109,8 +1157,8 @@ function commitDraft() {
     p.node = splitLink(base, state, p.split, p.lon, p.lat);
     split = true;
   }
-  const restAreas = restPositions(smoothSegments(draft.points)).map(([lon, lat]) => ({ lon, lat, name: namer.suggest(lon, lat, 'rest') }));
-  const r = startNewBuild(base, state, { type: draft.type, points: draft.points, names, lineName, extendOf: draft.extendOf, plan: draft.plan, title: draft.planTitle,
+  const restAreas = restPositions(smoothSegments(draftPoints())).map(([lon, lat]) => ({ lon, lat, name: namer.suggest(lon, lat, 'rest') }));
+  const r = startNewBuild(base, state, { type: draft.type, points: draftPoints(), names, lineName, extendOf: draft.extendOf, plan: draft.plan, title: draft.planTitle,
     ppp: pp ? { type: pp.type, subsidy: pp.subsidy, toll: pp.toll } : null, segFactor: dc.segFactor, extraCost: dc.extraCost, restAreas });
   if (split) refreshLinks();
   if (!r.ok) { alert(r.reason); return; }
@@ -1214,7 +1262,15 @@ function setBusy(on, label = '', v = 0) {
 }
 
 function renderAll() {
+  renderRegions();
   renderTop(); renderLegend(); renderStatus(); renderBuild(); renderProjects(); renderRequests(); renderSettings(); renderStats(); renderSelection();
+}
+
+/** 지도의 광역 단체 경계·이름: 북측 도 복원, 광역시 승격(독립)이 바로 보이게 */
+function renderRegions() {
+  if (!state || !map) return;
+  const short = (n) => { for (const a of ['특별자치시', '특별자치도', '통합특별시', '특별시', '광역시', '직할시']) if (n.endsWith(a) && n.length > a.length + 1) return n.slice(0, -a.length); return n; };
+  setRegions(map, zoneProps.map((z) => (z.ext ? '' : regionOf(state, z))), zoneProps.map((z) => z.country), (i) => [zoneProps[i].cx, zoneProps[i].cy], short);
 }
 
 function renderTop() {
@@ -2354,7 +2410,21 @@ function bindRailStats(el) {
 let plans = [];
 
 /** 경유지 이름과 좌표로 기존 역(또는 도로 노드)을 찾는다: 같은 이름의 역이 6km 안에 있으면 그 역, 아니면 가까운 노드 */
-function resolveWaypoint([name, lon, lat], mode) {
+function resolveWaypoint([name, lon, lat], mode, motorwayEnd = false) {
+  // 고속도로 계획의 양 끝은 8km 안의 기존 고속도로 노드에 붙인다 (남북 연결 고속도로가 기존 고속도로와 이어지게)
+  if (mode === 0 && motorwayEnd) {
+    let best = null, bd = 8;
+    allLinks().forEach((l, i) => {
+      const e = linkAt(base, state, i);
+      if (e.mode !== 0 || e.cls !== 'motorway' || e.ext) return;
+      for (const n of [e.a, e.b]) {
+        const c = nodeCoord(n);
+        const d = c ? kmBetween(lon, lat, c[0], c[1]) : Infinity;
+        if (d < bd) { bd = d; best = n; }
+      }
+    });
+    if (best != null) return best;
+  }
   const lists = mode === 2 ? [base.metro_stations || [], base.stations] : mode === 1 ? [base.stations, base.metro_stations || []] : [];
   for (const list of lists) {
     let best = null, bd = 6;
@@ -2388,7 +2458,8 @@ function openPlan(id) {
   for (const wp of plan.points) {
     // 이름이 없는 경유점은 선형만 잡는 점 (역·IC를 만들지 않는다)
     if (wp[0] == null) { draft.points.push({ node: null, lon: wp[1], lat: wp[2], split: null, via: true }); continue; }
-    const node = resolveWaypoint(wp, spec.mode);
+    const isEnd = wp === plan.points[0] || wp === plan.points[plan.points.length - 1];
+    const node = resolveWaypoint(wp, spec.mode, isEnd && spec.attrs?.cls === 'motorway');
     const c = node != null ? nodeCoord(node) : [wp[1], wp[2]];
     const pt = { node, lon: c[0], lat: c[1], split: null };
     draft.points.push(pt);
@@ -3479,7 +3550,7 @@ function sectionOf(id) {
     if (l0.mode === 1) return stations.has(n);
     if (l0.mode === 2) return nn.get(n)?.kind === 'station';
     const k = nn.get(n)?.kind;
-    if (k === 'IC' || k === 'JCT') return true;
+    if (k === 'IC' || k === 'JCT' || k === 'rest') return true;
     return here.some((i) => !same(i) && major.has(linkAt(base, state, i).cls));
   };
   if (!l0.name) return { ids: [id], A: l0.a, B: l0.b };

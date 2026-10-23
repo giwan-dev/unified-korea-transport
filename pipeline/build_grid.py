@@ -121,7 +121,8 @@ def main():
     n_metro = 0
     units_by_zone = load_master_units()
     for c in ("KR", "KP"):
-        zs = [f for f in feats if f["properties"]["country"] == c]
+        # 남북에 걸친 존(옹진군)은 다른 나라 격자에서도 칸을 받아 이웃 존으로 새지 않게 한다 (그 칸은 소구역에 넣지 않는다)
+        zs = [f for f in feats if f["properties"]["country"] == c or c in f["properties"].get("also", ())]
         with rasterio.open(POP[c]) as src:
             arr = src.read(1).astype("float64")
             arr[~np.isfinite(arr) | (arr < 0)] = 0
@@ -142,6 +143,8 @@ def main():
             res = abs(src.transform.a)
         for i, f in enumerate(zs):
             p = f["properties"]
+            if p["country"] != c:
+                continue
             m = zid == i + 1
             p["sub0"] = sub_count
             zgeom = shape(f["geometry"])

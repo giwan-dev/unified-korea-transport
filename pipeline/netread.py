@@ -39,7 +39,7 @@ def read(data=ROOT / "data"):
         c = int(counts[i])
         links.append({"a": int(cols["a"][i]), "b": int(cols["b"][i]), "len": float(cols["len"][i]), "speed": int(cols["speed"][i]),
                       "name": meta["names"][cols["name"][i]], "mode": int(cols["mode"][i]), "cls": meta["classes"][cols["cls"][i]],
-                      "open": int(cols["open"][i]), "kp": int(cols["kp"][i]), "geom": verts[k:k + c].tolist()})
+                      "open": int(cols["open"][i]), "kp": int(cols["kp"][i]), "tracks": int(cols["tracks"][i]), "geom": verts[k:k + c].tolist()})
         k += c
     return nodes, links, meta
 

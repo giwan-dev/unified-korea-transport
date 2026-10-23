@@ -7,6 +7,8 @@ import { kmBetween } from '../sim/model.js';
  * - 중국·러시아 거점은 국경 통과점을 거쳐 북측 도로·철도와 가상 링크로 이어진다.
  * - 여객선 항로는 도로 수단의 항로 링크(cls 'ferry')로 넣는다.
  */
+export const FOREIGN_PROVINCE = { CN: '중국', RU: '러시아', JP: '일본', TW: '대만(중화민국)' };
+
 export function extendWorld(base, zoneProps, world) {
   const roadNodes = new Set(), railNodes = new Set();
   for (const l of base.links) {
@@ -28,7 +30,7 @@ export function extendWorld(base, zoneProps, world) {
   for (const f of world.foreign) {
     const id = zoneProps.length;
     zoneProps.push({
-      id, name: f.name, province: { CN: '중국', RU: '러시아', JP: '일본' }[f.country], country: f.country, ext: 1,
+      id, name: f.name, province: FOREIGN_PROVINCE[f.country], country: f.country, ext: 1,
       pop: f.pop * 1e6, income: f.income, area: 1000, cx: f.lon, cy: f.lat, subs: [[f.lon, f.lat, 1, 1000]], sub0,
     });
     sub0 += 1;
@@ -37,23 +39,41 @@ export function extendWorld(base, zoneProps, world) {
     base.nodes.push([f.lon, f.lat]);
     base.stations.push([f.name, cityNode[f.id]]);
   }
-  const link = (a, b, attrs, name) => {
-    const [x1, y1] = base.nodes[a], [x2, y2] = base.nodes[b];
-    base.links.push({ a, b, len: Math.round(kmBetween(x1, y1, x2, y2) * 1.25 * 100) / 100, kp: 1, ext: 1, name, geom: [x1, y1, x2, y2], ...attrs });
+  // 경유점(via)을 지나는 선: 국경 철도·도로와 항로를 실제 경로 모양으로 그리고 연장도 그 길이로 잡는다
+  const path = (a, b, via = []) => {
+    const pts = [base.nodes[a], ...via, base.nodes[b]];
+    let km = 0;
+    for (let i = 1; i < pts.length; i++) km += kmBetween(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
+    return { km, geom: pts.flat() };
+  };
+  const link = (a, b, attrs, name, via) => {
+    const p = path(a, b, via);
+    base.links.push({ a, b, len: Math.round(p.km * (via?.length ? 1.1 : 1.25) * 100) / 100, kp: 1, ext: 1, name, geom: p.geom, ...attrs });
   };
   for (const g of world.gateways) {
     const city = cityNode[g.to];
-    if (g.road) link(nearest(roadNodes, g.lon, g.lat), city, { mode: 0, cls: 'trunk', lanes: 4, speed: 80, paved: 1 }, `${g.name} 국경 도로`);
-    if (g.rail) link(nearest(railNodes, g.lon, g.lat), city, { mode: 1, cls: 'conv', tracks: 2, speed: 100, power: 'AC' }, `${g.name} 국경 철도`);
+    if (g.road) link(nearest(roadNodes, g.lon, g.lat), city, { mode: 0, cls: 'trunk', lanes: 4, speed: 80, paved: 1 }, `${g.name} 국경 도로`, g.via);
+    if (g.rail) link(nearest(railNodes, g.lon, g.lat), city, { mode: 1, cls: 'conv', tracks: 2, speed: 100, power: 'AC' }, `${g.name} 국경 철도`, g.via);
   }
+  // 계산망에 도로가 없는 섬(울릉도·독도: 항로에 node 이름이 적힌 곳)은 항구 노드를 새로 둔다 (같은 이름이면 같은 노드)
+  const ports = new Map();
+  const port = (lon, lat, name) => {
+    if (name && ports.has(name)) return ports.get(name);
+    const n = nearest(roadNodes, lon, lat);
+    if (!name || (n >= 0 && kmBetween(lon, lat, ...base.nodes[n]) < 5)) return n;
+    base.nodes.push([lon, lat]);
+    ports.set(name, base.nodes.length - 1);
+    (base.ports ||= []).push([name, base.nodes.length - 1]);
+    return base.nodes.length - 1;
+  };
   for (const f of world.ferries) {
-    const a = nearest(roadNodes, ...f.from);
-    const b = typeof f.to === 'string' ? cityNode[f.to] : nearest(roadNodes, ...f.to);
-    const [x1, y1] = base.nodes[a], [x2, y2] = base.nodes[b];
-    const km = kmBetween(x1, y1, x2, y2) * 1.1;
+    const a = port(...f.from, f.fromNode);
+    const b = typeof f.to === 'string' ? cityNode[f.to] : port(...f.to, f.node);
+    const p = path(a, b, f.via);
+    const km = p.km * (f.via?.length ? 1.03 : 1.1);
     // 승선 대기·수속 1시간을 속도에 녹인다
     const speed = Math.max(5, Math.round(km / (f.hours + 1)));
-    base.links.push({ a, b, len: Math.round(km * 100) / 100, mode: 0, cls: 'ferry', lanes: 2, speed, paved: 1, kp: 0, ext: typeof f.to === 'string' ? 1 : 0, name: `${f.name} 여객선`, geom: [x1, y1, x2, y2] });
+    base.links.push({ a, b, len: Math.round(km * 100) / 100, mode: 0, cls: 'ferry', lanes: 2, speed, paved: 1, kp: 0, ext: typeof f.to === 'string' ? 1 : 0, name: `${f.name} 여객선`, geom: p.geom });
   }
   base.airports = world.airports.map((a) => ({ ...a, country: a.kp ? 'KP' : 'KR' }))
     .concat(world.foreign.map((f) => ({ id: f.id, name: `${f.name} 공항`, lon: f.lon, lat: f.lat, cap: 60, intl: true, ext: 1, country: f.country })));

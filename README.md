@@ -107,6 +107,7 @@ python -m venv .venv
 .venv/Scripts/python -m pip install -r pipeline/requirements.txt
 bash pipeline/download.sh
 .venv/Scripts/python -X utf8 pipeline/build_admin.py     # 행정구역 기준 도형 (남 행정동, 북 보로노이)
+.venv/Scripts/python -X utf8 pipeline/build_borders.py   # 시군구 경계선 조각 (행정구역 개편·광역시 승격 때 도 경계를 다시 고른다)
 .venv/Scripts/python -X utf8 pipeline/build_basemap.py   # 자체 배경지도
 .venv/Scripts/python -X utf8 pipeline/build_data.py      # 존·도로·철도·도시철도망
 # (선택) data/raw/KoreaRailroad_*.kmz가 있으면 build_data.py가 역·노선 대조에 씁니다 (pipeline/railref.py)
