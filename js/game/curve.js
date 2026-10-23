@@ -2,7 +2,9 @@
 import { kmBetween } from '../sim/model.js';
 
 /**
- * @param {{lon:number, lat:number}[]} pts 제어점 (곡선이 모두 지난다)
+ * 양 끝 점에 tan(경위도 단위 방향, 새 노선이 그 점에서 떠나는 방향)이 있으면 그 구간은 그 방향으로 출발·도착하는
+ * 3차 베지어로 그린다: 기존 고속도로·철도에 접선 방향으로 붙게 (직각으로 꺾여 들어오지 않게)
+ * @param {{lon:number, lat:number, tan?:number[]}[]} pts 제어점 (곡선이 모두 지난다)
  * @param {number} [stepKm] 곡선을 나누는 간격
  * @returns {number[][][]} 제어점 사이 구간마다 [[경도, 위도], ...]
  */
@@ -16,43 +18,18 @@ export function smoothSegments(pts, stepKm = 1) {
     const km = kmBetween(p1[0], p1[1], p2[0], p2[1]);
     const n = Math.max(2, Math.ceil(km / stepKm));
     const seg = [];
-    // 끝점에 방향(tan: 기존 선로 접선)이 정해져 있으면 그 구간은 그 방향으로 나가고 들어오는 3차 곡선
-    const t1 = i === 0 && pts[i].tan, t2 = i + 2 === P.length && pts[i + 1].tan;
+    const t1 = i === 0 && pts[0].tan, t2 = i + 2 === P.length && pts[i + 1].tan;
     if (t1 || t2) {
-      const [m1, m2] = hermiteTangents(P, i, t1, t2);
-      for (let k = 0; k <= n; k++) seg.push(hermite(p1, p2, m1, m2, k / n));
-    } else {
-      for (let k = 0; k <= n; k++) seg.push(catmullRom(p0, p1, p2, p3, k / n));
-    }
+      const L = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]) / 3;
+      const unit = (a, b) => { const d = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1; return [(b[0] - a[0]) / d, (b[1] - a[1]) / d]; };
+      const d1 = t1 || unit(p0, p2), d2 = t2 ? [-t2[0], -t2[1]] : unit(p1, p3);
+      const c1 = [p1[0] + d1[0] * L, p1[1] + d1[1] * L], c2 = [p2[0] - d2[0] * L, p2[1] - d2[1] * L];
+      for (let k = 0; k <= n; k++) seg.push(bezier(p1, c1, c2, p2, k / n));
+    } else for (let k = 0; k <= n; k++) seg.push(catmullRom(p0, p1, p2, p3, k / n));
     seg[0] = p1; seg[n] = p2;
     out.push(seg);
   }
   return out;
-}
-
-// 경도를 위도 방향과 같은 축척으로 (방향 계산용)
-const kx = (lat) => Math.cos((lat * Math.PI) / 180);
-
-/** 구간 i의 양 끝 접선 (경위도 차, 길이는 구간 길이). tan은 [동, 북] 단위 벡터 */
-function hermiteTangents(P, i, t1, t2) {
-  const p1 = P[i], p2 = P[i + 1], c = kx((p1[1] + p2[1]) / 2);
-  const chord = [(p2[0] - p1[0]) * c, p2[1] - p1[1]];
-  const d = Math.hypot(chord[0], chord[1]) || 1e-9;
-  const unit = (v) => { const n = Math.hypot(v[0], v[1]) || 1e-9; return [v[0] / n, v[1] / n]; };
-  const ch = unit(chord);
-  const inner = (k) => unit([(P[k + 1][0] - P[k - 1][0]) * c, P[k + 1][1] - P[k - 1][1]]);
-  // 접선이 없는 끝: 안쪽 점이면 이웃 두 점 방향, 노선 끝이면 반대편 접선을 현(chord)에 대해 뒤집은 방향
-  let a = t1 || (i > 0 ? inner(i) : null);
-  let b = t2 || (i + 2 < P.length ? inner(i + 1) : null);
-  if (!a) a = unit([2 * ch[0] * (ch[0] * b[0] + ch[1] * b[1]) - b[0], 2 * ch[1] * (ch[0] * b[0] + ch[1] * b[1]) - b[1]]);
-  if (!b) b = unit([2 * ch[0] * (ch[0] * a[0] + ch[1] * a[1]) - a[0], 2 * ch[1] * (ch[0] * a[0] + ch[1] * a[1]) - a[1]]);
-  return [[(a[0] * d) / c, a[1] * d], [(b[0] * d) / c, b[1] * d]];
-}
-
-function hermite(p1, p2, m1, m2, t) {
-  const t2 = t * t, t3 = t2 * t;
-  const h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t, h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
-  return [h00 * p1[0] + h10 * m1[0] + h01 * p2[0] + h11 * m2[0], h00 * p1[1] + h10 * m1[1] + h01 * p2[1] + h11 * m2[1]];
 }
 
 export function polylineKm(line) {
@@ -77,4 +54,9 @@ function catmullRom(p0, p1, p2, p3, t) {
   const a1 = lerp(p0, p1, t0, t1), a2 = lerp(p1, p2, t1, t2), a3 = lerp(p2, p3, t2, t3);
   const b1 = lerp(a1, a2, t0, t2), b2 = lerp(a2, a3, t1, t3);
   return lerp(b1, b2, t1, t2);
+}
+
+function bezier(a, b, c, d, t) {
+  const u = 1 - t;
+  return [0, 1].map((k) => u * u * u * a[k] + 3 * u * u * t * b[k] + 3 * u * t * t * c[k] + t * t * t * d[k]);
 }
