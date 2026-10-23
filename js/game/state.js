@@ -5,6 +5,7 @@ import { routeKey } from '../sim/model.js';
 import { smoothSegments, polylineKm } from './curve.js';
 import { serviceLinks } from './services.js';
 import { initRail, operatorOf, OPERATORS, OP_FACTORS, MERGE_MIN_INTEGRATION, EQUITY_STEP } from './operators.js';
+import { MEGA, applyMega, TSR_FREIGHT } from './mega.js';
 
 const SAVE_KEY = 'ukt-save-v1';
 const START_YEAR = 2026;
@@ -696,6 +697,24 @@ export function setLineFreq(state, name, f) {
   state.log.unshift(`${state.year}년 ${name} 기본 열차 운행 ${Math.round(f * 100)}%로 조정`);
 }
 
+/** 국가 대형 사업 착공 (설정 탭) */
+export function startMega(state, id) {
+  const m = MEGA.find((x) => x.id === id);
+  if (!m || !m.ready(state)) return { ok: false, reason: m?.need ? `조건: ${m.need}` : '시작할 수 없습니다.' };
+  if (state.projects.some((p) => p.kind === 'mega' && p.mega === id)) return { ok: false, reason: '이미 착공했습니다.' };
+  if (!canAfford(state, m.cost, m.years)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
+  startProject(state, { id: crypto.randomUUID(), kind: 'mega', mega: id, links: [], cost: m.cost, years: m.years, label: m.label });
+  return { ok: true };
+}
+
+/** 시베리아 횡단철도: 해마다 대륙 통과 화물 수입을 북측(합병 뒤 통합) 철도 운영사가 얻는다 */
+export function settleMega(state) {
+  if (!state.mega?.tsr) return;
+  const ops = railOps(state);
+  const op = state.rail?.merged ? 'merged' : 'kprail';
+  if (ops[op]) ops[op].cash += TSR_FREIGHT;
+}
+
 /** 해 넘기기 전 처리: 공사 진행·완공, 예산 배정, 이자. 완공 사업 목록을 돌려준다 */
 export function advanceBudgetYear(base, state) {
   const d = DIFFICULTY[state.difficulty];
@@ -750,6 +769,7 @@ function completeProject(base, state, p) {
     return;
   }
   if (p.kind === 'vehicles') return;
+  if (p.kind === 'mega') { applyMega(base, state, p.mega); return; }
   if (p.kind === 'osm') { for (const i of p.links) state.osm.opened[i] = true; return; }   // 계통 차량 추가 구입 (편성 수는 고칠 때 이미 바뀌었다)
   if (p.kind === 'airRoute') {
     state.air.routes[p.key] = { a: p.a, b: p.b, freq: AIR.manualFreq, origin: 'manual', low: 0 };

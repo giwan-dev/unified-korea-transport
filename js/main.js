@@ -7,8 +7,9 @@ import {
   placeName, setPlaceName, startRestoreName, RENAME, startAirport, startAirportExpand, renameLine, splitLink,
   fundFor, settlePPP, settleRail, renameKPLines, KP_LINE_RENAME, LINE_RENAME_COST, railDividend, railEquity, mergeRail, OP_FACTORS, initOngoing, linkPending, setProjectPace, PACES,
   initAirRoutes, updateAirRoutes, startOpenRoute, closeRoute, AIR,
-  closeLine, reopenLine, setLineFreq, FREQ_STEPS, CLOSE_APPROVAL, REOPEN_PER_KM,
+  closeLine, reopenLine, setLineFreq, FREQ_STEPS, CLOSE_APPROVAL, REOPEN_PER_KM, startMega, settleMega,
 } from './game/state.js';
+import { MEGA, TSR_FREIGHT } from './game/mega.js';
 import { AIRPORT } from './game/catalog.js';
 import { setNameResolver, refreshNames } from './ui/map.js';
 import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.js';
@@ -292,6 +293,7 @@ function applyResult(res) {
     updateApproval(state, requests, res.summary, prevSummary, roadCongestedKm(vc));
     // 철도 운영사 한 해 결산
     settleRail(state, operatorEconomics());
+    settleMega(state);
     // 지방선거·단체장 SOC 제안
     localYear(lastDone);
     // 민자사업 정산 (최소운영수입보장·임대료)
@@ -1610,6 +1612,8 @@ function renderSettings() {
     <p class="hint">통일 직후 대규모 남하를 막을지 정합니다. 통제할수록 북측 인구는 유지되지만 지지율과 통합 속도에 영향이 있습니다.</p>
     <h3 style="margin-top:16px">지방자치·행정구역</h3>
     ${localSettingsHTML()}
+    <h3 style="margin-top:16px">국가 대형 사업</h3>
+    ${megaHTML()}
     <h3 style="margin-top:16px">항공</h3>
     <label class="name-row"><input type="checkbox" id="air-auto" ${state.air?.auto ? 'checked' : ''}>
       <span>항공 노선 자동 운영 (수요에 따른 취항·증편·단항)</span></label>
@@ -1625,6 +1629,16 @@ function renderSettings() {
     <p class="hint">도로·철도·행정구역·지명: © OpenStreetMap 기여자 (ODbL)<br>인구 격자: WorldPop 2020 (CC BY 4.0)<br>소득·HDI 초기값과 공사비 단가는 게임용 가정값입니다. 자세한 내용은 저장소의 docs/model.md를 보세요.</p>`;
   $('#air-auto').onchange = (e) => { state.air.auto = e.target.checked; save(state); };
   bindLocalSettings(el);
+  el.querySelectorAll('[data-mega]').forEach((b) => {
+    b.onclick = () => {
+      const m = MEGA.find((x) => x.id === b.dataset.mega);
+      if (!confirm(`${m.label}을(를) 착공할까요?
+${formatWon(m.cost)} · ${m.years}년 (해마다 ${formatWon(m.cost / m.years)})`)) return;
+      const r = startMega(state, m.id);
+      if (!r.ok) { alert(r.reason); return; }
+      save(state); renderAll();
+    };
+  });
   bindSlots(el);
   $('#policy').onchange = (e) => { state.policy = e.target.value; state.log.unshift(`${state.year}년 이주 정책: ${POLICY_LABEL[state.policy]}`); save(state); renderStatus(); };
   $('#btn-new').onclick = () => {
@@ -2543,6 +2557,17 @@ function localSettingsHTML() {
       <div class="m">${L.historic ? '북측 옛 직할시(평양·남포)를 도에서 다시 떼어 내거나, ' : ''}인구 ${PROMOTE_MIN_POP / 1e4}만 이상 시를 도에서 떼어 광역시로 만듭니다. 시장을 따로 뽑습니다 · 한 곳 ${formatWon(EVENT_COST.independence)}</div>
       <div class="row" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${promotable.map((c) => `<button class="small" data-ev-city="${esc(c)}">${esc(c)}</button>`).join('') || '<span class="m">대상 도시가 없습니다.</span>'}</div>
       ${L.independent.length ? `<div class="m" style="margin-top:4px">독립·승격한 도시: ${L.independent.map(esc).join(', ')}</div>` : ''}</div>`;
+}
+
+/** 설정 탭: 국가 대형 사업 목록 (착공 전·공사 중·완공) */
+function megaHTML() {
+  return `<div class="list">${MEGA.map((m) => {
+    const p = state.projects.find((x) => x.kind === 'mega' && x.mega === m.id);
+    const status = state.mega?.[m.id] ? `<span class="pos">${state.mega[m.id]}년 완공</span>`
+      : p ? `공사 중 · ${p.doneYear}년 완공 예정`
+      : `<button class="small primary" data-mega="${m.id}" ${m.ready(state) ? '' : 'disabled'}>착공 ${formatWon(m.cost)} · ${m.years}년</button>${m.ready(state) || !m.need ? '' : ` <span class="m">조건: ${esc(m.need)}</span>`}`;
+    return `<div class="item"><div class="t">${esc(m.name)}</div><div class="m">${esc(m.desc)}${m.id === 'tsr' ? ` 화물 수입 연 ${formatWon(TSR_FREIGHT)}.` : ''}</div><div class="row">${status}</div></div>`;
+  }).join('')}</div>`;
 }
 
 function payEvent(cost) {
