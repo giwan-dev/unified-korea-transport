@@ -103,6 +103,7 @@ bash pipeline/download.sh
 .venv/Scripts/python -X utf8 pipeline/build_admin.py     # 행정구역 기준 도형 (남 행정동, 북 보로노이)
 .venv/Scripts/python -X utf8 pipeline/build_basemap.py   # 자체 배경지도
 .venv/Scripts/python -X utf8 pipeline/build_data.py      # 존·도로·철도·도시철도망
+# (선택) data/raw/KoreaRailroad_*.kmz가 있으면 build_data.py가 역·노선 대조에 씁니다 (pipeline/railref.py)
 .venv/Scripts/python -X utf8 pipeline/build_grid.py      # 인구 격자·소구역·데이터 버전
 .venv/Scripts/python -X utf8 pipeline/build_names.py     # 옛 이름 되찾기 대상
 .venv/Scripts/python -X utf8 pipeline/build_roads.py     # 확대 시 보이는 OSM 도로 배경 (도별 파일)
@@ -138,6 +139,8 @@ docs/model.md           모델과 가정값 설명
   - `data/admin/`의 남측 경계도 같은 조건을 따릅니다.
 - 도로·철도·도시철도·북측 행정구역·지명: © [OpenStreetMap](https://www.openstreetmap.org/copyright) 기여자, ODbL 1.0.
   - `data/`의 파생 데이터도 ODbL을 따릅니다.
+- 철도역의 소속 노선·북측 역·이름 없는 선로의 노선 이름, 계획 사업(남북 철도 복원)의 옛 선형: Zermoth의 KOREA RAILROAD DB Ver 2024.04 (Google Earth KMZ, https://zermoth.net/)를 참고 자료로 썼습니다.
+  - 선로 도형은 OSM을 쓰고, 이 DB에서는 역이 서는 노선·역 이름·노선 이름 같은 사실 정보와 계획 경유점만 가져왔습니다. KMZ 파일은 저장소에 넣지 않습니다(`data/raw/`).
 - 인구 격자: [WorldPop](https://www.worldpop.org/) 2025 (R2025A) 1km constrained UN-adjusted, CC BY 4.0
 - 배경지도의 주변국 육지·하천 중심선·호수·도시: [Natural Earth](https://www.naturalearthdata.com/) (공공 영역). 강·호수의 물 면은 OpenStreetMap
 - 라벨 글꼴의 숫자·영문 글리프: [OpenFreeMap](https://openfreemap.org/) 글꼴 서버 (한글은 브라우저 글꼴)

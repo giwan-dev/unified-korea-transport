@@ -250,3 +250,30 @@ export function serviceLinks(state, links) {
   }
   return out;
 }
+
+/**
+ * 게임 시작 때 이미 다니는 광역 계통 (실제로 운행 중인데 선로 이름만으로는 드러나지 않는 것).
+ * 대경선(대구권 광역철도): 2024년 12월 개통, 경부선 선로를 쓰는 구미–경산 광역 전철.
+ */
+export const EXISTING_SERVICES = [
+  { name: '대경선', kind: 'local', type: 'commuter', sets: 6, lines: ['경부선'],
+    stops: ['구미', '사곡', '북삼', '왜관', '서대구', '대구', '동대구', '경산'] },
+];
+
+/** 새 게임에 EXISTING_SERVICES를 운행 중으로 넣는다 (차량비 없음, 이름으로 역을 찾고 없는 역은 건너뛴다) */
+export function seedServices(state, base, operator = 'korail') {
+  if (state.servicesSeeded) return;
+  state.servicesSeeded = true;
+  const links = base.links.map((l) => ({ ...l, active: !l.open }));
+  const stationSet = new Set(base.stations.map((s) => s[1]));
+  for (const s of EXISTING_SERVICES) {
+    const lineNodes = new Set();
+    for (const l of links) if (l.mode === 1 && s.lines.includes(l.name)) { lineNodes.add(l.a); lineNodes.add(l.b); }
+    const stops = s.stops.map((nm) => base.stations.find((x) => x[0] === nm && lineNodes.has(x[1]))?.[1]).filter((n) => n != null);
+    if (stops.length < 2) continue;
+    const plan = planService(links, stationSet, stops, s.kind, new Set(s.lines), s.type);
+    if (!plan) continue;
+    (state.services ||= []).push({ name: s.name, kind: s.kind, line: s.lines[0], lines: s.lines, cls: 'conv', stops, type: s.type, sets: s.sets,
+      runMin: plan.runMin, km: plan.km, segs: plan.segs, id: `svc-${s.name}`, fund: operator, trains: tripsPerDay(s.sets, plan.runMin), built: true, existing: true });
+  }
+}

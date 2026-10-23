@@ -1,5 +1,5 @@
 // 게임 진행과 화면 패널.
-import { createMap, addLayers, colorFor, legendHTML, METRICS } from './ui/map.js';
+import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView } from './ui/map.js';
 import { Namer } from './game/naming.js';
 import {
   newGame, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
@@ -18,7 +18,7 @@ import { smoothSegments, polylineKm } from './game/curve.js';
 import { extendWorld, urbanLanes } from './game/world.js';
 import { autoLineName, cityStem, makeForeignTest } from './game/lines.js';
 import { saveSim, loadSim, clearSim } from './game/simstore.js';
-import { SERVICE_KINDS, TRAIN_TYPES, OPERATING, lineStations, planService, railPath, tripsPerDay, setCost, canRun, defaultTrainType, serviceBuyCost, startService, updateService, removeService } from './game/services.js';
+import { SERVICE_KINDS, TRAIN_TYPES, OPERATING, lineStations, planService, railPath, tripsPerDay, setCost, canRun, defaultTrainType, serviceBuyCost, startService, updateService, removeService, seedServices } from './game/services.js';
 import { showLineDiagram, stopLineDiagram } from './ui/linediagram.js';
 import { P } from './sim/params.js';
 import { PPP_TYPES, PPP_DEFAULTS, initPPP, tollKind, linkToll, annualRevenue, evaluatePPP } from './game/ppp.js';
@@ -87,6 +87,7 @@ async function init() {
   if (meta) state.dataStamp = meta.stamp;
   initAirRoutes(state, world.routes || []);
   initRail(state);
+  seedServices(state, base);
   initLocal(state);
   initPPP(state);
   if (!Object.keys(state.local.offices).length) holdElection('all', '지방선거 (게임 시작 시점)');
@@ -582,7 +583,17 @@ function refreshPoints() {
     if (!c) continue;
     features.push({ type: 'Feature', properties: { node, ...v, rank: pointRank(node, v, hsrNodes, riders) }, geometry: { type: 'Point', coordinates: c } });
   }
-  map.getSource('points').setData({ type: 'FeatureCollection', features });
+  // 한 역의 노선별 노드(수서: SRT·3호선·수인분당선)는 지도에 점 하나만: 같은 이름이 600m 안이면 가장 중요한(순위가 높은) 점만 남긴다
+  features.sort((a, b) => a.properties.rank - b.properties.rank);
+  const shown = new Map(), kept = [];
+  for (const f of features) {
+    const p = f.properties, [x, y] = f.geometry.coordinates;
+    const same = p.kind === 'station' ? (shown.get(p.name) || []) : [];
+    if (same.some(([u, w]) => kmBetween(u, w, x, y) < 0.6)) continue;
+    if (p.kind === 'station') shown.set(p.name, [...same, [x, y]]);
+    kept.push(f);
+  }
+  map.getSource('points').setData({ type: 'FeatureCollection', features: kept });
 }
 
 /** 인구 밀도 격자 레이어 (처음 켤 때 한 번 만든다) */
@@ -913,6 +924,7 @@ function addDraftPoint(lngLat) {
 
 function nameDraftPoint(pt) {
   const spec = NEW_BUILDS[draft.type];
+  if (pt.via) { pt.kind = null; pt.name = null; return; }
   const existing = pt.node != null ? nodeNames().get(pt.node) : null;
   if (spec.mode >= 1) {
     if (existing && existing.kind === 'station') { pt.name = existing.name; pt.kind = 'station'; pt.existing = true; return; }
@@ -935,7 +947,8 @@ function nameDraftPoint(pt) {
 }
 
 function drawDraft() {
-  const f = draft.points.map((p) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [p.lon, p.lat] } }));
+  // 선형 점(via)은 노선 모양만 잡고 역·IC가 아니므로 그리지 않는다
+  const f = draft.points.filter((p) => !p.via).map((p) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [p.lon, p.lat] } }));
   if (draft.points.length > 1) {
     const line = smoothSegments(draft.points).flatMap((seg, i) => (i ? seg.slice(1) : seg));
     f.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } });
@@ -1077,6 +1090,7 @@ function bindUI() {
   watchFolds();
   $('#legend').addEventListener('change', (e) => {
     if (e.target.id === 'metric') { metric = e.target.value; paintZones(); renderLegend(); }
+    if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); }
   });
   document.addEventListener('keydown', (e) => {
     if (!draft || e.target.tagName === 'INPUT') return;
@@ -1158,7 +1172,8 @@ function renderTop() {
   $('#btn-next').disabled = busy || !result;
 }
 
-function renderLegend() { $('#legend').innerHTML = legendHTML(metric); }
+let layerView = 'all';
+function renderLegend() { $('#legend').innerHTML = legendHTML(metric, layerView); }
 
 function fmtPop(v) { return v >= 1e6 ? `${(v / 1e6).toFixed(2)}백만` : `${Math.round(v / 1000).toLocaleString()}천`; }
 function pct(v, d = 1) { return `${(v * 100).toFixed(d)}%`; }
@@ -1249,7 +1264,8 @@ function renderBuild() {
       ${draft.points.length > 1 ? `<p class="hint">${draft.extendOf ? `기존선 연장: ${esc(draft.extendOf)}의 종점에서 이어 같은 노선 이름을 씁니다.` : '신설 노선: 새 노선 이름을 붙입니다.'}</p>` : ''}
       <p class="hint">기존 ${spec.mode ? '선로' : '도로'} 근처를 누르면 연결됩니다. ${spec.mode ? '각 점은 역이 됩니다.' : '도로 끝점이 기존 도로에 닿지 않으면 착공할 때 가장 가까운 도로(5km 안)에 저절로 이어집니다.'}
       Backspace: 마지막 점 지우기 · Enter: 착공 · Esc: 취소</p>
-      <div>${draft.points.map((p, i) => pointRow(p, i)).join('') || '<p class="hint">시작점을 누르세요.</p>'}</div>
+      <div>${draft.points.map((p, i) => (p.via ? '' : pointRow(p, i))).join('') || '<p class="hint">시작점을 누르세요.</p>'}</div>
+      ${draft.points.some((p) => p.via) ? `<p class="hint">선형을 잡는 경유점 ${draft.points.filter((p) => p.via).length}개 (역·IC 없음)</p>` : ''}
       <table class="kv" style="margin-top:8px">
         <tr><td>길이</td><td>${km.toFixed(1)} km</td></tr>
         <tr><td>사업비</td><td>${formatWon(cost)}</td></tr>
@@ -1306,7 +1322,7 @@ function renderBuild() {
       b.onclick = () => {
         const p = draft.points[+b.dataset.ptoggle];
         if (p.kind) { if (p.reserved) namer.release(p.name, p.kind); p.kind = null; p.name = null; p.reserved = false; }
-        else { p.kind = 'station'; p.name = namer.suggest(p.lon, p.lat, 'station'); p.reserved = true; }
+        else { p.kind = 'station'; p.name = namer.suggest(p.lon, p.lat, 'station'); p.reserved = true; delete p.via; }
         renderBuild();
       };
     });
@@ -1827,17 +1843,27 @@ function chainStations(net, lines) {
 }
 
 /** 계통 끝 역 가까이(5km)에서 시작하는 다른 노선들 (이어 갈 수 있는 노선) */
+/** 계통 양 끝(5km 안)에서 이어지는 다른 노선: [{ name, end: 0|1 }] (end는 어느 끝에서 이어지는지) */
 function connectableLines(net, e) {
   const ends = [e.nodes[0], e.nodes[e.nodes.length - 1]].map((n) => nodeCoord(n));
-  const out = new Set();
+  const out = new Map();
   for (const l of net.links) {
-    if (l.mode !== 1 || !l.active || l.via || !l.name || e.lines.includes(l.name) || l.ext) continue;
+    if (l.mode !== 1 || !l.active || l.via || !l.name || e.lines.includes(l.name) || l.ext || out.has(l.name)) continue;
     for (const n of [l.a, l.b]) {
       const c = nodeCoord(n);
-      if (c && ends.some((q) => kmBetween(q[0], q[1], c[0], c[1]) < 5)) { out.add(l.name); break; }
+      const k = c ? ends.findIndex((q) => kmBetween(q[0], q[1], c[0], c[1]) < 5) : -1;
+      if (k >= 0) { out.set(l.name, k); break; }
     }
   }
-  return [...out].sort();
+  return [...out].map(([name, end]) => ({ name, end })).sort((a, b) => a.end - b.end || a.name.localeCompare(b.name));
+}
+
+/** 계통 양 끝의 방위 이름: 남북으로 길면 북단·남단, 동서로 길면 서단·동단 */
+function endLabels(e) {
+  const a = nodeCoord(e.nodes[0]), b = nodeCoord(e.nodes[e.nodes.length - 1]);
+  if (!a || !b) return ['한쪽 끝', '다른 끝'];
+  if (Math.abs(a[1] - b[1]) >= Math.abs(a[0] - b[0]) * 0.8) return a[1] > b[1] ? ['북단', '남단'] : ['남단', '북단'];
+  return a[0] < b[0] ? ['서단', '동단'] : ['동단', '서단'];
 }
 
 function openServiceEditor(line, cls, id = null) {
@@ -1907,8 +1933,13 @@ function servicePanel() {
       <button class="small" data-svc-preset="local">모든 역</button><button class="small" data-svc-preset="express">큰 역 절반</button>
       <button class="small" data-svc-preset="limited">주요 역만</button></div>
     <div class="name-row"><span class="kind">노선</span><span>${e.lines.map(esc).join(' → ')}</span></div>
-    ${(() => { const c = connectableLines(effectiveNetwork(base, state), e); return c.length ? `<div class="name-row"><span class="kind">이어 가기</span>
-      <select id="svc-ext">${c.map((x) => `<option>${esc(x)}</option>`).join('')}</select><button class="small" id="svc-ext-ok">노선 잇기 (직통)</button></div>` : ''; })()}
+    ${(() => {
+      const lab = endLabels(e), endName = [nn.get(e.nodes[0])?.name || '', nn.get(e.nodes[e.nodes.length - 1])?.name || ''];
+      const c = connectableLines(effectiveNetwork(base, state), e);
+      return `<div class="name-row"><span class="kind">구간</span><span>${lab[0]} ${esc(endName[0])} ↔ ${lab[1]} ${esc(endName[1])}</span></div>`
+        + (c.length ? `<div class="name-row"><span class="kind">이어 가기</span>
+      <select id="svc-ext">${c.map((x) => `<option value="${esc(x.name)}">${lab[x.end]} ${esc(endName[x.end])}에서 → ${esc(x.name)}</option>`).join('')}</select><button class="small" id="svc-ext-ok">노선 잇기 (직통)</button></div>` : '');
+    })()}
     <div style="max-height:240px;overflow:auto">${rows}</div>
     ${e.id ? '' : fundSelect(plan ? [serviceOperator({ segs: plan.segs })] : [])}
     <div class="row" style="display:flex;gap:6px;margin-top:8px">
@@ -2255,6 +2286,8 @@ function openPlan(id) {
   startDraft(plan.type);
   const spec = NEW_BUILDS[plan.type];
   for (const wp of plan.points) {
+    // 이름이 없는 경유점은 선형만 잡는 점 (역·IC를 만들지 않는다)
+    if (wp[0] == null) { draft.points.push({ node: null, lon: wp[1], lat: wp[2], split: null, via: true }); continue; }
     const node = resolveWaypoint(wp, spec.mode);
     const c = node != null ? nodeCoord(node) : [wp[1], wp[2]];
     const pt = { node, lon: c[0], lat: c[1], split: null };
@@ -2418,8 +2451,8 @@ function proposeProjects() {
 
 function acceptProposal(id) {
   const L = state.local, pr = L.proposals.find((p) => p.id === id);
-  const r = startUpgrade(base, state, pr.links, pr.fix);
-  if (!r.ok) { alert(r.reason); return; }
+  const r = startUpgrade(base, state, proposalCheck(pr).targets, pr.fix);
+  if (!r.ok) { alert(r.reason); renderRequests(); return; }
   state.projects[state.projects.length - 1].proposal = pr.id;
   pr.status = 'accepted';
   const off = L.offices[pr.office];
@@ -2446,17 +2479,31 @@ function officeLine(off) {
 }
 
 /** 민원 탭에 붙는 지자체 SOC 제안 */
+/** 제안을 지금 받아들일 수 있는지: 이미 공사 중이거나 개량된 구간은 빼고 남는 구간·사업비 */
+function proposalCheck(p) {
+  const u = UPGRADES.find((x) => x.id === p.fix);
+  const work = linksUnderWork(state);
+  const targets = u ? p.links.filter((id) => !work.has(id) && u.applies(linkAt(base, state, id))) : [];
+  const cost = targets.reduce((a, id) => a + upgradeCost(u, linkAt(base, state, id)), 0);
+  return { targets, cost, years: u?.years || 1, afford: targets.length > 0 && canAfford(state, cost, u.years, fundFor(state, targets.map((id) => linkAt(base, state, id)))) };
+}
+
 function proposalsHTML() {
   const L = state.local;
+  // 다른 경로로 이미 공사·개량이 된 제안은 조용히 닫는다 (거절이 아니므로 지지율은 그대로)
+  for (const p of L.proposals) {
+    if (p.status === 'open' && !proposalCheck(p).targets.length) { p.status = 'moot'; state.log.unshift(`${state.year}년 지자체 제안 종결 (이미 공사·개량됨): ${p.title}`); }
+  }
   const open = L.proposals.filter((p) => p.status === 'open');
   if (!open.length) return '';
   return `<h3>지자체 SOC 제안 (${open.length})</h3>
     <p class="hint">선거로 뽑힌 단체장이 자기 지역 사업을 중앙정부에 제안합니다. 받아들여 완공하면 그 단체장의 지지율이 올라 재선에 유리합니다. 2년 안에 답하지 않으면 거절한 것으로 봅니다.</p>
     <div class="list">${open.map((p) => {
-      const off = L.offices[p.office];
+      const off = L.offices[p.office], ck = proposalCheck(p);
+      const partial = ck.targets.length < p.links.length ? ` · 일부 구간(${ck.targets.length}/${p.links.length})은 이미 공사 중` : '';
       return `<div class="item"><div class="t">${esc(p.title)}</div>
-        <div class="m">${off ? `${partyBadge(off.party)} ${esc(off.title)}` : ''} · ${p.year}년 제안 · ${formatWon(p.cost)}</div>
-        <div class="row" style="display:flex;gap:6px;margin-top:4px"><button class="small primary" data-prop-ok="${p.id}">받아들이기</button>
+        <div class="m">${off ? `${partyBadge(off.party)} ${esc(off.title)}` : ''} · ${p.year}년 제안 · ${formatWon(ck.cost)}${partial}</div>
+        <div class="row" style="display:flex;gap:6px;margin-top:4px"><button class="small primary" data-prop-ok="${p.id}" ${ck.afford ? '' : 'disabled title="예산과 차입 한도가 부족합니다"'}>${ck.afford ? '받아들이기' : '받아들이기 (예산 부족)'}</button>
         <button class="small" data-prop-no="${p.id}">거절</button></div></div>`;
     }).join('')}</div>`;
 }

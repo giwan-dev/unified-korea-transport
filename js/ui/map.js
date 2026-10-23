@@ -22,6 +22,7 @@ function baseStyle() {
       lines: { type: 'geojson', data: 'data/base/lines.geojson' },
       labels: { type: 'geojson', data: 'data/base/labels.geojson' },
       units: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
+      unitLabels: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
       osmroads: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
     },
     layers: [
@@ -39,7 +40,7 @@ function baseStyle() {
         paint: { 'line-color': c.road, 'line-width': ['interpolate', ['linear'], ['zoom'], 9, ['match', ['get', 'c'], 0, 1.4, 1, 1.1, 0.8], 13, ['match', ['get', 'c'], 0, 5, 1, 4, 2, 3, 2]] } },
       { id: 'bg-sido', type: 'line', source: 'sido', paint: { 'line-color': c.sido, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.8, 10, 1.6] } },
       { id: 'bg-mdl', type: 'line', source: 'lines', paint: { 'line-color': c.mdl, 'line-width': 1.6, 'line-dasharray': [3, 2] } },
-      { id: 'lb-unit', type: 'symbol', source: 'units', minzoom: 11,
+      { id: 'lb-unit', type: 'symbol', source: 'unitLabels', minzoom: 11,
         layout: { 'symbol-placement': 'point', 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 10 },
         paint: { 'text-color': c.foreign, 'text-halo-color': c.halo, 'text-halo-width': 1 } },
       { id: 'lb-sgg', type: 'symbol', source: 'labels', minzoom: 7, filter: ['==', ['get', 'rank'], 2],
@@ -76,7 +77,36 @@ export async function refreshNames(map) {
 }
 
 function setUnits(map) {
-  map.getSource('units').setData({ type: 'FeatureCollection', features: renamed([...unitFiles.values()].flat(), 'unit', 'id') });
+  const fs = renamed([...unitFiles.values()].flat(), 'unit', 'id');
+  map.getSource('units').setData({ type: 'FeatureCollection', features: fs });
+  // 이름은 면마다 점 하나에: 면 도형에 바로 글자를 달면 타일마다 하나씩 찍혀 넓은 면은 이름이 여러 번 뜬다
+  map.getSource('unitLabels').setData({ type: 'FeatureCollection', features: fs.map((f) => ({ type: 'Feature', properties: { name: f.properties.name }, geometry: { type: 'Point', coordinates: labelPoint(f.geometry) } })) });
+}
+
+/** 면의 이름 자리: 가장 큰 고리의 무게중심, 그 점이 면 밖이면(ㄷ자 모양 등) 고리 위 점들 가운데 무게중심에 가장 가까운 안쪽 점 */
+function labelPoint(g) {
+  const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+  let ring = polys[0][0], best = 0;
+  const area = (r) => { let a = 0; for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += (r[j][0] + r[i][0]) * (r[j][1] - r[i][1]); return Math.abs(a / 2); };
+  for (const p of polys) { const a = area(p[0]); if (a > best) { best = a; ring = p[0]; } }
+  let cx = 0, cy = 0, A = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const f = ring[j][0] * ring[i][1] - ring[i][0] * ring[j][1];
+    cx += (ring[j][0] + ring[i][0]) * f; cy += (ring[j][1] + ring[i][1]) * f; A += f;
+  }
+  if (!A) return ring[0];
+  const c = [cx / (3 * A), cy / (3 * A)];
+  const inside = (pt) => { let o = false; for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) { if ((ring[i][1] > pt[1]) !== (ring[j][1] > pt[1]) && pt[0] < ((ring[j][0] - ring[i][0]) * (pt[1] - ring[i][1])) / (ring[j][1] - ring[i][1]) + ring[i][0]) o = !o; } return o; };
+  if (inside(c)) return c;
+  // 고리 위 이웃한 두 점의 가운데를 무게중심 쪽으로 조금 당긴 점 가운데 안쪽에 있는 가장 가까운 점
+  let pick = ring[0], pd = Infinity;
+  for (let i = 1; i < ring.length; i++) {
+    const m = [(ring[i][0] + ring[i - 1][0]) / 2, (ring[i][1] + ring[i - 1][1]) / 2];
+    const q = [m[0] + (c[0] - m[0]) * 0.1, m[1] + (c[1] - m[1]) * 0.1];
+    const d = (q[0] - c[0]) ** 2 + (q[1] - c[1]) ** 2;
+    if (d < pd && inside(q)) { pd = d; pick = q; }
+  }
+  return pick;
 }
 
 /** 9배 이상 확대하면 화면에 들어온 시도의 OSM 도로 파일만 받아 그린다 */
@@ -220,6 +250,9 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   // 큰 강·호수의 물 면 (OSM): 인구·지표 색칠 위에 그려 한강·낙동강·대동강 등이 보이게 한다
   map.addSource('waterarea', { type: 'geojson', data: 'data/base/waterarea.geojson' });
   map.addLayer({ id: 'water-area', type: 'fill', source: 'waterarea', paint: { 'fill-color': (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? PALETTE.dark : PALETTE.light).water, 'fill-opacity': 0.95 } }, below);
+  // 강·호수 물가선: 채움만 있으면 둘레의 땅 색과 섞여 강변이 흐릿하다
+  map.addLayer({ id: 'water-area-line', type: 'line', source: 'waterarea', minzoom: 8,
+    paint: { 'line-color': (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? '#3c6f8f' : '#7fb0cc'), 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 0.4, 13, 1.2] } }, below);
 
   map.addSource('links', { type: 'geojson', data: linksFC, promoteId: 'id' });
   // 혼잡도 0~10: 1을 넘는 곳도 심한 정도가 구분되도록 1·2·4·7·10에서 점점 짙어진다
@@ -353,7 +386,21 @@ function mix(a, b, t) {
   return `rgb(${c.join(',')})`;
 }
 
-export function legendHTML(metric) {
+/** 지도 보기: 전체 / 도로만 / 철도만 (도시철도·공항 포함) */
+export const LAYER_VIEWS = { all: '모두 보기', road: '도로만', rail: '철도만' };
+const VIEW_HIDE = {
+  all: [],
+  road: ['rails', 'metro', 'airroutes', 'airports', 'airport-labels'],
+  rail: ['roads', 'roads-minor', 'bg-roads', 'ferries'],
+};
+export function setLayerView(map, view) {
+  const hide = new Set(VIEW_HIDE[view] || []);
+  for (const id of new Set(Object.values(VIEW_HIDE).flat())) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', hide.has(id) ? 'none' : 'visible');
+  }
+}
+
+export function legendHTML(metric, view = 'all') {
   const m = METRICS[metric];
   const opts = Object.entries(METRICS).map(([k, v]) => `<option value="${k}" ${k === metric ? 'selected' : ''}>${v.label}</option>`).join('');
   let ramp = '';
@@ -361,7 +408,8 @@ export function legendHTML(metric) {
     ramp = `<div class="ramp" style="background:linear-gradient(to right,${m.ramp.join(',')})"></div>
       <div class="ends"><span>${m.fmt(m.stops[0])}</span><span>${m.fmt(m.stops[m.stops.length - 1])}</span></div>`;
   }
-  return `<select id="metric">${opts}</select>${ramp}
+  return `<select id="layerview" title="지도에 그릴 교통망">${Object.entries(LAYER_VIEWS).map(([k, v]) => `<option value="${k}" ${k === view ? 'selected' : ''}>${v}</option>`).join('')}</select>
+    <select id="metric">${opts}</select>${ramp}
     <div class="lg-more"><div style="margin-top:6px">도로 혼잡도 (V/C, 0~10)</div>
     <div class="ramp" style="background:linear-gradient(to right,${VC_STOPS.map(([v, c]) => `${c} ${v * 10}%`).join(',')})"></div>
     <div class="ticks">${[0, 1, 2, 4, 7, 10].map((v) => `<span style="left:${v * 10}%">${v}</span>`).join('')}</div>

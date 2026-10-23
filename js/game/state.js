@@ -491,37 +491,50 @@ export function splitLink(base, state, id, lon, lat) {
 export function startNewBuild(base, state, plan) {
   const spec = NEW_BUILDS[plan.type];
   const firstId = base.links.length + state.newLinks.length;
-  const nodeIds = plan.points.map((pt) => {
-    if (pt.node != null) return pt.node;
+  // 선형 점(via)은 곡선 모양만 잡고 노드를 만들지 않는다: 링크는 역·IC(노드) 사이마다 하나
+  const stops = plan.points.map((pt, i) => i).filter((i) => !plan.points[i].via || i === 0 || i === plan.points.length - 1);
+  const nodeAt = new Map();
+  for (const i of stops) {
+    const pt = plan.points[i];
+    if (pt.node != null) { nodeAt.set(i, pt.node); continue; }
     state.newNodes.push([pt.lon, pt.lat]);
-    return base.nodes.length + state.newNodes.length - 1;
-  });
+    nodeAt.set(i, base.nodes.length + state.newNodes.length - 1);
+  }
+  const nodeIds = plan.points.map((_, i) => nodeAt.get(i) ?? null);
   let total = 0, kmTotal = 0;
   const links = [];
   const segs = smoothSegments(plan.points);   // 찍은 점들을 지나는 곡선. 연장도 곡선 길이로 잡는다
-  for (let i = 0; i + 1 < nodeIds.length; i++) {
-    const a = plan.points[i], b = plan.points[i + 1];
-    const len = polylineKm(segs[i]) * 1.02;
+  for (let s0 = 0; s0 + 1 < stops.length; s0++) {
+    const i0 = stops[s0], i1 = stops[s0 + 1];
+    let len = 0, cost = 0, geom = [];
+    for (let i = i0; i < i1; i++) {
+      const a = plan.points[i], b = plan.points[i + 1];
+      const l = polylineKm(segs[i]) * 1.02;
+      const kpSeg = isKP(a.lat, a.lon) && isKP(b.lat, b.lon);
+      // 외국 땅 위 구간은 상대국이 절반을 부담한다 (main에서 구간별 비율을 넘긴다)
+      cost += spec.perKm * l * (kpSeg ? KP_COST_FACTOR : 1) * (plan.segFactor?.[i] ?? 1);
+      len += l;
+      geom = geom.concat(geom.length ? segs[i].slice(1) : segs[i]);
+    }
+    const a = plan.points[i0], b = plan.points[i1];
     const kp = isKP(a.lat, a.lon) && isKP(b.lat, b.lon) ? 1 : 0;
-    // 외국 땅 위 구간은 상대국이 절반을 부담한다 (main에서 구간별 비율을 넘긴다)
-    const cost = Math.round(spec.perKm * len * (kp ? KP_COST_FACTOR : 1) * (plan.segFactor?.[i] ?? 1));
-    total += cost; kmTotal += len;
+    total += Math.round(cost); kmTotal += len;
     links.push({
-      id: firstId + i, a: nodeIds[i], b: nodeIds[i + 1], mode: spec.mode, len: Math.round(len * 100) / 100,
-      kp, name: plan.lineName || '', built: false, geom: segs[i].flat().map((v) => Math.round(v * 1e5) / 1e5), ...spec.attrs,
+      id: firstId + links.length, a: nodeIds[i0], b: nodeIds[i1], mode: spec.mode, len: Math.round(len * 100) / 100,
+      kp, name: plan.lineName || '', built: false, geom: geom.flat().map((v) => Math.round(v * 1e5) / 1e5), ...spec.attrs,
     });
   }
   total += plan.extraCost || 0;   // 중간 IC·역·휴게소 설치비
   const fund = plan.ppp ? 'ppp' : fundFor(state, links);
   if (plan.ppp) for (const l of links) l.toll = plan.ppp.toll || 0;
   if (!canAfford(state, total * (plan.ppp ? plan.ppp.subsidy : 1), spec.years, plan.ppp ? 'gov' : fund)) {
-    state.newNodes.length -= plan.points.filter((p) => p.node == null).length;
+    state.newNodes.length -= stops.filter((i) => plan.points[i].node == null).length;
     return { ok: false, reason: fund === 'gov' ? '예산과 차입 한도가 부족합니다.' : '운영사 잔액이 부족합니다.' };
   }
   state.newLinks.push(...links);
   plan.points.forEach((pt, i) => {
     const nm = plan.names[i];
-    if (nm) state.names[nodeIds[i]] = { name: nm.name, kind: nm.kind, auto: nm.auto !== false };
+    if (nm && nodeIds[i] != null) state.names[nodeIds[i]] = { name: nm.name, kind: nm.kind, auto: nm.auto !== false };
   });
   for (const r of plan.restAreas || []) (state.restAreas ||= []).push({ ...r, built: false, links: links.map((l) => l.id) });
   const endName = (i) => plan.points[i].name || nameOf(state, nodeIds[i]) || '';
@@ -532,7 +545,7 @@ export function startNewBuild(base, state, plan) {
   const label = plan.title ? `${plan.title} ${span}` : plan.extendOf ? `${plan.extendOf} 연장 ${span}` : `${plan.lineName ? `${plan.lineName} · ` : ''}${spec.label} ${span}`;
   startProject(state, {
     id: crypto.randomUUID(), kind: 'new', type: plan.type, links: links.map((l) => l.id), extension: !!plan.extendOf,
-    stations: spec.mode >= 1 ? nodeIds.filter((_, i) => plan.names[i]?.kind === 'station') : [],
+    stations: spec.mode >= 1 ? nodeIds.filter((n, i) => n != null && plan.names[i]?.kind === 'station') : [],
     cost: total, years: spec.years, label, fund, plan: plan.plan, govShare: plan.ppp ? plan.ppp.subsidy : undefined,
   });
   return { ok: true };

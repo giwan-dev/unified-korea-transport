@@ -12,6 +12,7 @@
   <pre id="log"></pre>
   <script type="module">
     import { effectiveNetwork, newGame, initAirRoutes } from '../js/game/state.js';
+    import { seedServices } from '../js/game/services.js';
     import { loadNetwork } from '../js/data/netpack.js';
     import { extendWorld, urbanLanes } from '../js/game/world.js';
     const log = (s) => { document.querySelector('#log').textContent += s + '\n'; };
@@ -26,6 +27,7 @@
     log(`도심 간선도로 차로 보정 ${urbanLanes(net, grid)}개 구간`);
     const state = newGame('normal');
     initAirRoutes(state, world.routes || []);
+    seedServices(state, net);
     // 관광지 → 존 (main.js의 assignTourism과 같은 규칙)
     const tour = await fetch('../data/tourism.json').then((r) => r.json());
     for (const s of tour.sites) {
