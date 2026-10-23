@@ -604,6 +604,7 @@ function bindMap() {
   map.on('click', (e) => {
     if (measure) { measureClick(e.lngLat); return; }
     if (straight) { straightenClick(e.lngLat); return; }
+    if (secPick) { sectionClick(e.lngLat); return; }
     if (draft?.type === 'airport') { placeAirport(e.lngLat); return; }
     if (draft) { addDraftPoint(e.lngLat); return; }
     const box = [[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]];
@@ -1447,12 +1448,30 @@ function renderSelection() {
   else if (selection.type === 'multi') el.innerHTML = multiPanel(selection.ids);
   else if (selection.type === 'service') el.innerHTML = servicePanel();
   else if (selection.type === 'straighten') { el.innerHTML = straightenPanel(); bindStraighten(el); return; }
+  else if (selection.type === 'section') {
+    el.innerHTML = sectionPanel();
+    el.querySelector('.close').onclick = () => { endSection(); select(null); };
+    return;
+  }
   else el.innerHTML = nodePanel(selection.id);
   el.querySelector('.close')?.addEventListener('click', () => select(null));
   if (selection.type === 'service') bindService(el);
   if (selection.type === 'service') bindFund(el, renderSelection);
   el.querySelector('#line-diagram')?.addEventListener('click', () => openLineDiagram(selection.id));
   el.querySelector('#st-start')?.addEventListener('click', () => startStraighten(selection.id));
+  el.querySelectorAll('.sec-start').forEach((b) => { b.onclick = () => startSection(selection.id); });
+  el.querySelector('#sec-straight')?.addEventListener('click', () => {
+    const sc = selection.section;
+    straight = { line: sc.line, cls: sc.cls, picks: [sc.A, sc.B], plan: null };
+    straight.plan = planStraighten();
+    drawStraighten();
+    select({ type: 'straighten' });
+  });
+  el.querySelector('#sec-prev')?.addEventListener('click', () => {
+    const sc = selection.section, b0 = el.querySelector('[data-mup]');
+    if (b0) previewUpgrade(JSON.parse(b0.dataset.ids), b0.dataset.mup);
+    else alert(`${sc.line || '이 구간'}에 적용할 개량이 없습니다.`);
+  });
   el.querySelectorAll('[data-st-diagram]').forEach((b) => { b.onclick = () => openLineDiagram(+b.dataset.stDiagram); });
   el.querySelectorAll('[data-st-goto]').forEach((a) => {
     a.onclick = (ev) => { ev.preventDefault(); const nd = +a.dataset.stGoto; flyToNode(nd); select({ type: 'node', id: nd }); };
@@ -2356,7 +2375,13 @@ function planStraighten() {
   const at = (t) => (ctrl
     ? [(1 - t) ** 2 * pa[0] + 2 * (1 - t) * t * ctrl[0] + t * t * pb[0], (1 - t) ** 2 * pa[1] + 2 * (1 - t) * t * ctrl[1] + t * t * pb[1]]
     : [pa[0] + t * (pb[0] - pa[0]), pa[1] + t * (pb[1] - pa[1])]);
-  const N = 200, curve = Array.from({ length: N + 1 }, (_, k) => at(k / N));
+  const N = 200;
+  let curve = Array.from({ length: N + 1 }, (_, k) => at(k / N));
+  // 휜 곡선이 옛 경로보다 짧지 않으면 직선으로 (직선화는 줄어드는 만큼 의미가 있다)
+  if (ctrl && polylineKm(curve) * 1.02 > oldKm * 0.98) {
+    ctrl = null;
+    curve = Array.from({ length: N + 1 }, (_, k) => at(k / N));
+  }
   const newKm = polylineKm(curve) * 1.02;
   // 곡선 반경으로 낼 수 있는 속도 (v ≈ 4.7 √R, R은 m)
   let minR = Infinity;
@@ -2424,6 +2449,7 @@ function straightenPanel() {
   const merged = pl.kept.flatMap((k) => (k.merged || []).map((m) => `${esc(m.name)} → ${esc(k.name)}`));
   return `${header(`${s.line} 구간 직선화`)}
     <p class="hint">${picks} · ${pl.ctrl ? '한 번 휜 곡선' : '직선'}</p>
+    ${pl.newKm > pl.oldKm * 0.97 ? '<p class="hint neg">옛 경로가 이미 곧아서 거의 줄어들지 않습니다. 고속화 개량이 나을 수 있습니다.</p>' : ''}
     <table class="kv">
       <tr><td>길이</td><td>${pl.oldKm.toFixed(1)} → <b>${pl.newKm.toFixed(1)}km</b></td></tr>
       <tr><td>최고 속도 (곡선 반경 기준)</td><td>${pl.speed} km/h</td></tr>
@@ -2825,6 +2851,72 @@ function pppTableHTML() {
     }).join('')}</table>`;
 }
 
+
+// ------------------------------------------------------------ 구간 선택 (두 역·IC를 차례로 눌러)
+
+let secPick = null;   // {mode, line, cls, picks: [노드]}
+
+function startSection(linkId) {
+  const l = linkAt(base, state, linkId);
+  cancelDraft();
+  if (straight) endStraighten();
+  secPick = { mode: l.mode, line: l.name, cls: l.cls, picks: [] };
+  map.getCanvas().style.cursor = 'crosshair';
+  select({ type: 'section' });
+}
+
+function endSection() {
+  secPick = null;
+  map.getCanvas().style.cursor = '';
+  map.getSource('draft').setData({ type: 'FeatureCollection', features: [] });
+}
+
+/** 누른 곳에서 가장 가까운 역·IC (철도는 역, 도로는 이름 있는 IC·JCT 또는 아무 교차점). 화면 30px 안 */
+function sectionClick(ll) {
+  const p = map.project(ll);
+  const nn = nodeNames();
+  const cand = new Set();
+  allLinks().forEach((_, i) => {
+    const e = linkAt(base, state, i);
+    if (e.mode !== secPick.mode || state.replaced?.[i]) return;
+    for (const n of [e.a, e.b]) cand.add(n);
+  });
+  const stations = secPick.mode >= 1 ? railStationSet() : null;
+  let best = null, bd = 30;
+  for (const n of cand) {
+    if (stations && secPick.mode === 1 && !stations.has(n)) continue;
+    if (secPick.mode === 2 && nn.get(n)?.kind !== 'station') continue;
+    const c = nodeCoord(n);
+    if (!c) continue;
+    const q = map.project(c);
+    const d = Math.hypot(q.x - p.x, q.y - p.y) - (nn.has(n) ? 6 : 0);   // 이름 있는 역·IC를 조금 더 잘 잡는다
+    if (d < bd) { bd = d; best = n; }
+  }
+  if (best == null) return;
+  if (secPick.picks.length >= 2) secPick.picks = [];
+  secPick.picks.push(best);
+  const f = secPick.picks.map((n) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: nodeCoord(n) } }));
+  map.getSource('draft').setData({ type: 'FeatureCollection', features: f });
+  if (secPick.picks.length < 2) { renderSelection(); return; }
+  const [A, B] = secPick.picks;
+  const via = railPath(effectiveNetwork(base, state).links, A, B, secPick.line, secPick.mode);
+  if (!via || !via.length) { alert('두 곳 사이 경로를 찾지 못했습니다.'); secPick.picks = []; renderSelection(); return; }
+  const section = { A, B, line: secPick.line, cls: secPick.cls, mode: secPick.mode };
+  const mode = secPick.mode;
+  endSection();
+  map.getCanvas().style.cursor = '';
+  select({ type: 'multi', ids: via, section });
+}
+
+function sectionPanel() {
+  const nn = nodeNames();
+  const what = secPick.mode === 0 ? 'IC·교차점' : '역';
+  return `${header('구간 선택')}
+    <p class="hint">${esc(secPick.line || '')} 위의 ${what} 두 곳을 차례로 누르세요 (드래그하지 않아도 됩니다).
+      ${secPick.picks.length ? `고른 곳: ${secPick.picks.map((n) => esc(nn.get(n)?.name || '이름 없는 교차점')).join(' → ')}` : ''}</p>
+    <p class="hint">두 곳 사이 경로(같은 노선을 우선)가 선택되고, 그 구간만 개량하거나${secPick.mode === 1 ? ' 직선화하거나' : ''} 효과를 미리 볼 수 있습니다.</p>`;
+}
+
 function header(title) {
   return `<div style="display:flex;justify-content:space-between;align-items:center"><h3>${esc(title)}</h3><button class="small close">닫기</button></div>`;
 }
@@ -2867,6 +2959,7 @@ function linkPanel(id) {
     : l.ext ? '<p class="hint">국외 거점과 잇는 국경 연결 구간입니다. 개량 대상이 아닙니다.</p>'
     : l.cls === 'ferry' ? '<p class="hint">여객선 항로입니다. 개량 대상이 아닙니다.</p>'
     : busyProj ? `<p class="hint">공사 중: ${esc(busyProj.label)} (${busyProj.doneYear}년 완공)</p>` : `<h4>개량</h4>
+    <button class="small sec-start" title="두 역·IC를 차례로 눌러 그 사이만 고릅니다">구간 선택 (${l.mode === 0 ? 'IC' : '역'} 두 곳 누르기)</button>
     ${l.mode === 1 ? fundSelect([operatorOf(state, l)]) : ''}
     ${route.length > 1 ? `<label class="name-row"><input type="checkbox" id="whole-route" ${wholeRoute ? 'checked' : ''}>
       <span>같은 이름 노선 전체 (${route.length}개 구간, ${routeKm.toFixed(0)}km)</span></label>` : ''}
@@ -2899,7 +2992,12 @@ function multiPanel(ids) {
     return { u, app, cost, len };
   }).filter((x) => x.app.length);
   const label = ['도로', '철도', '도시철도'][mode];
-  return `${header(`${label} ${pool.length}개 구간 선택`)}
+  const sc = selection?.type === 'multi' ? selection.section : null;
+  const nn = nodeNames();
+  const title = sc ? `${nn.get(sc.A)?.name || '교차점'} – ${nn.get(sc.B)?.name || '교차점'} 구간` : `${label} ${pool.length}개 구간 선택`;
+  return `${header(title)}
+    ${sc ? `<div class="row" style="display:flex;gap:6px;margin:4px 0">${sc.mode === 1 ? '<button class="small" id="sec-straight">이 구간 직선화</button>' : ''}
+      <button class="small" id="sec-prev">첫 개량 효과 미리보기</button><button class="small sec-start">다른 구간 고르기</button></div>` : ''}
     <p class="hint">${km[mode].toFixed(0)}km · ${names.map(esc).join(', ')}${names.length === 6 ? ' 등' : ''}${pool.length < ids.length ? ` (다른 수단·공사 중 구간 ${ids.length - pool.length}개 제외)` : ''}</p>
     <div class="list">${ups.map(({ u, app, cost, len }) => {
       const ok = canAfford(state, cost, u.years);
