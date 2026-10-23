@@ -453,16 +453,45 @@ function linksFC() {
   return { type: 'FeatureCollection', features };
 }
 
+/**
+ * 한 구간 안에서 나란히 달리는 조각(왕복 분리 도로의 두 차도, 복선의 두 선로처럼 따로 그려진 선)은 하나만 남긴다.
+ * 긴 조각부터 남기고, 점 대부분이 이미 남긴 조각에서 60m 안에 있는 조각은 버린다 (두 줄로 겹쳐 보이지 않게)
+ */
+function dropParallel(parts) {
+  if (parts.length < 2) return parts;
+  const lenOf = (p) => p.reduce((s, q, k) => (k ? s + Math.hypot((q[0] - p[k - 1][0]) * 0.8, q[1] - p[k - 1][1]) : 0), 0);
+  const sorted = parts.map((p) => [p, lenOf(p)]).sort((x, y) => y[1] - x[1]).map(([p]) => p);
+  const kept = [];
+  const TOL = 0.0006;   // 약 60m
+  const nearKept = (q) => kept.some((p) => {
+    for (let k = 0; k + 1 < p.length; k++) {
+      const [x1, y1] = p[k], [x2, y2] = p[k + 1];
+      const dx = (x2 - x1) * 0.8, dy = y2 - y1, L = dx * dx + dy * dy || 1e-12;
+      const t = Math.max(0, Math.min(1, (((q[0] - x1) * 0.8) * dx + (q[1] - y1) * dy) / L));
+      if (Math.hypot((q[0] - x1) * 0.8 - t * dx, q[1] - y1 - t * dy) < TOL) return true;
+    }
+    return false;
+  });
+  for (const p of sorted) {
+    const step = Math.max(1, Math.floor(p.length / 8));
+    let n = 0, near = 0;
+    for (let k = 0; k < p.length; k += step) { n++; if (nearKept(p[k])) near++; }
+    if (!kept.length || near < n * 0.7) kept.push(p);
+  }
+  return kept;
+}
+
 /** 화면용 도형: 꺾인 점을 부드럽게 (Chaikin 1회, 양 끝은 노드에 그대로). 기본 구간은 한 번만 계산해 둔다 */
 const smoothCache = new Map();
 function smoothParts(l, i) {
   if (i < base.links.length && smoothCache.has(i)) return smoothCache.get(i);
   const g = l.geom;
-  const parts = [[]];
+  let parts = [[]];
   for (let k = 0; k < g.length; k += 2) {
     if (Number.isNaN(g[k])) parts.push([]);
     else parts[parts.length - 1].push([g[k], g[k + 1]]);
   }
+  parts = dropParallel(parts.filter((p) => p.length > 1));
   // 도형 끝을 노드에 잇는다: 계산망 노드는 격자 칸의 교차점 좌표라 OSM 도형 끝과 떨어져 있을 수 있다.
   // 이웃 구간도 같은 노드로 이어지므로 선이 끊겨 보이지 않는다. 조각 사이 빈틈(500m 안)도 짧게 잇는다
   const pts = parts.filter((p) => p.length);
@@ -472,8 +501,9 @@ function smoothParts(l, i) {
     const ends = pts.flatMap((p) => [p[0], p[p.length - 1]]);
     const near = (q) => ends.reduce((best, e) => (d2(e, q) < d2(best, q) ? e : best), ends[0]);
     const link = [];
-    if (A) { const e = near(A); if (d2(e, A) > 2.5e-7) link.push([A, e]); }
-    if (B) { const e = near(B); if (d2(e, B) > 2.5e-7) link.push([e, B]); }
+    // 600m(≈ 0.0054도)보다 먼 끝은 잇지 않는다: 엉뚱한 곳을 가로지르는 선이 생기지 않게
+    if (A) { const e = near(A); if (d2(e, A) > 2.5e-7 && d2(e, A) < 2.9e-5) link.push([A, e]); }
+    if (B) { const e = near(B); if (d2(e, B) > 2.5e-7 && d2(e, B) < 2.9e-5) link.push([e, B]); }
     if (pts.length > 1) {
       const verts = pts.map((p, k) => p.map((v) => [v, k])).flat();
       pts.forEach((p, k) => {
@@ -628,7 +658,7 @@ function bindMap() {
     const pt = map.queryRenderedFeatures(box, { layers: ['points'] })[0];
     if (pt) return select({ type: 'node', id: pt.properties.node });
     const ln = map.queryRenderedFeatures(box, { layers: ['rails', 'metro', 'roads', 'roads-minor', 'ferries', 'ext-links', 'links-building'] })[0];
-    if (ln) return select({ type: 'link', id: ln.properties.id });
+    if (ln) { const sec = sectionOf(ln.properties.id); return select({ type: 'link', id: ln.properties.id, section: sec }); }
     if (METRICS[metric]?.sub) {
       const sb = map.queryRenderedFeatures(e.point, { layers: ['subs-fill'] })[0];
       if (sb) return select({ type: 'sub', id: sb.id });
@@ -689,12 +719,12 @@ function selectBox(bbox) {
 function select(sel) {
   if (selection?.type === 'multi') for (const i of selection.ids) map.setFeatureState({ source: 'links', id: i }, { sel: false });
   if (sel?.type === 'multi') for (const i of sel.ids) map.setFeatureState({ source: 'links', id: i }, { sel: true });
-  if (selection?.type === 'link') map.setFeatureState({ source: 'links', id: selection.id }, { sel: false });
+  if (selection?.type === 'link') for (const i of selection.section?.ids || [selection.id]) map.setFeatureState({ source: 'links', id: i }, { sel: false });
   if (selection?.type === 'zone') map.setFeatureState({ source: 'zones', id: selection.id }, { sel: false });
   if (selection?.type === 'sub') map.setFeatureState({ source: 'subs', id: selection.id }, { sel: false });
   selection = sel;
   if (sel?.type === 'sub') map.setFeatureState({ source: 'subs', id: sel.id }, { sel: true });
-  if (sel?.type === 'link') map.setFeatureState({ source: 'links', id: sel.id }, { sel: true });
+  if (sel?.type === 'link') for (const i of sel.section?.ids || [sel.id]) map.setFeatureState({ source: 'links', id: i }, { sel: true });
   if (sel?.type === 'zone') map.setFeatureState({ source: 'zones', id: sel.id }, { sel: true });
   renderSelection();
 }
@@ -1500,7 +1530,7 @@ function renderSelection() {
   });
   el.querySelectorAll('[data-up]').forEach((b) => {
     b.onclick = () => {
-      const ids = wholeRoute ? sameRoute(selection.id) : [selection.id];
+      const ids = wholeRoute ? sameRoute(selection.id) : (selection.section?.ids || [selection.id]);
       const r = startUpgrade(base, state, ids, b.dataset.up);
       if (!r.ok) return alert(r.reason);
       save(state); refreshLinks(); renderAll();
@@ -1510,7 +1540,7 @@ function renderSelection() {
   el.querySelectorAll('[data-prev-up]').forEach((b) => {
     b.onclick = () => {
       const u = UPGRADES.find((x) => x.id === b.dataset.prevUp);
-      const ids = (wholeRoute ? sameRoute(selection.id) : [selection.id]).filter((x) => u.applies(linkAt(base, state, x)));
+      const ids = (wholeRoute ? sameRoute(selection.id) : (selection.section?.ids || [selection.id])).filter((x) => u.applies(linkAt(base, state, x)));
       previewUpgrade(ids, u.id);
     };
   });
@@ -1944,7 +1974,9 @@ function railStatsHTML() {
   const rows = ops.map((op) => {
     const e = econ[op] || { rev: 0, cost: 0, km: 0 }, o = r.ops[op];
     const ratio = e.rev > 0 ? (e.cost / e.rev) * 100 : Infinity;
-    return `<tr><td>${opBadge(state, op)} <span class="m">${Math.round(e.km).toLocaleString()}km</span></td><td>${formatWon(e.rev / 1e8)}</td><td>${formatWon(e.cost / 1e8)}</td>
+    const logo = OPERATORS[op].logo && !(op === 'merged' && r.name && r.name !== OPERATORS.merged.name)
+      ? `<img src="${OPERATORS[op].logo}" alt="${esc(opInfo(state, op).name)}" height="30" style="display:block">` : opBadge(state, op);
+    return `<tr><td>${logo}<span class="m">${Math.round(e.km).toLocaleString()}km</span></td><td>${formatWon(e.rev / 1e8)}</td><td>${formatWon(e.cost / 1e8)}</td>
       <td class="${e.rev < e.cost ? 'neg' : ''}">${formatWon((e.rev - e.cost) / 1e8)}</td><td class="${ratio > 100 ? 'neg' : ''}">${fmtRatio(ratio)}</td><td>${formatWon(o.cash)}</td></tr>`;
   }).join('');
   const charts = ops.map((op) => (r.ops[op].hist.length > 1 ? chart(`${opInfo(state, op).name} 잔액 (억원)`, r.ops[op].hist.map((h) => [h.year, h.cash])) : '')).join('');
@@ -2932,6 +2964,54 @@ function sectionPanel() {
     <p class="hint">두 곳 사이 경로(같은 노선을 우선)가 선택되고, 그 구간만 개량하거나${secPick.mode === 1 ? ' 직선화하거나' : ''} 효과를 미리 볼 수 있습니다.</p>`;
 }
 
+// ------------------------------------------------------------ 누른 구간을 역과 역(IC와 IC) 사이로 넓히기
+
+/**
+ * 누른 링크에서 같은 이름·같은 수단의 링크를 따라 양쪽으로 가다가, 철도는 역에서, 도로는 이름 있는 IC·JCT나
+ * 다른 간선(고속도로·간선국도·주요 도로)이 만나는 교차점에서 멈춘다. 갈림길(같은 노선이 세 갈래 이상)에서도 멈춘다.
+ * @returns {{ids:number[], A:number, B:number}}
+ */
+function sectionOf(id) {
+  const l0 = linkAt(base, state, id);
+  const all = allLinks();
+  const at = new Map();   // 노드 → 그 노드에 닿은 링크 id
+  all.forEach((_, i) => {
+    const e = linkAt(base, state, i);
+    if (e.mode !== l0.mode || state.replaced?.[i] || e.replaced || (i >= base.links.length && !e.built)) return;
+    for (const n of [e.a, e.b]) { if (!at.has(n)) at.set(n, []); at.get(n).push(i); }
+  });
+  const nn = nodeNames();
+  const stations = l0.mode === 1 ? railStationSet() : null;
+  const major = new Set(['motorway', 'trunk', 'primary']);
+  const same = (i) => { const e = linkAt(base, state, i); return e.name === l0.name && e.cls === l0.cls; };
+  const isStop = (n) => {
+    const here = at.get(n) || [];
+    if (here.filter(same).length !== 2) return true;          // 끝이나 갈림길
+    if (l0.mode === 1) return stations.has(n);
+    if (l0.mode === 2) return nn.get(n)?.kind === 'station';
+    const k = nn.get(n)?.kind;
+    if (k === 'IC' || k === 'JCT') return true;
+    return here.some((i) => !same(i) && major.has(linkAt(base, state, i).cls));
+  };
+  if (!l0.name) return { ids: [id], A: l0.a, B: l0.b };
+  const ids = [id];
+  const walk = (from) => {
+    let node = from, prev = id, km = 0;
+    while (!isStop(node) && km < 80) {
+      const next = (at.get(node) || []).find((i) => i !== prev && same(i) && !ids.includes(i));
+      if (next == null) break;
+      ids.push(next);
+      const e = linkAt(base, state, next);
+      km += e.len;
+      node = e.a === node ? e.b : e.a;
+      prev = next;
+    }
+    return node;
+  };
+  const A = walk(l0.a), B = walk(l0.b);
+  return { ids, A, B };
+}
+
 function header(title) {
   return `<div style="display:flex;justify-content:space-between;align-items:center"><h3>${esc(title)}</h3><button class="small close">닫기</button></div>`;
 }
@@ -2959,7 +3039,14 @@ function linkPanel(id) {
        <tr><td>전력</td><td>${{ AC: '교류 25kV', DC: '직류 3kV', none: '비전철' }[l.power]}</td></tr>
        <tr><td>최고 운행 속도</td><td>${l.speed} km/h</td></tr>
        <tr><td>이용객</td><td>${Math.round(vol).toLocaleString()} 명/일</td></tr>`;
+  // 누른 곳이 속한 역–역(IC–IC) 구간
+  const sec = selection?.type === 'link' && selection.id === id ? selection.section : null;
+  const secIds = sec?.ids || [id];
+  const secKm = secIds.reduce((s0, x) => s0 + linkAt(base, state, x).len, 0);
+  const nnS = nodeNames();
+  const secLabel = sec && secIds.length > 1 ? `${nnS.get(sec.A)?.name || '교차로'} – ${nnS.get(sec.B)?.name || '교차로'}` : '';
   return `${header(l.name || CLASS_LABEL[l.cls])}
+    ${secLabel ? `<p class="hint">선택 구간: <b>${esc(secLabel)}</b> · ${secKm.toFixed(1)}km (${secIds.length}개 링크). 개량은 이 구간 전체에 적용됩니다.</p>` : ''}
     <table class="kv">
       <tr><td>종류</td><td>${CLASS_LABEL[l.cls]} · ${l.kp ? '북' : '남'}</td></tr>
       ${operatorOf(state, l) ? `<tr><td>운영사</td><td>${opBadge(state, operatorOf(state, l))}</td></tr>` : ''}
@@ -2979,7 +3066,7 @@ function linkPanel(id) {
     ${route.length > 1 ? `<label class="name-row"><input type="checkbox" id="whole-route" ${wholeRoute ? 'checked' : ''}>
       <span>같은 이름 노선 전체 (${route.length}개 구간, ${routeKm.toFixed(0)}km)</span></label>` : ''}
     <div class="list">${ups.map((u) => {
-      const ids = (wholeRoute && route.length > 1 ? route : [id]).filter((x) => u.applies(linkAt(base, state, x)));
+      const ids = (wholeRoute && route.length > 1 ? route : secIds).filter((x) => u.applies(linkAt(base, state, x)));
       const cost = ids.reduce((sum, x) => sum + upgradeCost(u, linkAt(base, state, x)), 0);
       const ok = canAfford(state, cost, u.years, fundFor(state, ids.map((x) => linkAt(base, state, x))));
       return `<div class="item"><div class="row" style="margin:0;justify-content:space-between">

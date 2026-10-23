@@ -57,10 +57,11 @@ PROVINCES = {
 # 네트워크 단순화 격자 크기(도). 약 500m. 왕복 분리 차로·복선 선로를 한 링크로 합치되
 # 교차로·분기점 위치는 500m 안쪽으로 맞춘다. 화면에는 실제 웨이 도형을 따로 그린다.
 GRID = 0.005
-# 인구 50만 이상 도시 안에서는 약 200m 격자로 교차로를 따로 살린다 (실제 OSM 교차점 노드 좌표를 쓴다).
-# 칸 번호는 0.001도 단위의 정수로 통일한다: 바깥은 5칸(0.005도), 도시 안은 2칸(0.002도)씩 건너뛴다.
+# 인구 50만 이상 도시 안에서는 약 100m 격자로 교차로를 따로 살린다 (실제 OSM 교차점 노드 좌표를 쓴다).
+# 칸 번호는 0.001도 단위의 정수로 통일한다: 바깥은 5칸(0.005도), 도시 안은 1칸(0.001도)씩.
+# 왕복 분리 도로의 두 차도는 merge_dual_carriageways가 한 칸으로 합친다.
 UNIT = 0.001
-COARSE, FINE = 5, 2
+COARSE, FINE = 5, 1
 CITY_MIN_POP = 500_000
 CITY_CELLS = set()      # 도시 안인 바깥 격자 칸 (round(lon/GRID), round(lat/GRID))
 # 도시 안에서만 넣는 낮은 등급 도로: 남측 2차 도로(secondary). 3차 도로는 넣지 않는다
@@ -525,6 +526,7 @@ def build_network(zones):
     inside = _korea_lookup(zones, cellpts)
     edges = {k: e for k, e in edges.items() if inside(k[1]) or inside(k[2])}
     log("cell edges inside zones", len(edges))
+    edges = merge_dual_carriageways(edges, cellpts, junction)
 
     # 역·IC는 단순화 시 보존해야 하므로 먼저 셀에 붙인다.
     rail_cells = {k[1] for k in edges if k[0] == "rail"} | {k[2] for k in edges if k[0] == "rail"}
@@ -572,7 +574,7 @@ def build_network(zones):
         # 화면용 도형: 실제 웨이를 약 20m로 단순화하고 양 끝은 노드 좌표에 맞춘다
         raw = [c for xy in L["line"] for c in xy]
         length = _polyline_km(raw)
-        geom = draw_geom(L["pieces"])
+        geom = line_geom(L["line"], nodes[a], nodes[b])
         name = max(e["names"], key=e["names"].get) if e["names"] else ""
         if e["mode"] == "road":
             dl, skr, skp = ROAD_DEFAULTS[e["cls"]]
@@ -625,6 +627,20 @@ def build_network(zones):
                 places.append(p)
     return {"nodes": nodes, "links": out_links, "stations": out_stations,
             "metro_stations": out_metro, "junctions": out_junctions}, places
+
+
+def line_geom(line, pa, pb, tol=0.00006):
+    """화면용 도형: 링크가 지나는 OSM 웨이 점들을 링크 방향(노드 a → b)대로 이은 한 줄에 양 끝 노드를 붙인다.
+    이웃 구간도 같은 노드에서 시작·끝나므로 선이 끊기지 않고, 왕복 분리 도로도 한 줄만 그린다."""
+    pts = list(shapely.LineString(line).simplify(tol).coords) if len(line) >= 2 else []
+    # 노드에서 너무 가까운 첫·끝 점은 빼서 노드 근처에서 되돌아 꺾이지 않게 한다 (약 30m)
+    near = lambda p, q: abs(p[0] - q[0]) * 0.8 + abs(p[1] - q[1]) < 0.0003
+    while pts and near(pts[0], pa):
+        pts.pop(0)
+    while pts and near(pts[-1], pb):
+        pts.pop()
+    out = [tuple(pa)] + pts + [tuple(pb)]
+    return [round(v, 5) for xy in out for v in xy]
 
 
 def draw_geom(pieces, tol=0.00015):
@@ -777,6 +793,76 @@ def _nearest_cell(pt, cells):
 
 def _same_kind(e1, e2):
     return e1["mode"] == e2["mode"] and e1["cls"] == e2["cls"] and e1.get("route", "") == e2.get("route", "")
+
+
+DUAL_MERGE_DEG = 0.0009   # 약 80~100m: 왕복 분리 도로의 두 차도 사이
+
+
+def merge_dual_carriageways(edges, cellpts, junction):
+    """대도시 안에서 한 도로의 두 방향 차도가 따로 그려져 다른 칸에 놓인 것을 합친다.
+    같은 이름(이름 없으면 같은 등급)의 일방통행 도로가 지나는 칸끼리 약 90m 안이면 한 칸으로 묶고,
+    겹치는 엣지는 하나로 합쳐 차로 수를 더한다. 그러지 않으면 배정이 한쪽 차도에만 몰려 색이 들쭉날쭉해진다."""
+    from scipy.spatial import cKDTree
+    tags = defaultdict(set)      # 칸 → 일방통행 도로의 (이름 또는 등급)
+    for (mode, a, b, _), e in edges.items():
+        if mode != "road" or e["lanes1"] <= 0:
+            continue
+        label = max(e["names"], key=e["names"].get) if e["names"] else f"#{e['cls']}"
+        for c in (a, b):
+            cp = cellpts[c]
+            if in_city(cp[0] / cp[2], cp[1] / cp[2]):
+                tags[c].add(label)
+    cells = list(tags)
+    if not cells:
+        return edges
+    pts = np.array([[cellpts[c][0] / cellpts[c][2] * 0.8, cellpts[c][1] / cellpts[c][2]] for c in cells])
+    parent = list(range(len(cells)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for i, j in cKDTree(pts).query_pairs(DUAL_MERGE_DEG):
+        if tags[cells[i]] & tags[cells[j]]:
+            parent[find(i)] = find(j)
+    rep = {}
+    for i, c in enumerate(cells):
+        r = cells[find(i)]
+        if r != c:
+            rep[c] = r
+    if not rep:
+        return edges
+    # 칸 대표점·교차점을 대표 칸으로 모은다
+    for c, r in rep.items():
+        cp, rp = cellpts[c], cellpts[r]
+        rp[0] += cp[0]; rp[1] += cp[1]; rp[2] += cp[2]
+        if c in junction and (r not in junction or junction[c][0] > junction[r][0]):
+            junction[r] = junction[c]
+    out = {}
+    merged = 0
+    for (mode, a, b, route), e in edges.items():
+        if mode == "road":
+            a, b = rep.get(a, a), rep.get(b, b)
+            if a == b:
+                continue
+        key = (mode, min(a, b), max(a, b), route)
+        cur = out.get(key)
+        if cur is None:
+            out[key] = e
+            continue
+        # 반대 방향 차도: 차로를 더하고 도형·이름을 합친다
+        merged += 1
+        cur["lanes1"] += e["lanes1"]
+        cur["lanes2"] = max(cur["lanes2"], e["lanes2"])
+        cur["pieces"].extend(e["pieces"])
+        for n, v in e["names"].items():
+            cur["names"][n] += v
+        if CLASS_RANK[e["cls"]] > CLASS_RANK[cur["cls"]]:
+            cur["cls"] = e["cls"]
+        cur["ramp_only"] = cur["ramp_only"] and e["ramp_only"]
+    log("dual carriageways merged", len(rep), "cells,", merged, "edges")
+    return out
 
 
 def _contract(edges, keep):

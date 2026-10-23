@@ -266,8 +266,10 @@ export class Model {
     const { net, S } = this;
     const nodes = net.nodes;
     const roadNodes = new Set(), railNodes = new Set(), hsrNodes = new Set();
+    // 승용차·버스는 고속도로 중간으로 바로 들어가지 못한다: 고속도로만 닿는 노드는 접속 노드에서 뺀다 (IC는 다른 도로가 닿아 남는다)
     for (const l of net.links) {
-      if (!l.active || l.mode === 2) continue;
+      if (!l.active || l.mode === 2 || l.via) continue;
+      if (l.mode === 0 && l.cls === 'motorway') continue;
       const set = l.mode === 0 ? roadNodes : railNodes;
       set.add(l.a); set.add(l.b);
       if (l.cls === 'hsr') { hsrNodes.add(l.a); hsrNodes.add(l.b); }
