@@ -262,6 +262,7 @@ function onWorker(ev) {
   else if (m.type === 'error') { setBusy(false); console.error(m.message); alert('시뮬레이션 오류\n' + m.message); }
   else if (m.type === 'result') applyResult(m);
   else if (m.type === 'route') showRoute(m.route);
+  else if (m.type === 'preview') onPreview(m);
 }
 
 function applyResult(res) {
@@ -1123,6 +1124,7 @@ function renderBuild() {
       ${!affordable && draft.points.length > 1 ? '<p class="hint neg">예산과 차입 한도를 넘습니다.</p>' : ''}
       <div class="row" style="display:flex;gap:6px;margin-top:8px">
         <button class="primary" id="draft-ok" ${draft.points.length < 2 || !affordable ? 'disabled' : ''}>착공</button>
+        <button id="draft-prev" ${draft.points.length < 2 ? 'disabled' : ''}>효과 미리보기</button>
         <button id="draft-cancel">취소</button>
       </div>`;
   }
@@ -1135,6 +1137,7 @@ function renderBuild() {
   el.querySelectorAll('[data-build]').forEach((b) => { b.onclick = () => startDraft(b.dataset.build); });
   if (draft) {
     $('#draft-ok').onclick = commitDraft;
+    $('#draft-prev').onclick = previewDraft;
     $('#snap-node').onchange = (e) => { snap.node = e.target.checked; };
     bindFund(el, renderBuild);
     $('#snap-line').onchange = (e) => { snap.line = e.target.checked; };
@@ -1328,7 +1331,7 @@ function renderStats() {
     <h4>노선 순위 (최대 구간 이용객)</h4><table class="cmp"><tr><th>노선</th><th>명/일</th><th>V/C</th></tr>${railRows}</table>
     ${railStatsHTML()}
     <h4>노선별 수익성 (철도·도시철도, 연간)</h4><table class="cmp"><tr><th>노선</th><th>수입</th><th>비용</th><th>영업계수</th></tr>${econRows}</table>
-    <p class="hint">영업계수 = 영업비용 ÷ 영업수입 × 100 (100 미만이면 흑자). 수입은 구간 이용객 × 거리 × km당 운임, 비용은 운행 열차-km와 선로 유지비로 셈한 추정입니다. 도시철도는 시군구 사이 이용만 셈해 수입이 실제보다 적습니다.</p>
+    <p class="hint">영업계수 = 영업비용 ÷ 영업수입 × 100 (100 미만이면 흑자). 수입은 구간 이용객 × 거리 × km당 운임, 비용은 운행 열차-km와 선로 유지비로 셈한 추정입니다. 도시철도는 같은 구 안 이용을 역세권 인구로 어림해 더했습니다.</p>
     ${svcRows ? `<h4>운행 계통</h4><table class="cmp"><tr><th>계통</th><th>회/일</th><th>최대 구간</th><th>승차율</th><th>영업계수</th></tr>${svcRows}</table>` : ''}
     <h3 style="margin-top:16px">도로</h3>
     <h4>가장 막히는 고속도로·간선국도</h4><table class="cmp"><tr><th>노선</th><th>PCU/일</th><th>V/C</th></tr>${roadRows}</table>
@@ -1369,6 +1372,9 @@ function renderSettings() {
     <h3 style="margin-top:16px">항공</h3>
     <label class="name-row"><input type="checkbox" id="air-auto" ${state.air?.auto ? 'checked' : ''}>
       <span>항공 노선 자동 운영 (수요에 따른 취항·증편·단항)</span></label>
+    <h3 style="margin-top:16px">저장 슬롯</h3>
+    <p class="hint">진행은 자동 저장되고, 여기에 따로 세 개까지 남겨 두었다가 되돌릴 수 있습니다.</p>
+    ${slotsHTML()}
     <h3 style="margin-top:16px">새 게임</h3>
     <div class="name-row"><span style="flex:1">난이도</span>
       <select id="difficulty">${Object.entries(DIFFICULTY).map(([k, v]) => `<option value="${k}" ${state.difficulty === k ? 'selected' : ''}>${v.label} (연 ${formatWon(v.annualBudget)})</option>`).join('')}</select></div>
@@ -1378,6 +1384,7 @@ function renderSettings() {
     <p class="hint">도로·철도·행정구역·지명: © OpenStreetMap 기여자 (ODbL)<br>인구 격자: WorldPop 2020 (CC BY 4.0)<br>소득·HDI 초기값과 공사비 단가는 게임용 가정값입니다. 자세한 내용은 저장소의 docs/model.md를 보세요.</p>`;
   $('#air-auto').onchange = (e) => { state.air.auto = e.target.checked; save(state); };
   bindLocalSettings(el);
+  bindSlots(el);
   $('#policy').onchange = (e) => { state.policy = e.target.value; state.log.unshift(`${state.year}년 이주 정책: ${POLICY_LABEL[state.policy]}`); save(state); renderStatus(); };
   $('#btn-new').onclick = () => {
     if (!confirm('지금 게임을 지우고 새로 시작할까요?')) return;
@@ -1427,6 +1434,13 @@ function renderSelection() {
     };
   });
   bindFund(el, renderSelection);
+  el.querySelectorAll('[data-prev-up]').forEach((b) => {
+    b.onclick = () => {
+      const u = UPGRADES.find((x) => x.id === b.dataset.prevUp);
+      const ids = (wholeRoute ? sameRoute(selection.id) : [selection.id]).filter((x) => u.applies(linkAt(base, state, x)));
+      previewUpgrade(ids, u.id);
+    };
+  });
   const wr = el.querySelector('#whole-route');
   if (wr) wr.onchange = () => { wholeRoute = wr.checked; renderSelection(); };
   bindRestore(el);
@@ -1644,7 +1658,7 @@ function serviceSection(l) {
   const ec = lineEconomics().find((x) => x.name === l.name);
   const econ = ec ? `<p class="hint">이 노선: 연 수입 ${formatWon(ec.rev / 1e8)} · 비용 ${formatWon(ec.cost / 1e8)} · 영업계수 <b class="${ec.ratio > 100 ? 'neg' : ''}">${fmtRatio(ec.ratio)}</b></p>` : '';
   const diagram = '<button class="small" id="line-diagram">노선도 보기 (열차 위치·정차역·혼잡도)</button>';
-  if (l.mode === 2) return `<h4>노선도 · 수익성</h4>${diagram}${econ}<p class="hint">도시철도는 시군구 사이를 오가는 이용만 셈해서 수입이 실제보다 적게 나옵니다(같은 구 안 이용은 빠짐).</p>`;
+  if (l.mode === 2) return `<h4>노선도 · 수익성</h4>${diagram}${econ}<p class="hint">도시철도 수입에는 같은 구 안 이용을 역세권 인구로 어림해 더했습니다.</p>`;
   const list = (state.services || []).filter((s) => s.line === l.name);
   return `<h4>노선도 · 운행 계통 · 수익성</h4>${diagram}
     <button class="small" id="st-start" title="두 역 사이를 단순한 곡선으로 새로 놓고 옛 구간은 폐선">구간 직선화 (두 역 고르기)</button>${econ}
@@ -1704,6 +1718,8 @@ function lineEconomics() {
   });
   // 특급·급행 승객은 등급 요금을 더 낸다
   for (const x of svcStats()) { const e = lines.get(x.s.line); if (e) e.rev += x.premium; }
+  // 도시철도: 모형에 없는 같은 구 안 이용을 역세권 인구로 어림해 더한다
+  for (const e of lines.values()) if (e.cls === 'metro') e.rev += metroIntraRevenue(e.name);
   const rows = [...lines.values()].filter((e) => e.km >= 5).map((e) => ({ ...e, ratio: e.rev > 0 ? (e.cost / e.rev) * 100 : Infinity }));
   econCache = { res: result, rows };
   return rows;
@@ -2375,7 +2391,7 @@ function straightenPanel() {
     <p class="hint">완공되면 옛 구간 ${pl.via.length}개는 폐선하고, 역 이름과 운행 계통의 정차역은 새 자리로 이어집니다.</p>
     ${fundSelect([operatorOf(state, { mode: 1, kp: isKP(nodeCoord(pl.A)[1], nodeCoord(pl.A)[0]) ? 1 : 0 })])}
     <div class="row" style="display:flex;gap:6px;margin-top:8px">
-      <button class="primary" id="st-ok">착공</button><button id="st-cancel">취소</button></div>`;
+      <button class="primary" id="st-ok">착공</button><button id="st-prev">효과 미리보기</button><button id="st-cancel">취소</button></div>`;
 }
 
 function bindStraighten(el) {
@@ -2383,6 +2399,7 @@ function bindStraighten(el) {
   el.querySelector('.close')?.addEventListener('click', endStraighten);
   el.querySelector('#st-cancel')?.addEventListener('click', endStraighten);
   el.querySelector('#st-ok')?.addEventListener('click', commitStraighten);
+  el.querySelector('#st-prev')?.addEventListener('click', previewStraighten);
 }
 
 function commitStraighten() {
@@ -2433,6 +2450,202 @@ function afterStraighten(done) {
     const plan = planService(links, railStationSet(), s.stops, s.kind, s.line, s.type);
     if (plan) { s.segs = plan.segs; s.runMin = plan.runMin; s.km = plan.km; s.trains = tripsPerDay(s.sets, plan.runMin); }
   }
+}
+
+// ------------------------------------------------------------ 착공 전 효과 미리보기
+
+let previewSeq = 0, previewWait = null;
+
+/**
+ * 사업을 다 지었다고 치고 한 해 통행배정을 돌려 본다. mutate(복사한 상태)는 사업을 반영하고 바뀐 구간 id 목록을 돌려준다.
+ * 결과는 화면 위 상자에 뜬다 (약 20~40초).
+ */
+function runPreview(title, mutate, extra = {}) {
+  if (busy || !result) return;
+  const clone = structuredClone(state);
+  let touched;
+  try { touched = mutate(clone); } catch (e) { alert(`미리보기를 만들 수 없습니다: ${e.message}`); return; }
+  if (!touched) return;
+  const net = effectiveNetwork(base, clone);
+  const id = ++previewSeq;
+  previewWait = { id, title, touched, extra, clone };
+  showPreviewBox(`<b>${esc(title)}</b><p class="hint">효과를 계산하는 중입니다 (지금 그대로와 다 지은 뒤를 견주느라 약 40초)…</p>`);
+  setBusy(true, '효과 미리보기', 0);
+  worker.postMessage({ type: 'preview', id, net, ctx: ctx() });
+}
+
+/** 다 지은 상태로 바꾼다: 신설 사업이면 새 구간을 개통으로, 개량이면 속성을 바로 적용 */
+function buildNow(clone, p) {
+  if (p.kind === 'upgrade') {
+    const u = UPGRADES.find((x) => x.id === p.upgrade);
+    for (const lid of p.links) clone.overrides[lid] = { ...(clone.overrides[lid] || {}), ...u.apply(linkAt(base, clone, lid)) };
+  } else {
+    for (const lid of p.links) clone.newLinks[lid - base.links.length].built = true;
+    for (const s of p.stations || []) if (!clone.newStations.includes(s)) clone.newStations.push(s);
+    for (const lid of p.retire || []) {
+      if (lid < base.links.length) (clone.replaced ||= {})[lid] = true; else clone.newLinks[lid - base.links.length].replaced = true;
+    }
+  }
+  clone.projects = clone.projects.filter((x) => x !== p);
+  return p.links;
+}
+
+function onPreview(m) {
+  setBusy(false);
+  if (!previewWait || m.id !== previewWait.id) return;
+  const { title, touched, extra, clone } = previewWait;
+  previewWait = null;
+  const B = m.before, A = m.after;
+  const len = (i, st) => linkAt(base, st, i).len;
+  const congKm = (vc, st, n) => { let s = 0; for (let i = 0; i < n; i++) { const l = linkAt(base, st, i); if (l.mode === 0 && vc[i] > 1 && !st.replaced?.[i]) s += l.len; } return s; };
+  const nB = B.vc.length, nA = A.vc.length;
+  const newUse = Math.max(0, ...touched.filter((i) => i < nA).map((i) => A.vol[i]));
+  // 가장 많이 덜어진 구간 (이름 있는 기존 구간)
+  const relief = [];
+  for (let i = 0; i < nB; i++) {
+    const l = linkAt(base, state, i);
+    if (!l.name || touched.includes(i)) continue;
+    const d = B.vol[i] - A.vol[i];
+    if (d > 0 && B.vc[i] > 0.6) relief.push([d, l.name, B.vc[i], A.vc[i]]);
+  }
+  relief.sort((x, y) => y[0] - x[0]);
+  const seen = new Set(), top = relief.filter(([, n]) => (seen.has(n) ? false : seen.add(n))).slice(0, 4);
+  const d = (k) => (A.totals[k] || 0) - (B.totals[k] || 0);
+  const sign = (v, f) => `${v >= 0 ? '+' : '−'}${f(Math.abs(v))}`;
+  const row = (label, v) => `<tr><td>${label}</td><td>${v}</td></tr>`;
+  // 도로 차량 통행 시간 (대·시간/일): 구간 교통량 × 길이 ÷ 실제 속도
+  const vht = (R, st, n) => { let s = 0; for (let i = 0; i < n; i++) { const l = linkAt(base, st, i); if (l.mode === 0 && R.speed[i] > 0 && !st.replaced?.[i]) s += (R.vol[i] * l.len) / R.speed[i]; } return s; };
+  const vhm = vht(A, clone, nA) - vht(B, state, nB);
+  const res = { newUse, dRail: d('rail'), dTrips: d('trips'), dVhm: vhm, congB: congKm(B.vc, state, nB), congA: congKm(A.vc, clone, nA) };
+  lastPreview = { title, ...res, touched, extra };
+  showPreviewBox(`<b>${esc(title)}</b> <span class="m">다 지었을 때 (한 해 통행배정 기준)</span>
+    <table class="kv">
+      ${row('새·개량 구간 최대 이용', `${Math.round(newUse).toLocaleString()} ${touched.some((i) => linkAt(base, clone, i).mode === 0) ? 'PCU' : '명'}/일`)}
+      ${row('하루 도로 차량 통행 시간', `${sign(vhm, (v) => `${Math.round(v).toLocaleString()}대·시간`)}`)}
+      ${row('철도 이용 (지역 간)', `${sign(res.dRail, (v) => `${Math.round(v).toLocaleString()}명/일`)}`)}
+      ${row('지역 간 통행 (유발 수요)', `${sign(res.dTrips, (v) => `${Math.round(v).toLocaleString()}통행/일`)}`)}
+      ${row('정체 도로 (V/C>1)', `${res.congB.toFixed(0)} → ${res.congA.toFixed(0)} km`)}
+    </table>
+    ${top.length ? `<div class="m">혼잡이 줄어드는 곳: ${top.map(([, n, b, a]) => `${esc(n)} (V/C ${b.toFixed(2)}→${a.toFixed(2)})`).join(' · ')}</div>` : ''}
+    ${extra.html ? extra.html(res) : ''}
+    <p class="hint">실제 효과는 해마다 조금씩 나타나고, 인구·소득 변화에 따라 달라집니다.</p>`);
+}
+let lastPreview = null;
+
+function showPreviewBox(html) {
+  let el = $('#previewbox');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'previewbox';
+    $('main').appendChild(el);
+  }
+  el.innerHTML = `<button class="small close" style="float:right">닫기</button>${html}`;
+  el.hidden = false;
+  el.querySelector('.close').onclick = () => { el.hidden = true; };
+}
+
+/** 그리는 중인 신설 노선 미리보기 (중간 IC·역을 새로 만드는 점은 그 자리 노드 없이 계산) */
+function previewDraft() {
+  if (!draft || draft.points.length < 2) return;
+  const dc = draftCost();
+  const pts = draft.points.map((p) => ({ ...p, split: null }));
+  runPreview(`${draftLineName() || NEW_BUILDS[draft.type].label} 미리보기`, (c) => {
+    const r = startNewBuild(base, c, { type: draft.type, points: pts, names: {}, lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost });
+    if (!r.ok) throw new Error(r.reason);
+    return buildNow(c, c.projects[c.projects.length - 1]);
+  }, { kind: 'new', cost: dc.cost });
+}
+
+function previewUpgrade(ids, upId) {
+  const u = UPGRADES.find((x) => x.id === upId);
+  const l = linkAt(base, state, ids[0]);
+  runPreview(`${l.name || CLASS_LABEL[l.cls]} ${resolve(u.label, l)} 미리보기`, (c) => {
+    const r = startUpgrade(base, c, ids, upId);
+    if (!r.ok) throw new Error(r.reason);
+    return buildNow(c, c.projects[c.projects.length - 1]);
+  });
+}
+
+function previewStraighten() {
+  const pl = straight?.plan;
+  if (!pl) return;
+  runPreview(`${straight.line} 직선화 미리보기`, (c) => {
+    const pts = [{ node: pl.A, lon: nodeCoord(pl.A)[0], lat: nodeCoord(pl.A)[1] }, ...pl.kept.map((k) => ({ node: null, lon: k.pos[0], lat: k.pos[1] })),
+      { node: pl.B, lon: nodeCoord(pl.B)[0], lat: nodeCoord(pl.B)[1] }];
+    const r = startNewBuild(base, c, { type: straight.cls === 'hsr' ? 'hsr' : 'rail', points: pts, names: {}, lineName: straight.line });
+    if (!r.ok) throw new Error(r.reason);
+    const p = c.projects[c.projects.length - 1];
+    for (const lid of p.links) c.newLinks[lid - base.links.length].speed = pl.speed;
+    p.retire = pl.via;
+    return buildNow(c, p);
+  });
+}
+
+// ------------------------------------------------------------ 저장 슬롯
+
+const SLOTS = 3;
+function slotInfo(n) {
+  try { const v = JSON.parse(localStorage.getItem(`ukt-slot-${n}`) || 'null'); return v; } catch { return null; }
+}
+
+function slotsHTML() {
+  return `<div class="list">${Array.from({ length: SLOTS }, (_, k) => {
+    const v = slotInfo(k + 1);
+    return `<div class="item"><div class="row" style="margin:0;justify-content:space-between;align-items:center">
+      <span>슬롯 ${k + 1} <span class="m">${v ? `${v.state.year}년 · ${new Date(v.savedAt).toLocaleString('ko-KR')}` : '비어 있음'}</span></span>
+      <span><button class="small" data-slot-save="${k + 1}">저장</button> <button class="small" data-slot-load="${k + 1}" ${v ? '' : 'disabled'}>불러오기</button></span></div></div>`;
+  }).join('')}</div>`;
+}
+
+function bindSlots(el) {
+  el.querySelectorAll('[data-slot-save]').forEach((b) => {
+    b.onclick = () => {
+      try {
+        localStorage.setItem(`ukt-slot-${b.dataset.slotSave}`, JSON.stringify({ savedAt: Date.now(), state }));
+        state.log.unshift(`${state.year}년 슬롯 ${b.dataset.slotSave}에 저장했습니다.`);
+        renderAll();
+      } catch (e) { alert(`저장하지 못했습니다 (브라우저 저장 공간 부족): ${e.message}`); }
+    };
+  });
+  el.querySelectorAll('[data-slot-load]').forEach((b) => {
+    b.onclick = () => {
+      const v = slotInfo(b.dataset.slotLoad);
+      if (!v || !confirm(`슬롯 ${b.dataset.slotLoad}(${v.state.year}년)을 불러올까요? 지금 진행은 슬롯에 저장하지 않았다면 사라집니다.`)) return;
+      save(v.state);
+      clearSim();
+      location.reload();
+    };
+  });
+}
+
+// ------------------------------------------------------------ 도시철도 구 안 이용 (추정)
+
+/**
+ * 도시철도역 하루 승하차 추정: 시군구 사이 통행만 세는 모형에는 같은 구 안 이용이 빠져 있어서,
+ * 역 반경 800m 인구 × 0.45회(역세권 주민 1인당 하루 도시철도 승하차, 환승·외부 방문 포함 어림)로 보탠다
+ */
+const METRO_PER_RESIDENT = 0.45, METRO_TRIP_KM = 7;
+const metroEstCache = new Map();
+function metroStationEst(node) {
+  if (!metroEstCache.has(node)) {
+    const c = nodeCoord(node);
+    metroEstCache.set(node, c ? popWithin(c[0], c[1], 0.8) * METRO_PER_RESIDENT : 0);
+  }
+  return metroEstCache.get(node);
+}
+
+/** 도시철도 노선별 구 안 이용 수입 (원/년): 노선 위 역 추정 승하차 ÷ 그 역의 노선 수 × 평균 7km × km당 운임 */
+function metroIntraRevenue(line) {
+  const ms = new Set((base.metro_stations || []).map(([, n]) => n));
+  const at = new Map();
+  allLinks().forEach((_, i) => {
+    const l = linkAt(base, state, i);
+    if (l.mode !== 2 || !l.name) return;
+    for (const n of [l.a, l.b]) if (ms.has(n)) { if (!at.has(n)) at.set(n, new Set()); at.get(n).add(l.name); }
+  });
+  let s = 0;
+  for (const [n, lines] of at) if (lines.has(line)) s += metroStationEst(n) / lines.size;
+  return (s / 2) * METRO_TRIP_KM * OPERATING.fareKm.metro * 365;   // 승하차 2번이 1통행
 }
 
 function header(title) {
@@ -2486,7 +2699,8 @@ function linkPanel(id) {
       const ok = canAfford(state, cost, u.years, fundFor(state, ids.map((x) => linkAt(base, state, x))));
       return `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
         <span>${resolve(u.label, l)}${ids.length > 1 ? ` · ${ids.length}개 구간` : ''}</span>
-        <button class="small ${ok ? 'primary' : ''}" data-up="${u.id}" ${ok ? '' : 'disabled'}>${formatWon(cost)} · ${u.years}년</button></div></div>`;
+        <span><button class="small" data-prev-up="${u.id}" title="다 지었을 때 효과">미리보기</button>
+        <button class="small ${ok ? 'primary' : ''}" data-up="${u.id}" ${ok ? '' : 'disabled'}>${formatWon(cost)} · ${u.years}년</button></span></div></div>`;
     }).join('') || '<p class="hint">가능한 개량이 없습니다.</p>'}</div>`}`;
 }
 
@@ -2733,9 +2947,11 @@ function stationPanel(id, n) {
     <h4>승하차</h4>
     <table class="kv">
       ${riders != null ? `<tr><td>지역 간 승하차</td><td>${Math.round(riders).toLocaleString()}명/일</td></tr>` : ''}
+      ${lines.some((l) => l.mode === 2) ? `<tr><td>도시철도 승하차 (추정, 구 안 이용 포함)</td><td>${Math.round(metroStationEst(id)).toLocaleString()}명/일</td></tr>` : ''}
       <tr><td>역세권 인구 (반경 1km · 3km)</td><td>${fmtPop(popWithin(c[0], c[1], 1))} · ${fmtPop(popWithin(c[0], c[1], 3))}</td></tr>
     </table>
-    ${riders == null ? `<p class="hint">${lines.some((l) => l.mode === 2) ? '도시철도역은 시군구 사이 통행만 셈해 역별 승하차는 따로 내지 않습니다. 노선 통과 인원을 보세요.' : '아직 운행하지 않는 역입니다.'}</p>` : ''}
+    ${riders == null && !lines.some((l) => l.mode === 2) ? '<p class="hint">아직 운행하지 않는 역입니다.</p>' : ''}
+    ${lines.some((l) => l.mode === 2) ? '<p class="hint">도시철도 승하차는 역 반경 800m 인구로 어림한 값입니다 (모형의 시군구 사이 통행에 빠진 구 안 이용 포함).</p>' : ''}
     <h4>운행 계통</h4>
     <table class="kv">${lines.filter((l) => l.named).map((l) => { const t = autoLocalTrains(l.name, l.mode === 2 ? 'metro' : l.cls);
       return `<tr><td>${esc(l.name)} ${l.cls === 'hsr' ? '고속' : '보통'} <span class="m">자동 · 24시간</span></td><td>하루 ${t}회 · 약 ${Math.max(1, Math.round(SERVICE_DAY_MIN / Math.max(1, t / 2)))}분 간격</td></tr>`; }).join('')}

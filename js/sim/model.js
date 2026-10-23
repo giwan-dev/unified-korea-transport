@@ -451,7 +451,7 @@ export class Model {
    * @param {(p:number)=>void} [progress]
    * @param {boolean} [warm] 지난해 교통량에서 이어 시작 (반복 수를 줄인다)
    */
-  assign(integration, progress, warm = false) {
+  assign(integration, progress, warm = false, offsetOverride = null) {
     const { Z, net } = this;
     const L = net.links;
     const nNodes = net.nodes.length;
@@ -469,7 +469,7 @@ export class Model {
     for (let j = 0; j < Z; j++) tmass[j] = ((this.tour[j] + this.tourKP[j] * integration) * P.tourismMass) / 1e4;
     const iters = warm ? P.msaIterationsWarm : P.msaIterations;
     // 지난해 교통량을 앞선 반복 몇 번 분으로 친다 (한 번의 전량배정이 혼잡을 다시 한곳에 몰지 않도록 1/4씩 섞는다)
-    const offset = warm ? P.warmMsaOffset : 0;
+    const offset = warm ? (offsetOverride ?? P.warmMsaOffset) : 0;
     const pick = [];
     const lam = P.logitLambda;
     const A = this.airports.length;

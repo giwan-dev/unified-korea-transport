@@ -2,12 +2,14 @@
 import { Model } from './model.js';
 
 let model = null;
+let lastNet = null, lastTotals = null;   // 미리보기 뒤 되돌릴 지금 상태
 
 function post(type, payload, transfer = []) {
   self.postMessage({ type, ...payload }, transfer);
 }
 
 function results(totals, { withState = true } = {}) {
+  lastTotals = totals;
   const links = model.linkResults();
   const zones = model.zoneResults();
   const stations = model.stationResults();
@@ -40,6 +42,7 @@ self.onmessage = (ev) => {
       post('progress', { label: '시뮬레이션 준비 중', value: 0 });
       model = new Model(msg.zones, new Float32Array(msg.grid));
       model.setNetwork(msg.net);
+      lastNet = msg.net;
       const bl = msg.baseline;
       if (!msg.snapshot) {
         // 새 게임: 미리 계산한 기준 연도가 있으면 그대로 쓴다
@@ -60,9 +63,26 @@ self.onmessage = (ev) => {
       }
     } else if (msg.type === 'step') {
       model.setNetwork(msg.net);
+      lastNet = msg.net;
       // 지난 1년의 교통 조건으로 경제·인구를 갱신한 뒤 새 해의 통행을 배정한다
       model.advanceYear(msg.ctx.integration, msg.ctx.policy);
       results(model.assign(msg.ctx.integration, progress('통행배정'), true));
+    } else if (msg.type === 'preview') {
+      // 착공 전 효과 미리보기: 지금 상태를 저장해 두고, 지금 네트워크(대조)와 다 지은 네트워크로 같은 방식의 통행배정을 각각 해 본 뒤 되돌린다.
+      // 새 노선이 제 몫을 받도록 지난해 교통량과 반씩 섞는다. 두 결과의 차이가 사업 효과다
+      const saved = model.exportBaseline(lastTotals, null);
+      const run = (net, label) => {
+        model.setNetwork(net);
+        const totals = model.assign(msg.ctx.integration, progress(label), true, 1);
+        const r = model.linkResults();
+        const out = { totals, vol: r.vol, vc: r.vc, speed: r.speed, svcVol: r.svcVol };
+        model.setNetwork(lastNet);
+        model.importBaseline(saved.json, saved.bin);
+        return out;
+      };
+      const before = run(lastNet, '효과 미리보기 (지금)');
+      const after = run(msg.net, '효과 미리보기 (완공 뒤)');
+      post('preview', { id: msg.id, before, after });
     } else if (msg.type === 'route') {
       post('route', { route: model.routeQuery(msg.from, msg.to) });
     } else if (msg.type === 'baseline') {
