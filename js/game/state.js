@@ -88,7 +88,8 @@ export function effectiveNetwork(base, state) {
   const physCount = links.length;
   links.push(...serviceLinks(state, links));
   const serviceStops = (state.services || []).filter((s) => s.built).map((s) => ({ stops: s.stops, trains: s.trains }));
-  return { nodes, links, physCount, serviceStops, stations: [...new Set(stations)], airports, airRoutes, airBanned: state.air?.banned || [] };
+  const closed = new Set(state.closedStations || []);
+  return { nodes, links, physCount, serviceStops, stations: [...new Set(stations)].filter((n) => !closed.has(n)), airports, airRoutes, airBanned: state.air?.banned || [] };
 }
 
 export function linkAt(base, state, id) {
@@ -660,6 +661,12 @@ function completeProject(base, state, p) {
     }
   } else {
     for (const id of p.links) state.newLinks[id - base.links.length].built = true;
+    // 직선화: 옛 구간은 폐선, 옛 역은 문을 닫는다 (이름은 새 역이 이어받았다)
+    for (const id of p.retire || []) {
+      if (id < base.links.length) (state.replaced ||= {})[id] = true;
+      else state.newLinks[id - base.links.length].replaced = true;
+    }
+    if (p.stationMap) (state.closedStations ||= []).push(...Object.keys(p.stationMap).map(Number));
     for (const r of state.restAreas || []) if (p.links.includes(r.links[0])) r.built = true;
     for (const s of p.stations) if (!state.newStations.includes(s)) state.newStations.push(s);
   }
