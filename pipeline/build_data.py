@@ -821,6 +821,8 @@ def build_network(zones):
     heal_gaps(nodes, out_links)
     heal_rail_gaps(nodes, out_links, {node_index[("r", c, rfind((c, ln)))] for _, c in stations for ln in station_lines[c]
                                       if ("r", c, rfind((c, ln))) in node_index})
+    out_links = prune_rail_stubs(out_links, {node_index[("r", c, rfind((c, ln)))] for _, c in stations for ln in station_lines[c]
+                                             if ("r", c, rfind((c, ln))) in node_index})
     # 이웃 칸에 둔 다른 노선 승강장과 본래 역 노드를 짧은 환승 선로로 잇는다 (오송: 충북선 ↔ 경부고속선)
     def station_node(c):
         for ln in sorted(station_lines[c]):
@@ -910,6 +912,36 @@ def draw_geom(pieces, tol=0.00015):
             out += [float("nan"), float("nan")]
         out += [round(v, 5) for xy in ln.simplify(tol).coords for v in xy]
     return out
+
+
+def prune_rail_stubs(links, station_nodes, max_km=3.0):
+    """역 없이 끝나는 짧은 철도 곁가지(공장·탄광 전용선, 측선)를 뺀다. 여객이 없고 지도에는 이상한 돌기로만 보인다.
+    끝에서부터 역이나 갈림길을 만날 때까지 거슬러 올라가며, 그 길이가 max_km 안이면 통째로 뺀다."""
+    deg = defaultdict(int)
+    at = defaultdict(list)
+    for i, l in enumerate(links):
+        if l["mode"] == 1:
+            deg[l["a"]] += 1; deg[l["b"]] += 1
+            at[l["a"]].append(i); at[l["b"]].append(i)
+    drop = set()
+    for n in list(deg):
+        if deg[n] != 1 or n in station_nodes:
+            continue
+        path, node, km = [], n, 0.0
+        while True:
+            nxt = [i for i in at[node] if i not in path and i not in drop]
+            if len(nxt) != 1:
+                break
+            i = nxt[0]
+            path.append(i)
+            km += links[i]["len"]
+            node = links[i]["b"] if links[i]["a"] == node else links[i]["a"]
+            if km > max_km or node in station_nodes or deg[node] != 2:
+                break
+        if path and km <= max_km and (deg[node] >= 3 or node in station_nodes):
+            drop.update(path)
+    log("rail stubs pruned", len(drop))
+    return [l for i, l in enumerate(links) if i not in drop]
 
 
 def heal_rail_gaps(nodes, links, station_nodes, max_km=0.45):
