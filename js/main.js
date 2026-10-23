@@ -445,7 +445,8 @@ function linksFC() {
   }
   const features = allLinks().map((l, i) => {
     const eff = linkAt(base, state, i);
-    if (state.replaced?.[i] || l.replaced) {
+    // 같은 역의 다른 노선 승강장을 잇는 환승 선로는 계산에만 쓰고 그리지 않는다 (서울역·용산역 주변이 지저분해진다)
+    if (state.replaced?.[i] || l.replaced || eff.name?.endsWith(' 환승')) {
       const p0 = [l.geom[0], l.geom[1]];   // 길이 0인 선: 그려지지 않는다
       return { type: 'Feature', id: i, properties: { id: i, mode: -1 }, geometry: { type: 'LineString', coordinates: [p0, p0] } };
     }
@@ -558,7 +559,7 @@ function nodeNames() {
   for (const [name, node] of base.metro_stations || []) if (!out.has(node)) out.set(node, { name, kind: 'station', isNew: 0, metro: 1 });
   for (const [name, node] of base.junctions) {
     if (out.has(node)) continue;
-    out.set(node, { name, kind: /JCT|분기점/.test(name) ? 'JCT' : 'IC', isNew: 0 });
+    out.set(node, { name, kind: /JCT|분기점/.test(name) ? 'JCT' : /휴게소|졸음쉼터|SA$/.test(name) ? 'rest' : 'IC', isNew: 0 });
   }
   for (const f of base.foreignNodes || []) out.set(f.node, { name: f.name, kind: 'city', isNew: 0, country: f.country });
   for (const [k, v] of Object.entries(state.names)) out.set(+k, { name: v.name, kind: v.kind, isNew: 1 });
@@ -2270,7 +2271,21 @@ function bindRailStats(el) {
 let plans = [];
 
 /** 경유지 이름과 좌표로 기존 역(또는 도로 노드)을 찾는다: 같은 이름의 역이 6km 안에 있으면 그 역, 아니면 가까운 노드 */
-function resolveWaypoint([name, lon, lat], mode) {
+function resolveWaypoint([name, lon, lat], mode, motorwayEnd = false) {
+  // 고속도로 계획의 양 끝은 8km 안의 기존 고속도로 노드에 붙인다 (남북 연결 고속도로가 기존 고속도로와 이어지게)
+  if (mode === 0 && motorwayEnd) {
+    let best = null, bd = 8;
+    allLinks().forEach((l, i) => {
+      const e = linkAt(base, state, i);
+      if (e.mode !== 0 || e.cls !== 'motorway' || e.ext) return;
+      for (const n of [e.a, e.b]) {
+        const c = nodeCoord(n);
+        const d = c ? kmBetween(lon, lat, c[0], c[1]) : Infinity;
+        if (d < bd) { bd = d; best = n; }
+      }
+    });
+    if (best != null) return best;
+  }
   const lists = mode === 2 ? [base.metro_stations || [], base.stations] : mode === 1 ? [base.stations, base.metro_stations || []] : [];
   for (const list of lists) {
     let best = null, bd = 6;
@@ -2304,7 +2319,8 @@ function openPlan(id) {
   for (const wp of plan.points) {
     // 이름이 없는 경유점은 선형만 잡는 점 (역·IC를 만들지 않는다)
     if (wp[0] == null) { draft.points.push({ node: null, lon: wp[1], lat: wp[2], split: null, via: true }); continue; }
-    const node = resolveWaypoint(wp, spec.mode);
+    const isEnd = wp === plan.points[0] || wp === plan.points[plan.points.length - 1];
+    const node = resolveWaypoint(wp, spec.mode, isEnd && spec.attrs?.cls === 'motorway');
     const c = node != null ? nodeCoord(node) : [wp[1], wp[2]];
     const pt = { node, lon: c[0], lat: c[1], split: null };
     draft.points.push(pt);
@@ -3377,7 +3393,7 @@ function sectionOf(id) {
     if (l0.mode === 1) return stations.has(n);
     if (l0.mode === 2) return nn.get(n)?.kind === 'station';
     const k = nn.get(n)?.kind;
-    if (k === 'IC' || k === 'JCT') return true;
+    if (k === 'IC' || k === 'JCT' || k === 'rest') return true;
     return here.some((i) => !same(i) && major.has(linkAt(base, state, i).cls));
   };
   if (!l0.name) return { ids: [id], A: l0.a, B: l0.b };

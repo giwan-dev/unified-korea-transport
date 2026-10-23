@@ -27,7 +27,8 @@ def find_kmz(raw: Path) -> Path | None:
     return files[-1] if files else None
 
 
-LINE_ALIAS = {"대곡소사선": "서해선", "소사원시선": "서해선", "소사대곡선": "서해선"}
+LINE_ALIAS = {"대곡소사선": "서해선", "소사원시선": "서해선", "소사대곡선": "서해선",
+              "인천국제공항철도": "인천국제공항선", "공항철도": "인천국제공항선"}
 
 
 def norm_line(name: str) -> str:
@@ -95,6 +96,8 @@ def load(raw: Path):
                     line = path[-1]
                     if OPERATOR.search(line):
                         line = name if name.endswith("선") else ""
+                    if line and "-" in line:
+                        line = ""   # '용산-서울' 같은 구간 이름은 노선 이름이 아니다
                     if line:
                         paths.append((line, path[3], pts, path[5]))   # path[5]: 국철·도시철도·전용선·궤도선 등 구분
                 elif len(path) > 3 and path[1] == "Point" and path[2] == "영업시설" and path[3] in OPEN:
@@ -112,6 +115,13 @@ def load(raw: Path):
     walk(root, [])
     out = [(n, {norm_line(x) for x in ls}, lon, lat, st) for n, ls, lon, lat, st in stations.values()]
     return {"stations": out, "paths": [(norm_line(n), c, p, k) for n, c, p, k in paths], "closed": closed, "file": kmz.name}
+
+
+def urban_only_names(ref):
+    """철도 DB가 도시철도(궤도선 포함)로만 분류하는 노선 이름 (OSM이 일반철도로 그린 도시철도 연장선 가려내기)"""
+    urban = {n for n, c, p, k in ref["paths"] if k in URBAN}
+    main = {n for n, c, p, k in ref["paths"] if k not in URBAN}
+    return urban - main
 
 
 def mainline_paths(ref):
