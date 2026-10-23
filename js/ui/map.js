@@ -253,7 +253,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addLayer({ id: 'water-area', type: 'fill', source: 'waterarea', paint: { 'fill-color': (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? PALETTE.dark : PALETTE.light).water, 'fill-opacity': 0.95 } }, below);
   // 강·호수 물가선: 채움만 있으면 둘레의 땅 색과 섞여 강변이 흐릿하다
   map.addLayer({ id: 'water-area-line', type: 'line', source: 'waterarea', minzoom: 8,
-    paint: { 'line-color': (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? '#3c6f8f' : '#7fb0cc'), 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 0.4, 13, 1.2] } }, below);
+    paint: { 'line-color': (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? '#4f86ad' : '#5b8fb5'), 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 0.6, 11, 1.1, 14, 1.8] } }, below);
 
   map.addSource('links', { type: 'geojson', data: linksFC, promoteId: 'id' });
   // 혼잡도 0~10: 1을 넘는 곳도 심한 정도가 구분되도록 1·2·4·7·10에서 점점 짙어진다
@@ -261,6 +261,8 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   // 배경 OSM 도로(골목·이면도로)는 인구 색칠 위, 계산망 도로 아래에 그린다 (색칠 밑에 있으면 도심 도로망이 안 보인다)
   // (지금 맨 위로 올리면 뒤에 더하는 계산망·역 레이어가 그 위에 그려진다)
   if (map.getLayer('bg-roads')) map.moveLayer('bg-roads');
+  // 시도 경계(해안선 포함)도 인구 색칠 위로: 밑에 있으면 바다와 땅 사이에 선이 없어 해안이 흐릿하다
+  if (map.getLayer('bg-sido')) map.moveLayer('bg-sido');
   map.addLayer({
     id: 'roads', type: 'line', source: 'links',
     filter: ['all', ['==', ['get', 'mode'], 0], ['==', ['get', 'building'], 0], ['!=', ['get', 'cls'], 'ferry'], ['!=', ['get', 'ext'], 1], ['!=', ['get', 'minor'], 1]],
