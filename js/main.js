@@ -12,7 +12,7 @@ import {
 import { MEGA, TSR_FREIGHT } from './game/mega.js';
 import { AIRPORT } from './game/catalog.js';
 import { setNameResolver, refreshNames, setLinks, paintHotspots } from './ui/map.js';
-import { isNarrow } from './ui/traffic.js';
+import { isNarrow, twinPrimary, mergeTwins, ROAD_RANK, motorwayMainline, flattenMainline, connectJunctions, smoothMainlineEnds, mainlineBubbles } from './ui/traffic.js';
 import { subFold, initPanelUI, toast } from './ui/panel.js';
 import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.js';
 import { kmBetween, routeKey } from './sim/model.js';
@@ -279,11 +279,8 @@ function applyResult(res) {
   result = res;
   state.snapshot = res.snapshot;
 
-  const { vc, vol } = res.links;
-  for (let i = 0; i < vc.length; i++) {
-    map.setFeatureState({ source: 'links', id: i }, { vc: vc[i], vol: vol[i] });
-  }
-  paintHotspots(map, vc);
+  const { vc } = res.links;
+  paintVolumes();
   paintZones();
   paintAir(res.air);
   refreshPoints();   // 역 중요도는 이용객으로 정한다
@@ -440,25 +437,59 @@ function allLinks() {
   return base.links.concat(state.newLinks);
 }
 
+// linkTwins: 링크마다 화면에 그리는 대표 링크 (같은 두 노드를 잇는 쌍), shownTraffic: 쌍을 합친 화면용 교통량·혼잡도
+let linkTwins = null, shownTraffic = null;
+let mainlineNext = new Map();   // 본선 조각 → [a 쪽 이웃 본선들, b 쪽 이웃 본선들]
 function linksFC() {
   const building = new Set();
   for (const p of state.projects) {
     if (p.status !== 'building') continue;
     if (p.kind === 'new') p.links.forEach((id) => building.add(id));
   }
-  const features = allLinks().map((l, i) => {
+  const all = allLinks();
+  const pending = (i) => building.has(i) || (i < base.links.length && linkPending(base, state, i));
+  // 같은 두 노드를 잇는 쌍은 하나만 그린다 (twinPrimary 참고)
+  linkTwins = twinPrimary(all.map((l, i) => (state.replaced?.[i] || l.replaced ? null
+    : (() => {
+      const e = linkAt(base, state, i);
+      // 도로는 등급이 달라도 묶는다 (여객선·국경 연결은 따로), 철도는 고속선·일반선을 따로
+      const road = e.mode === 0 && e.cls !== 'ferry' && !e.ext;
+      return { a: l.a, b: l.b, mode: e.mode, k: `${road ? 'road' : `${e.cls}:${e.ext ? 1 : 0}`}:${pending(i) ? 1 : 0}`, rank: road ? ROAD_RANK[e.cls] ?? 9 : 0 };
+    })())));
+  // 고속도로는 본선만 고속도로로 그리고, IC 연결로·접속도로는 일반도로(주요 도로 굵기)로, JC 연결로는 그리지 않는다 (JC가 사거리로 보이게)
+  const mainline = motorwayMainline(all.map((l, i) => (state.replaced?.[i] || l.replaced ? null : linkAt(base, state, i))), nodeCoord, (i) => i >= base.links.length);
+  const features = all.map((l, i) => {
     const eff = linkAt(base, state, i);
-    if (state.replaced?.[i] || l.replaced) {
+    if (state.replaced?.[i] || l.replaced || linkTwins[i] !== i || mainline[i] === 2) {
       const p0 = [l.geom[0], l.geom[1]];   // 길이 0인 선: 그려지지 않는다
       return { type: 'Feature', id: i, properties: { id: i, mode: -1 }, geometry: { type: 'LineString', coordinates: [p0, p0] } };
     }
     const parts = smoothParts(l, i);
     return {
       type: 'Feature', id: i,
-      properties: { id: i, mode: eff.mode, cls: eff.cls, minor: eff.mode === 0 && eff.cls === 'secondary' && !eff.kp ? 1 : 0, building: building.has(i) || (i < base.links.length && linkPending(base, state, i)) ? 1 : 0, colour: eff.colour || '', ext: eff.ext ? 1 : 0, narrow: isNarrow(eff) ? 1 : 0 },
+      properties: { id: i, mode: eff.mode, cls: eff.cls === 'motorway' && eff.mode === 0 && mainline[i] !== 1 ? 'primary' : eff.cls, minor: eff.mode === 0 && eff.cls === 'secondary' && !eff.kp ? 1 : 0, building: pending(i) ? 1 : 0, colour: eff.colour || '', ext: eff.ext ? 1 : 0, narrow: isNarrow(eff) ? 1 : 0 },
       geometry: parts.length > 1 ? { type: 'MultiLineString', coordinates: parts } : { type: 'LineString', coordinates: parts[0] },
     };
   });
+  // 본선의 삐죽한 꺾임을 편다
+  // 같은 이름 본선이 한 노드에서 갈라졌다 다른 한 노드에서 다시 만나는 상·하행 분리 구간은 한 갈래만 그린다
+  const effAll = all.map((l, i) => (state.replaced?.[i] || l.replaced ? null : linkAt(base, state, i)));
+  const bubbles = mainlineBubbles(effAll, mainline, (i) => effAll[i] && linkTwins[i] === i);
+  for (const [h, to] of bubbles) {
+    const p0 = [all[h].geom[0], all[h].geom[1]];
+    features[h] = { type: 'Feature', id: h, properties: { id: h, mode: -1 }, geometry: { type: 'LineString', coordinates: [p0, p0] } };
+  }
+  if (bubbles.size) for (let j = 0; j < linkTwins.length; j++) if (bubbles.has(linkTwins[j])) linkTwins[j] = bubbles.get(linkTwins[j]);
+  const linkEnds = (i) => ({ a: all[i].a, b: all[i].b, pa: nodeCoord(all[i].a), name: linkAt(base, state, i).name });
+  flattenMainline(features, mainline, linkEnds);
+  // JC 연결로를 숨긴 자리: 다른 고속도로에 붙어 끝나는 본선 끝을 상대 본선까지 잇는다 (T자·사거리)
+  connectJunctions(features, mainline, linkEnds);
+  smoothMainlineEnds(features, mainline);
+  // 본선 조각마다 양 끝 노드에서 이어지는 본선 조각 (교통량 0 토막 메우기용, paintVolumes)
+  const mainAt = new Map();
+  features.forEach((f) => { if (mainline[f.id] === 1 && f.properties.mode === 0) for (const nd of [all[f.id].a, all[f.id].b]) { if (!mainAt.has(nd)) mainAt.set(nd, []); mainAt.get(nd).push(f.id); } });
+  mainlineNext = new Map();
+  for (const ids of mainAt.values()) for (const i of ids) { if (!mainlineNext.has(i)) mainlineNext.set(i, []); mainlineNext.get(i).push(ids.filter((j) => j !== i)); }
   return { type: 'FeatureCollection', features };
 }
 
@@ -543,11 +574,24 @@ function smoothParts(l, i) {
 
 function refreshLinks() {
   setLinks(map, linksFC());
-  if (result) {
-    const { vc, vol } = result.links;
-    for (let i = 0; i < vc.length; i++) map.setFeatureState({ source: 'links', id: i }, { vc: vc[i], vol: vol[i] });
-    paintHotspots(map, vc);
+  if (result) paintVolumes();
+}
+
+/** 지도에 교통량·혼잡도를 칠한다. 같은 두 노드를 잇는 쌍(분리 차로·복선)은 대표 링크 하나에 합쳐 칠한다 */
+function paintVolumes() {
+  const m = shownTraffic = mergeTwins(linkTwins || twinPrimary([]), result.links.vc, result.links.vol);
+  // 교통량이 있는 본선 사이에 낀 0 조각: 노선망에서 같은 두 노드를 잇는 옆 일반도로 등으로 교통이 새는 곳(데이터 결함)이라
+  // 지도에는 양옆 본선 가운데 작은 값을 보여 준다 (본선이 회색 토막으로 끊겨 보이지 않게)
+  for (const [i, sides] of mainlineNext) {
+    if (m.vol[i] > 0 || sides.length !== 2) continue;
+    const side = sides.map((ids) => ids.filter((j) => m.vol[j] > 0));
+    if (side.some((ids) => !ids.length)) continue;
+    const pick = side.map((ids) => ids.reduce((b, j) => (m.vol[j] > m.vol[b] ? j : b), ids[0]));
+    const k = m.vol[pick[0]] <= m.vol[pick[1]] ? pick[0] : pick[1];
+    m.vol[i] = m.vol[k]; m.vc[i] = m.vc[k];
   }
+  for (let i = 0; i < m.vc.length; i++) map.setFeatureState({ source: 'links', id: i }, { vc: m.vc[i], vol: m.vol[i] });
+  paintHotspots(map, m.vc);
 }
 
 function nodeCoord(id) {
@@ -1507,7 +1551,7 @@ function renderStats() {
       const e = linkAt(base, state, i);
       if (e.mode !== mode || !e.name || e.ext || i >= result.links.vc.length) return;
       const cur = m.get(e.name) || { vol: 0, vc: 0, cls: e.cls };
-      cur.vol = Math.max(cur.vol, result.links.vol[i]); cur.vc = Math.max(cur.vc, result.links.vc[i]);
+      cur.vol = Math.max(cur.vol, shownTraffic.vol[linkTwins[i]]); cur.vc = Math.max(cur.vc, shownTraffic.vc[linkTwins[i]]);
       m.set(e.name, cur);
     });
     return [...m.entries()];
@@ -3543,7 +3587,8 @@ function header(title) {
 
 function linkPanel(id) {
   const l = linkAt(base, state, id);
-  const vc = result ? result.links.vc[id] : 0, vol = result ? result.links.vol[id] : 0;
+  // 분리 차로 쌍은 합친 값 (지도 색과 같게)
+  const vc = shownTraffic ? shownTraffic.vc[linkTwins[id]] : 0, vol = shownTraffic ? shownTraffic.vol[linkTwins[id]] : 0;
   const speed = result ? result.links.speed[id] : 0;
   const busyProj = state.projects.find((p) => p.status === 'building' && p.links.includes(id));
   const isRoad = l.mode === 0;
