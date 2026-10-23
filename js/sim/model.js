@@ -484,6 +484,8 @@ export class Model {
     const A = this.airports.length;
     const airOD = new Float64Array(A * A), latentOD = new Float64Array(A * A);
     let totals = null;
+    if (!this.odT || this.odT.length !== Z * Z) { this.odT = new Float32Array(Z * Z); this.odTime = new Float32Array(Z * Z); }
+    this.odT.fill(0);
 
     for (let it = 1; it <= iters; it++) {
       this.updateCosts();
@@ -584,6 +586,13 @@ export class Model {
           const inbound = this.isExt[i] && !this.isExt[j] ? P.inboundTourism : 1;
           const T = gravity * (mass[j] + tmass[j] * inbound);
           const tRail = T * eT / sum, tTr = T * eU / sum, tAir = T * eA / sum, tRoad = T - tRail - tTr - tAir;
+          if (it === iters) {
+            // 사업 평가용 OD별 통행량과 시간 비용 (합성 일반화비용에서 운임·유류비 같은 돈 몫을 뺀 것, 분)
+            const money = (eR * km * P.carCostPerKm + eT * km * fare + eU * tfare + eA * afare) / sum / P.vot;
+            this.odT[i * Z + j] = T;
+            this.odTime[i * Z + j] = comp - money;
+            totals.vkt = (totals.vkt || 0) + (tRoad / P.personsPerCar) * km * (1 + P.freightPCUShare);
+          }
           if (tAir > 0) airOD[air.a * A + air.b] += tAir;
           // 운항하지 않는 노선이 열렸다면 생겼을 수요 (자동 취항 판단용)
           if (air.pa >= 0 && air.pot < air.cost - 5) {

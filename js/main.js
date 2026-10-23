@@ -16,6 +16,8 @@ import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.j
 import { kmBetween, routeKey } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
 import { smoothSegments, polylineKm } from './game/curve.js';
+import { trackHeadings, branchTangent, unitDir } from './game/branch.js';
+import { appraise, appraisalHTML, regionOf as appraisalRegion, opexFor } from './game/appraisal.js';
 import { extendWorld, urbanLanes } from './game/world.js';
 import { autoLineName, cityStem, makeForeignTest } from './game/lines.js';
 import { saveSim, loadSim, clearSim } from './game/simstore.js';
@@ -144,7 +146,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { map, base, select, selectBox, renderAll, refreshLinks, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { map, base, select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 /** 관광지를 가장 가까운 존(국외는 같은 이름의 거점)에 하루 방문객으로 붙인다 */
@@ -952,7 +954,31 @@ function nameDraftPoint(pt) {
   }
 }
 
+/**
+ * 철도를 기존 선로에서 이어 그릴 때: 첫 점·끝점이 기존 선로의 역(또는 선로 위 한 점)이면
+ * 그 구간이 기존 선로 접선 방향으로 갈라져 나가고 들어오게 한다 (점의 tan)
+ */
+function applyBranchTangents() {
+  if (!draft) return;
+  for (const p of draft.points) delete p.tan;
+  const spec = NEW_BUILDS[draft.type];
+  if (spec?.mode !== 1 || draft.points.length < 2) return;
+  const links = allLinks().map((_, i) => (state.replaced?.[i] ? null : linkAt(base, state, i)));
+  const ok = (l) => l.mode === 1 && !l.ext && !l.replaced;
+  const pts = draft.points, n = pts.length;
+  for (const [k, nb, out] of [[0, 1, true], [n - 1, n - 2, false]]) {
+    const p = pts[k];
+    if (p.node == null && p.split == null) continue;
+    const hs = trackHeadings(links, nodeCoord, p, ok);
+    // 첫 점: 다음 점 쪽으로 나가는 방향, 끝점: 앞 점에서 들어오는 방향
+    const dir = out ? unitDir([p.lon, p.lat], [pts[nb].lon, pts[nb].lat]) : unitDir([pts[nb].lon, pts[nb].lat], [p.lon, p.lat]);
+    const t = branchTangent(hs.map((h) => (out ? h : [-h[0], -h[1]])), dir);
+    if (t) p.tan = t;
+  }
+}
+
 function drawDraft() {
+  applyBranchTangents();
   // 선형 점(via)은 노선 모양만 잡고 역·IC가 아니므로 그리지 않는다
   const f = draft.points.filter((p) => !p.via).map((p) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [p.lon, p.lat] } }));
   if (draft.points.length > 1) {
@@ -2736,9 +2762,28 @@ function planStraighten() {
   // 후보 선형: 한 번 휜 곡선(휨 0.6·0.3) → 직선 → 옛 경로를 따라 다듬은 선. 옛 경로보다 짧고 바다를 지나지 않는 첫 후보를 쓴다
   const N = 200;
   const cTip = [2 * mid[0] - m0[0], 2 * mid[1] - m0[1]];
+  // 양 끝에서 이어지는 바깥 선로(직선화하지 않는 쪽)의 접선: 새 선형이 그 방향으로 들어오고 나간다
+  const viaSet = new Set(via);
+  const outer = allLinks().map((_, i) => (viaSet.has(i) || state.replaced?.[i] ? null : linkAt(base, state, i)));
+  const okRail = (l) => l.mode === 1 && !l.ext && !l.replaced;
+  const chordDir = unitDir(pa, pb);
+  const tA = branchTangent(trackHeadings(outer, nodeCoord, { node: A, lon: pa[0], lat: pa[1] }, okRail), chordDir);
+  const tB = branchTangent(trackHeadings(outer, nodeCoord, { node: B, lon: pb[0], lat: pb[1] }, okRail), chordDir);
   const bezier = (bow) => {
     const c = [m0[0] + bow * (cTip[0] - m0[0]), m0[1] + bow * (cTip[1] - m0[1])];
-    return Array.from({ length: N + 1 }, (_, k) => { const t = k / N; return [(1 - t) ** 2 * pa[0] + 2 * (1 - t) * t * c[0] + t * t * pb[0], (1 - t) ** 2 * pa[1] + 2 * (1 - t) * t * c[1] + t * t * pb[1]]; });
+    // 2차 곡선을 3차로 올린 뒤, 끝 접선이 있으면 제어점 방향만 기존 선로 쪽으로 돌린다 (길이는 그대로)
+    const ctl = (p, q, t, sgn) => {
+      const v = [(2 / 3) * (q[0] - p[0]), (2 / 3) * (q[1] - p[1])];
+      if (!t) return [p[0] + v[0], p[1] + v[1]];
+      const ck = Math.cos((p[1] * Math.PI) / 180);
+      const len = Math.max(Math.hypot(v[0] * ck, v[1]), (chord / 3) / 111);
+      return [p[0] + (sgn * t[0] * len) / ck, p[1] + sgn * t[1] * len];
+    };
+    const c1 = ctl(pa, c, tA, 1), c2 = ctl(pb, c, tB, -1);
+    return Array.from({ length: N + 1 }, (_, k) => {
+      const t = k / N, u = 1 - t;
+      return [u ** 3 * pa[0] + 3 * u * u * t * c1[0] + 3 * u * t * t * c2[0] + t ** 3 * pb[0], u ** 3 * pa[1] + 3 * u * u * t * c1[1] + 3 * u * t * t * c2[1] + t ** 3 * pb[1]];
+    });
   };
   const smoothPath = () => {
     // 옛 경로를 약 1km 간격으로 솎은 뒤 두 번 다듬는다 (작은 굽이만 편다)
@@ -2823,7 +2868,7 @@ function planStraighten() {
   const kp = isKP(pa[1], pa[0]) && isKP(pb[1], pb[0]);
   const cost = Math.round(newKm * spec.perKm * (kp ? KP_COST_FACTOR : 1) + kept.length * MID_COST.rail);
   const newMin = (newKm / speed) * 60 + kept.length * P.railDwellMin;
-  return { A, B, via, oldKm, oldMin, newKm, newMin, speed, curve, kept, cost, years: spec.years, ctrl, shape, seaShare };
+  return { A, B, via, oldKm, oldMin, newKm, newMin, speed, curve, kept, cost, years: spec.years, ctrl, shape, seaShare, tA, tB };
 }
 
 /** 한반도 육지(시군구 경계) 안인지: 직선화 선형이 바다로 나가지 않게 */
@@ -2909,12 +2954,20 @@ function bindStraighten(el) {
   el.querySelector('#st-prev')?.addEventListener('click', previewStraighten);
 }
 
-function commitStraighten() {
-  const pl = straight.plan;
-  if (!pl) return;
+/** 직선화 선로의 점: 양 끝 역과 옮긴 역. 양 끝은 바깥 선로 접선으로 들어오고 나간다 */
+function straightPoints(pl) {
   const pts = [{ node: pl.A, lon: nodeCoord(pl.A)[0], lat: nodeCoord(pl.A)[1] },
     ...pl.kept.map((k) => ({ node: null, lon: k.pos[0], lat: k.pos[1] })),
     { node: pl.B, lon: nodeCoord(pl.B)[0], lat: nodeCoord(pl.B)[1] }];
+  if (pl.tA) pts[0].tan = pl.tA;
+  if (pl.tB) pts[pts.length - 1].tan = pl.tB;
+  return pts;
+}
+
+function commitStraighten() {
+  const pl = straight.plan;
+  if (!pl) return;
+  const pts = straightPoints(pl);
   const names = {};
   pl.kept.forEach((k, i) => { names[i + 1] = { name: k.name, kind: 'station', auto: false }; });
   const r = startNewBuild(base, state, { type: straight.cls === 'hsr' ? 'hsr' : 'rail', points: pts, names, lineName: straight.line,
@@ -2994,6 +3047,7 @@ function buildNow(clone, p) {
     }
   }
   clone.projects = clone.projects.filter((x) => x !== p);
+  clone.__built = p;
   return p.links;
 }
 
@@ -3036,7 +3090,34 @@ function onPreview(m) {
     </table>
     ${top.length ? `<div class="m">혼잡이 줄어드는 곳: ${top.map(([, n, b, a]) => `${esc(n)} (V/C ${b.toFixed(2)}→${a.toFixed(2)})`).join(' · ')}</div>` : ''}
     ${extra.html ? extra.html({ ...res, touched }, A, clone) : ''}
+    ${m.benefit ? previewAppraisal(m.benefit, res, touched, extra, clone) : ''}
     <p class="hint">실제 효과는 해마다 조금씩 나타나고, 인구·소득 변화에 따라 달라집니다.</p>`);
+}
+
+/** 미리보기 결과로 예타식 평가 (B/C, AHP). 사업비·공기는 미리보기에서 만든 사업(clone.__built)이나 extra에서 */
+function previewAppraisal(benefit, res, touched, extra, clone) {
+  const p = clone.__built || {};
+  const cost = extra.cost ?? p.cost ?? 0, years = extra.years ?? p.years ?? 1;
+  if (!(cost > 0)) return '';
+  const links = touched.map((i) => linkAt(base, clone, i)).filter(Boolean);
+  const km = extra.km ?? links.reduce((s0, l) => s0 + (l.len || 0), 0);
+  const cls = extra.cls ?? links[0]?.cls;
+  const kind = extra.kind ?? (p.kind === 'upgrade' ? 'upgrade' : 'new');
+  const mode = extra.mode ?? links[0]?.mode ?? 0;
+  // 사업이 지나는 존: 구간 양 끝과 가운데에서 가장 가까운 존
+  const zoneAt = (c) => { let best = -1, bd = Infinity; zoneProps.forEach((z, i) => { if (z.ext) return; const d = (z.cx - c[0]) ** 2 + (z.cy - c[1]) ** 2; if (d < bd) { bd = d; best = i; } }); return best; };
+  const nodeAt = (n) => (n < base.nodes.length ? base.nodes[n] : clone.newNodes[n - base.nodes.length]);
+  const zones = links.flatMap((l) => [nodeAt(l.a), nodeAt(l.b)].filter(Boolean).map(zoneAt));
+  const region = appraisalRegion(zoneProps, result?.zones.income, zones.length ? zones : extra.zones || []);
+  const kpN = links.filter((l) => l.kp).length;
+  const border = links.some((l) => { const a = nodeAt(l.a), b = nodeAt(l.b); return a && b && isKP(a[1], a[0]) !== isKP(b[1], b[0]); }) || !!extra.border;
+  const a = appraise({
+    benefit, cost, years, opex: extra.opex ?? opexFor(kind, { cls, km, cost }),
+    policy: { plan: !!(extra.plan || p.plan), congB: res.congB, congA: res.congA, dRail: res.dRail, mode, border, kp: kpN * 2 > links.length, cost },
+    region,
+  });
+  lastPreview.appraisal = a;
+  return appraisalHTML(a, formatWon);
 }
 let lastPreview = null;
 
@@ -3086,7 +3167,7 @@ function previewDraft() {
     const r = startNewBuild(base, c, { type: draft.type, points: draftPointsOn(c), names: {}, lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost });
     if (!r.ok) throw new Error(r.reason);
     return buildNow(c, c.projects[c.projects.length - 1]);
-  }, { kind: 'new', cost: dc.cost });
+  }, { kind: 'new', cost: dc.cost, years: dc.years, km: dc.km, cls: NEW_BUILDS[draft.type].attrs.cls, mode: NEW_BUILDS[draft.type].mode, plan: !!draft.plan });
 }
 
 function previewUpgrade(ids, upId) {
@@ -3103,15 +3184,13 @@ function previewStraighten() {
   const pl = straight?.plan;
   if (!pl) return;
   runPreview(`${straight.line} 직선화 미리보기`, (c) => {
-    const pts = [{ node: pl.A, lon: nodeCoord(pl.A)[0], lat: nodeCoord(pl.A)[1] }, ...pl.kept.map((k) => ({ node: null, lon: k.pos[0], lat: k.pos[1] })),
-      { node: pl.B, lon: nodeCoord(pl.B)[0], lat: nodeCoord(pl.B)[1] }];
-    const r = startNewBuild(base, c, { type: straight.cls === 'hsr' ? 'hsr' : 'rail', points: pts, names: {}, lineName: straight.line });
+    const r = startNewBuild(base, c, { type: straight.cls === 'hsr' ? 'hsr' : 'rail', points: straightPoints(pl), names: {}, lineName: straight.line });
     if (!r.ok) throw new Error(r.reason);
     const p = c.projects[c.projects.length - 1];
     for (const lid of p.links) c.newLinks[lid - base.links.length].speed = pl.speed;
     p.retire = pl.via;
     return buildNow(c, p);
-  });
+  }, { kind: 'new', cost: pl.cost, years: pl.years, km: pl.newKm, cls: straight.cls === 'hsr' ? 'hsr' : 'conv', mode: 1 });
 }
 
 // ------------------------------------------------------------ 저장 슬롯

@@ -76,14 +76,23 @@ self.onmessage = (ev) => {
         model.setNetwork(net);
         const totals = model.assign(msg.ctx.integration, progress(label), true, 1);
         const r = model.linkResults();
-        const out = { totals, vol: r.vol, vc: r.vc, speed: r.speed, svcVol: r.svcVol };
+        const out = { totals, vol: r.vol, vc: r.vc, speed: r.speed, svcVol: r.svcVol, odT: model.odT.slice(), odTime: model.odTime.slice() };
         model.setNetwork(lastNet);
         model.importBaseline(saved.json, saved.bin);
         return out;
       };
       const before = run(lastNet, '효과 미리보기 (지금)');
       const after = run(msg.net, '효과 미리보기 (완공 뒤)');
-      post('preview', { id: msg.id, before, after });
+      // 이용자 편익 (소비자 잉여의 반분법): OD마다 (전 통행 + 후 통행) / 2 × 시간 비용 감소 (분/일)
+      let timeMin = 0;
+      for (let k = 0; k < before.odT.length; k++) {
+        const tb = before.odTime[k], ta = after.odTime[k];
+        if (!isFinite(tb) || !isFinite(ta) || !(before.odT[k] + after.odT[k] > 0)) continue;
+        timeMin += 0.5 * (before.odT[k] + after.odT[k]) * (tb - ta);
+      }
+      const benefit = { timeMin, dVkt: (after.totals.vkt || 0) - (before.totals.vkt || 0) };
+      delete before.odT; delete before.odTime; delete after.odT; delete after.odTime;
+      post('preview', { id: msg.id, before, after, benefit });
     } else if (msg.type === 'route') {
       post('route', { route: model.routeQuery(msg.from, msg.to) });
     } else if (msg.type === 'baseline') {
