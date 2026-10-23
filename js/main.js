@@ -2210,13 +2210,15 @@ function holdElection(only = 'all', reason = '') {
   const L = state.local;
   const regs = regions();
   let gov = { D: 0, P: 0 }, may = { D: 0, P: 0 }, kept = 0, total = 0;
+  // 전국 바람: 선거마다 한쪽으로 쏠린다 (±6%p). 행정구역 개편 같은 보궐 성격 선거에는 약하게
+  const mood = (rng() - 0.5) * (only === 'all' ? 0.12 : 0.06);
   for (const [r, zs] of regs) {
     if (Array.isArray(only) && !only.includes(r)) continue;
     if (only === 'kp' && !zs.some((i) => zoneProps[i].country === 'KP')) continue;
     let w = 0, s = 0;
     for (const i of zs) { const p = zonePop(i); w += p; s += p * leanP(zoneProps[i]); }
     const key = `g:${r}`, cur = L.offices[key];
-    const res = runElection(w > 0 ? s / w : 0.5, cur, rng);
+    const res = runElection(w > 0 ? s / w : 0.5, cur, rng, mood);
     if (cur && cur.party === res.party) { cur.approval = 50 + (cur.approval - 50) / 2; cur.terms = (cur.terms || 1) + 1; kept++; }
     else L.offices[key] = { title: governorTitle(r), region: r, party: res.party, since: state.year, approval: 50, accepted: 0, delivered: 0, terms: 1 };
     L.offices[key].share = res.share;
@@ -2226,7 +2228,7 @@ function holdElection(only = 'all', reason = '') {
         if (Array.isArray(only)) break;   // 광역 단체만 새로 뽑는 경우 (행정구역 개편·독립)
         if (only === 'kp' && zoneProps[i].country !== 'KP') continue;
         const z = zoneProps[i], mk = `m:${i}`, mc = L.offices[mk];
-        const rm = runElection(leanP(z), mc, rng);
+        const rm = runElection(leanP(z), mc, rng, mood);
         if (mc && mc.party === rm.party) { mc.approval = 50 + (mc.approval - 50) / 2; mc.terms = (mc.terms || 1) + 1; }
         else L.offices[mk] = { title: mayorTitle(zoneName(i)), zone: i, party: rm.party, since: state.year, approval: 50, accepted: 0, delivered: 0, terms: 1 };
         L.offices[mk].share = rm.share;
@@ -3477,7 +3479,7 @@ function airportPanel(id) {
 }
 
 function airportName(id) {
-  return effectiveNetwork(base, state).airports.find((a) => a.id === id)?.name.replace(/(국제공항|공항|비행장)$/, '') || id;
+  return effectiveNetwork(base, state).airports.find((a) => a.id === id)?.name.replace(/\s*(국제공항|공항|비행장)$/, '').trim() || id;
 }
 
 /** 공항 패널의 노선 목록: 운항 중 노선(여객·탑승률), 잠재 수요가 큰 미취항 노선, 직접 개설 */

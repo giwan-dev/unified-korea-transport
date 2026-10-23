@@ -473,7 +473,11 @@ export class Model {
     for (let j = 0; j < Z; j++) tmass[j] = ((this.tour[j] + this.tourKP[j] * integration) * P.tourismMass) / 1e4;
     const iters = warm ? P.msaIterationsWarm : P.msaIterations;
     // 지난해 교통량을 앞선 반복 몇 번 분으로 친다 (한 번의 전량배정이 혼잡을 다시 한곳에 몰지 않도록 1/4씩 섞는다)
-    const offset = warm ? (offsetOverride ?? P.warmMsaOffset) : 0;
+    // 새 노선이 열린 해(offsetOverride)에도 나머지 망은 평소대로 천천히 섞고, 지난해 이용이 없던 링크(새로 열린 구간)만
+    // 빨리 섞어 첫해 이용이 바로 잡히게 한다. 망 전체를 빨리 섞으면 혼잡이 출렁여 총 통행이 몇 %씩 튄다.
+    const offset = warm ? P.warmMsaOffset : 0;
+    const fresh = warm && offsetOverride != null ? this.volume.map((v) => (v === 0 ? 1 : 0)) : null;
+    const freshOffset = offsetOverride ?? offset;
     const pick = [];
     const lam = P.logitLambda;
     const A = this.airports.length;
@@ -636,7 +640,7 @@ export class Model {
       }
       // 운행 계통 이용객은 밑의 실제 선로도 함께 쓴다 (선로 용량 공유)
       for (const v of this.virtual) for (const l of L[v].via) aux[l] += aux[v];
-      for (let l = 0; l < L.length; l++) this.volume[l] += (aux[l] - this.volume[l]) / (it + offset);
+      for (let l = 0; l < L.length; l++) this.volume[l] += (aux[l] - this.volume[l]) / (it + (fresh?.[l] ? freshOffset : offset));
       this.updateStationWaits(it + offset);
       for (let k = 0; k < airOD.length; k++) this.airOD[k] += (airOD[k] - this.airOD[k]) / (it + offset);
       this.latentOD.set(latentOD);

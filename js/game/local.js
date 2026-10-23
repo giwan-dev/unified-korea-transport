@@ -82,8 +82,9 @@ export function leanP(z) {
 }
 
 /** 선거 한 번: 현직 정당의 득표에 지지율(50 기준)과 실적을 반영. rnd: 0~1 난수 함수 */
-export function runElection(lean, office, rnd) {
-  let p = lean;
+/** mood: 이번 선거의 전국 바람 (국민의힘 쪽 +, 모든 지역에 같이 붙는다) */
+export function runElection(lean, office, rnd, mood = 0) {
+  let p = lean + mood;
   if (office) {
     const swing = ((office.approval - 50) / 50) * 0.12 + Math.min(0.06, (office.delivered || 0) * 0.015);
     p += office.party === 'P' ? swing : -swing;

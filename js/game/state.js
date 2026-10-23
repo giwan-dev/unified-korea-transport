@@ -525,8 +525,10 @@ export function startNewBuild(base, state, plan) {
   for (const r of plan.restAreas || []) (state.restAreas ||= []).push({ ...r, built: false, links: links.map((l) => l.id) });
   const endName = (i) => plan.points[i].name || nameOf(state, nodeIds[i]) || '';
   // 기존선 연장은 노선 이름을 이어 쓰고, 신설은 새 노선으로 적는다
-  const span = `${endName(0)}–${endName(nodeIds.length - 1)} (${kmTotal.toFixed(0)}km)`;
-  const label = plan.extendOf ? `${plan.extendOf} 연장 ${span}` : `${plan.lineName ? `${plan.lineName} ` : ''}${spec.label} ${span}`;
+  // 끝점 이름이 없으면(이름 없는 도로 노드) 길이만 적는다
+  const e0 = endName(0), e1 = endName(nodeIds.length - 1);
+  const span = `${e0 && e1 ? `${e0}–${e1} ` : ''}(${kmTotal.toFixed(0)}km)`;
+  const label = plan.extendOf ? `${plan.extendOf} 연장 ${span}` : `${plan.lineName ? `${plan.lineName} · ` : ''}${spec.label} ${span}`;
   startProject(state, {
     id: crypto.randomUUID(), kind: 'new', type: plan.type, links: links.map((l) => l.id), extension: !!plan.extendOf,
     stations: spec.mode >= 1 ? nodeIds.filter((_, i) => plan.names[i]?.kind === 'station') : [],
@@ -643,6 +645,11 @@ export function isKP(lat, lon) {
 export function advanceBudgetYear(base, state) {
   const d = DIFFICULTY[state.difficulty];
   state.year += 1;
+  // 쓰지 않은 예산은 한 해 치까지만 이월하고 나머지는 불용 처리한다 (국고로 돌아간다)
+  if (state.budget > d.annualBudget) {
+    state.log.unshift(`${state.year - 1}년 예산 불용: ${formatWon(state.budget - d.annualBudget)} (이월은 연 예산 ${formatWon(d.annualBudget)}까지)`);
+    state.budget = d.annualBudget;
+  }
   state.budget += d.annualBudget;
   if (state.debt > 0) {
     const interest = Math.round(state.debt * d.interest);
