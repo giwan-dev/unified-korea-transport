@@ -462,7 +462,31 @@ function smoothParts(l, i) {
     if (Number.isNaN(g[k])) parts.push([]);
     else parts[parts.length - 1].push([g[k], g[k + 1]]);
   }
-  const out = parts.map((p) => {
+  // 도형 끝을 노드에 잇는다: 계산망 노드는 격자 칸의 교차점 좌표라 OSM 도형 끝과 떨어져 있을 수 있다.
+  // 이웃 구간도 같은 노드로 이어지므로 선이 끊겨 보이지 않는다. 조각 사이 빈틈(500m 안)도 짧게 잇는다
+  const pts = parts.filter((p) => p.length);
+  if (pts.length && l.a != null && l.b != null) {
+    const A = nodeCoord(l.a), B = nodeCoord(l.b);
+    const d2 = (p, q) => ((p[0] - q[0]) * 0.8) ** 2 + (p[1] - q[1]) ** 2;
+    const ends = pts.flatMap((p) => [p[0], p[p.length - 1]]);
+    const near = (q) => ends.reduce((best, e) => (d2(e, q) < d2(best, q) ? e : best), ends[0]);
+    const link = [];
+    if (A) { const e = near(A); if (d2(e, A) > 2.5e-7) link.push([A, e]); }
+    if (B) { const e = near(B); if (d2(e, B) > 2.5e-7) link.push([e, B]); }
+    if (pts.length > 1) {
+      const verts = pts.map((p, k) => p.map((v) => [v, k])).flat();
+      pts.forEach((p, k) => {
+        for (const e of [p[0], p[p.length - 1]]) {
+          if ((A && d2(e, A) < 1e-7) || (B && d2(e, B) < 1e-7)) continue;
+          let best = null, bd = Infinity;
+          for (const [v, kk] of verts) { if (kk === k) continue; const dd = d2(v, e); if (dd < bd) { bd = dd; best = v; } }
+          if (best && bd > 1e-9 && bd < 2.5e-5) link.push([e, best]);
+        }
+      });
+    }
+    parts.push(...link);
+  }
+  const out = parts.filter((p) => p.length > 1).map((p) => {
     if (p.length < 3) return p;
     const q = [p[0]];
     for (let k = 0; k + 1 < p.length; k++) {
@@ -822,10 +846,11 @@ function showRoute(r) {
 
 function addDraftPoint(lngLat) {
   const spec = NEW_BUILDS[draft.type];
-  let node = snap.node ? nearestNode(lngLat, spec.mode, 14) : null;
+  // 노드는 화면 24px, 선은 16px 안이면 붙인다 (정확히 누르지 않아도 되게)
+  let node = snap.node ? nearestNode(lngLat, spec.mode, 24) : null;
   let split = null;
   if (node == null && snap.line) {
-    const on = nearestOnLink(lngLat, spec.mode, 10);
+    const on = nearestOnLink(lngLat, spec.mode, 16);
     if (on) { split = on.link; lngLat = on.lngLat; }
   }
   // 도로는 끝점이 기존 도로망에 붙어야 하므로 첫 점이 허공이면 20km 안의 가장 가까운 노드로 붙인다
@@ -957,10 +982,7 @@ function commitDraft() {
   if (!draft || draft.points.length < 2) return;
   const spec = NEW_BUILDS[draft.type];
   const last = draft.points[draft.points.length - 1];
-  if (spec.mode === 0 && last.node == null) {
-    alert('도로의 끝점은 기존 도로에 연결해야 합니다. 마지막 점을 도로 위에 찍어 주세요.');
-    return;
-  }
+  if (spec.mode === 0 && !attachRoadEnd(last)) { alert('끝점 5km 안에 이을 도로가 없습니다. 마지막 점을 도로 가까이에 찍어 주세요.'); return; }
   const names = {};
   draft.points.forEach((p, i) => { if (p.name && !p.existing) names[i] = { name: p.name, kind: p.kind, auto: p.auto !== false }; });
   const dc = draftCost();
@@ -1118,7 +1140,7 @@ function renderBuild() {
       ${draft.extendOf || draft.extend === false ? `<div class="name-row"><label><input type="checkbox" id="draft-extend" ${draft.extendOf ? 'checked' : ''}>
         기존 노선의 연장으로 놓기${draft.extendOf ? ` (${esc(draft.extendOf)})` : ''}</label></div>` : ''}
       ${draft.points.length > 1 ? `<p class="hint">${draft.extendOf ? `기존선 연장: ${esc(draft.extendOf)}의 종점에서 이어 같은 노선 이름을 씁니다.` : '신설 노선: 새 노선 이름을 붙입니다.'}</p>` : ''}
-      <p class="hint">기존 ${spec.mode ? '선로' : '도로'} 근처를 누르면 연결됩니다. ${spec.mode ? '각 점은 역이 됩니다.' : '도로는 양 끝을 기존 도로에 붙여야 합니다.'}
+      <p class="hint">기존 ${spec.mode ? '선로' : '도로'} 근처를 누르면 연결됩니다. ${spec.mode ? '각 점은 역이 됩니다.' : '도로 끝점이 기존 도로에 닿지 않으면 착공할 때 가장 가까운 도로(5km 안)에 저절로 이어집니다.'}
       Backspace: 마지막 점 지우기 · Enter: 착공 · Esc: 취소</p>
       <div>${draft.points.map((p, i) => pointRow(p, i)).join('') || '<p class="hint">시작점을 누르세요.</p>'}</div>
       <table class="kv" style="margin-top:8px">
@@ -2161,10 +2183,12 @@ function localSettingsHTML() {
   const L = state.local;
   const pops = new Map();
   zoneProps.forEach((z, i) => { if (!z.ext) pops.set(z.name, (pops.get(z.name) || 0) + zonePop(i)); });
-  const promotable = L.historic
-    ? HISTORIC_CITIES.filter((c) => !L.independent.includes(c) && zoneProps.some((z) => z.province === c))
-    : [...pops].filter(([n, p]) => p >= PROMOTE_MIN_POP && /시$/.test(n) && !isMetroCity(n) && !L.independent.includes(n)
-      && zoneProps.some((z) => z.name === n && !isMetroCity(z.province))).map(([n]) => n);
+  // 복원 뒤에는 북측 옛 직할시(평양·남포)를 다시 독립시킬 수 있고, 남측은 언제나 인구 100만 이상 시를 광역시로 승격할 수 있다
+  const promotable = [
+    ...(L.historic ? HISTORIC_CITIES.filter((c) => !L.independent.includes(c) && zoneProps.some((z) => z.province === c)) : []),
+    ...[...pops].filter(([n, p]) => p >= PROMOTE_MIN_POP && /시$/.test(n) && !isMetroCity(n) && !L.independent.includes(n)
+      && zoneProps.some((z) => z.name === n && z.country === 'KR' && !isMetroCity(z.province))).map(([n]) => n),
+  ];
   const next = state.year < ELECTION.firstYear ? ELECTION.firstYear
     : ELECTION.firstYear + Math.ceil((state.year - ELECTION.firstYear + 1) / ELECTION.every) * ELECTION.every;
   return `<h4>지방자치</h4>
@@ -2172,11 +2196,11 @@ function localSettingsHTML() {
     ${L.autonomyKP ? '<p class="hint">북측 지방자치 시행 중.</p>' : `<div class="item"><div class="t">북측 지방자치 도입</div>
       <div class="m">북측에도 도지사·시장·군수를 선거로 뽑습니다. 남북 통합도 30% 이상 · ${formatWon(EVENT_COST.autonomy)}</div>
       <button class="small primary" id="ev-autonomy" ${state.integration >= 0.3 ? '' : 'disabled'}>도입</button></div>`}
-    ${L.historic ? '<p class="hint">1945년 이전 13도 체제로 행정구역을 되돌렸습니다.</p>' : `<div class="item"><div class="t">1945년 이전 행정구역 복원 (13도)</div>
-      <div class="m">광역시·특별시와 북측의 신설 도(자강·량강 등)를 1945년 이전의 도로 되돌립니다. 광역단체장을 새로 뽑고, 북측 주민 행복도가 조금 오릅니다 · ${formatWon(EVENT_COST.historic)}</div>
+    ${L.historic ? '<p class="hint">북측 행정구역을 1945년 이전으로 되돌렸습니다 (강원북도·강원남도).</p>' : `<div class="item"><div class="t">북측 행정구역 1945년 이전으로 복원</div>
+      <div class="m">북측의 신설 도·직할시(자강·량강·평양·남포·라선·황해남북도 등)를 1945년 이전의 도로 되돌립니다. 강원도는 강원북도(북측)와 강원남도(남측)로 부르고, 개성은 경기도로 돌아갑니다. 바뀐 곳의 광역단체장을 새로 뽑고, 북측 주민 행복도가 조금 오릅니다 · ${formatWon(EVENT_COST.historic)}</div>
       <button class="small primary" id="ev-historic">복원</button></div>`}
-    <div class="item"><div class="t">${L.historic ? '광역시 독립' : '광역시 승격'}</div>
-      <div class="m">${L.historic ? '1945년 이전 체제에서 큰 도시를 도에서 다시 떼어 냅니다.' : `인구 ${PROMOTE_MIN_POP / 1e4}만 이상 시를 도에서 떼어 광역시로 만듭니다.`} 시장을 따로 뽑습니다 · 한 곳 ${formatWon(EVENT_COST.independence)}</div>
+    <div class="item"><div class="t">광역시 독립·승격</div>
+      <div class="m">${L.historic ? '북측 옛 직할시(평양·남포)를 도에서 다시 떼어 내거나, ' : ''}인구 ${PROMOTE_MIN_POP / 1e4}만 이상 시를 도에서 떼어 광역시로 만듭니다. 시장을 따로 뽑습니다 · 한 곳 ${formatWon(EVENT_COST.independence)}</div>
       <div class="row" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${promotable.map((c) => `<button class="small" data-ev-city="${esc(c)}">${esc(c)}</button>`).join('') || '<span class="m">대상 도시가 없습니다.</span>'}</div>
       ${L.independent.length ? `<div class="m" style="margin-top:4px">독립·승격한 도시: ${L.independent.map(esc).join(', ')}</div>` : ''}</div>`;
 }
@@ -2197,13 +2221,17 @@ function bindLocalSettings(el) {
     save(state); renderAll();
   });
   el.querySelector('#ev-historic')?.addEventListener('click', () => {
-    if (!confirm('행정구역을 1945년 이전 13도 체제로 되돌릴까요? 광역단체장을 새로 뽑습니다.')) return;
+    if (!confirm('북측 행정구역을 1945년 이전으로 되돌릴까요? 바뀐 곳의 광역단체장을 새로 뽑습니다.')) return;
     if (!payEvent(EVENT_COST.historic)) return;
+    // 구성(소속 시군구)이 바뀌는 광역 단체만 새로 뽑는다
+    const key = (m) => new Map([...m].map(([r, zs]) => [r, zs.join(',')]));
+    const before = key(regions());
     L.historic = true;
-    for (const k of Object.keys(L.offices)) if (k.startsWith('g:')) delete L.offices[k];
     zoneProps.forEach((z, i) => { if (z.country === 'KP' && !z.ext) state.happyBonus[i] = (state.happyBonus[i] || 0) + 3; });
-    holdElection([...regions().keys()], '행정구역 개편 뒤 광역단체장 선거');
-    state.log.unshift(`${state.year}년 행정구역을 1945년 이전 13도 체제로 되돌렸습니다.`);
+    const changed = [...key(regions())].filter(([r, zs]) => before.get(r) !== zs).map(([r]) => r);
+    for (const k of Object.keys(L.offices)) if (k.startsWith('g:') && !regions().has(k.slice(2))) delete L.offices[k];
+    holdElection(changed, '행정구역 개편 뒤 광역단체장 선거');
+    state.log.unshift(`${state.year}년 북측 행정구역을 1945년 이전으로 되돌렸습니다 (강원북도·강원남도).`);
     save(state); renderAll();
   });
   el.querySelectorAll('[data-ev-city]').forEach((b) => {
@@ -2521,9 +2549,10 @@ function onPreview(m) {
   const relief = [];
   for (let i = 0; i < nB; i++) {
     const l = linkAt(base, state, i);
-    if (!l.name || touched.includes(i)) continue;
+    // 구간을 잘라 새 구간으로 바꾼 곳(중간 IC·역)은 사라진 것이지 덜어진 것이 아니다
+    if (!l.name || touched.includes(i) || clone.replaced?.[i]) continue;
     const d = B.vol[i] - A.vol[i];
-    if (d > 0 && B.vc[i] > 0.6) relief.push([d, l.name, B.vc[i], A.vc[i]]);
+    if (d > 0.05 * B.vol[i] && B.vc[i] > 0.6) relief.push([d, l.name, B.vc[i], A.vc[i]]);
   }
   relief.sort((x, y) => y[0] - x[0]);
   const seen = new Set(), top = relief.filter(([, n]) => (seen.has(n) ? false : seen.add(n))).slice(0, 4);
@@ -2561,13 +2590,38 @@ function showPreviewBox(html) {
   el.querySelector('.close').onclick = () => { el.hidden = true; };
 }
 
-/** 그리는 중인 신설 노선 미리보기 (중간 IC·역을 새로 만드는 점은 그 자리 노드 없이 계산) */
+/** 도로의 끝점이 기존 도로에 닿지 않았으면 가장 가까운 도로(5km 안)로 저절로 잇는다. 이을 곳이 없으면 false */
+function attachRoadEnd(pt, rename = true) {
+  if (pt.node != null || pt.split != null) return true;
+  const ll = { lng: pt.lon, lat: pt.lat };
+  const on = nearestOnLink(ll, 0, 60);
+  const nd = nearestNode(ll, 0, null, 5);
+  const ndKm = nd != null ? kmBetween(pt.lon, pt.lat, ...nodeCoord(nd)) : Infinity;
+  const onKm = on ? kmBetween(pt.lon, pt.lat, on.lngLat.lng, on.lngLat.lat) : Infinity;
+  if (nd == null && !on) return false;
+  if (on && onKm + 0.3 < ndKm) { pt.split = on.link; pt.lon = on.lngLat.lng; pt.lat = on.lngLat.lat; }
+  else { pt.node = nd; [pt.lon, pt.lat] = nodeCoord(nd); }
+  if (draft && rename) nameDraftPoint(pt);
+  return true;
+}
+
+/** 그리기 점을 복사한 상태(c)에 맞춘다: 기존 노선 중간에 놓은 점은 그 상태에서 구간을 잘라 새 IC·역 노드로 만든다 */
+function draftPointsOn(c) {
+  const road = NEW_BUILDS[draft.type].mode === 0;
+  return draft.points.map((p, i) => {
+    const q = { ...p };
+    if (road && i === draft.points.length - 1) attachRoadEnd(q, false);
+    if (q.split != null) { q.node = splitLink(base, c, q.split, q.lon, q.lat); q.split = null; }
+    return q;
+  });
+}
+
+/** 그리는 중인 신설 노선 미리보기 (기존 노선 중간에 놓은 점도 그 자리를 잘라 이어서 계산) */
 function previewDraft() {
   if (!draft || draft.points.length < 2) return;
   const dc = draftCost();
-  const pts = draft.points.map((p) => ({ ...p, split: null }));
   runPreview(`${draftLineName() || NEW_BUILDS[draft.type].label} 미리보기`, (c) => {
-    const r = startNewBuild(base, c, { type: draft.type, points: pts, names: {}, lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost });
+    const r = startNewBuild(base, c, { type: draft.type, points: draftPointsOn(c), names: {}, lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost });
     if (!r.ok) throw new Error(r.reason);
     return buildNow(c, c.projects[c.projects.length - 1]);
   }, { kind: 'new', cost: dc.cost });
@@ -2715,10 +2769,9 @@ function evaluateDraftPPP() {
   const p = draft.ppp, spec = NEW_BUILDS[draft.type];
   const kind = tollKind({ mode: spec.mode, cls: spec.attrs.cls });
   const dc = draftCost();
-  const pts = draft.points.map((x) => ({ ...x, split: null }));
   const sig = pppSig(p);
   runPreview(`${draftLineName() || spec.label} 수요 예측 (${PPP_TYPES[p.type].label})`, (c) => {
-    const r = startNewBuild(base, c, { type: draft.type, points: pts, names: {}, lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost,
+    const r = startNewBuild(base, c, { type: draft.type, points: draftPointsOn(c), names: {}, lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost,
       ppp: { type: p.type, subsidy: p.subsidy, toll: linkToll(kind, p.type, p.tollMult) } });
     if (!r.ok) throw new Error(r.reason);
     return buildNow(c, c.projects[c.projects.length - 1]);
