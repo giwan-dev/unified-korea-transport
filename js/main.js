@@ -29,6 +29,7 @@ import { seedInterKoreaAir, airlinesHTML } from './game/airlines.js';
 import { develPlan, startDevel, settleDevels } from './game/devel.js';
 import { newlyUnlocked, unlockedTourKP, unlockAt } from './game/tourism.js';
 import { showNotice } from './ui/notice.js';
+import { parseRequest, metroPlan, cityCenter } from './game/recommend.js';
 import { addTrainsLayer, setTrainsProvider, invalidateTrains, setTrains, trainsLegend } from './ui/trainsmap.js';
 import { registerSentimentMetrics, initSubBase, subGains, zoneGains, nationalFactor, updateMayorApproval, pShare, subValue } from './game/sentiment.js';
 import { addPlansLayer, showPlanLine } from './ui/plansmap.js';
@@ -160,7 +161,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { map, base, select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { map, base, select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
@@ -1369,6 +1370,9 @@ function renderBuild() {
     + `<button data-build="airport" class="${draft?.type === 'airport' ? 'on' : ''}">${AIRPORT.build.label}<span class="c">${formatWon(AIRPORT.build.cost)} · ${AIRPORT.build.years}년</span></button>`;
   let body = `<div class="row" style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px"><button class="small svc-pick-b">역 골라 특급·급행 짜기</button>
     <button class="small" data-padd="station">역 신설 (노선 위 한 점)</button><button class="small" data-padd="ic">IC 신설 (고속도로 위 한 점)</button></div>
+    <div class="name-row" style="margin-bottom:4px"><input type="text" id="rec-text" placeholder="예: 평양에 도시철도 3호선을 짓고 싶어, 노선을 추천해줘" style="flex:1">
+      <button class="small primary" id="rec-go">노선 추천</button></div>
+    <p class="hint" id="rec-msg">${esc(recMsg)}</p>
     <p class="hint">기존 도로·철도를 개량하려면 지도에서 구간을 누르세요. <b>Shift를 누른 채 끌면</b> 여러 구간을 한꺼번에 골라 개량할 수 있습니다. 새 노선을 놓으려면 아래에서 종류를 고른 뒤 지도를 차례로 누르세요.</p>`;
   if (draft) {
     if (draft.type === 'airport') {
@@ -1385,6 +1389,7 @@ function renderBuild() {
     const affordable = canAfford(state, cost, years, draftFund);
     const lineName = draftLineName();
     body = `<h4>${spec.label}</h4>
+      ${draft.recNote ? `<p class="hint">${esc(draft.recNote)}</p>` : ''}
       ${lineName ? `<div class="name-row"><span class="kind">노선</span><input type="text" id="line-name" value="${esc(lineName)}"></div>` : ''}
       ${draft.extendOf || draft.extend === false ? `<div class="name-row"><label><input type="checkbox" id="draft-extend" ${draft.extendOf ? 'checked' : ''}>
         기존 노선의 연장으로 놓기${draft.extendOf ? ` (${esc(draft.extendOf)})` : ''}</label></div>` : ''}
@@ -1424,6 +1429,9 @@ function renderBuild() {
   el.querySelectorAll('[data-plan]').forEach((b) => { b.onclick = () => openPlan(b.dataset.plan); });
   el.querySelectorAll('.svc-pick-b').forEach((b) => { b.onclick = startServicePick; });
   el.querySelectorAll('[data-padd]').forEach((b) => { b.onclick = () => startPointAdd(b.dataset.padd); });
+  const recGo = () => recommendRoute(el.querySelector('#rec-text').value);
+  el.querySelector('#rec-go')?.addEventListener('click', recGo);
+  el.querySelector('#rec-text')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.stopPropagation(); recGo(); } });
   bindRestore(el);
   el.querySelectorAll('[data-build]').forEach((b) => { b.onclick = () => startDraft(b.dataset.build); });
   if (draft) {
@@ -3189,6 +3197,69 @@ function afterStraighten(done) {
     const plan = planService(links, railStationSet(), s.stops, s.kind, new Set(s.lines || [s.line]), s.type);
     if (plan) { s.segs = plan.segs; s.runMin = plan.runMin; s.km = plan.km; s.trains = tripsPerDay(s.sets, plan.runMin); }
   }
+}
+
+// ------------------------------------------------------------ 문장으로 노선 추천
+
+let recMsg = '문장으로 바라는 노선을 적으면(도시·수단), 인구가 많은데 역이 없는 곳을 잇는 안을 만들어 그리기로 엽니다.';
+
+function recommendRoute(text) {
+  const req = parseRequest(text || '', zoneProps);
+  const say = (m) => { recMsg = m; const el = $('#rec-msg'); if (el) el.textContent = m; };
+  if (!req.cities.length) { say('문장에서 도시 이름을 찾지 못했습니다. 예: "대전에 도시철도 3호선", "청주와 전주를 잇는 고속도로".'); return; }
+  const mode = req.mode || (req.cities.length === 1 ? 'metro' : 'rail');
+  const city = req.cities[0];
+  const pop = (i) => zonePop(i);
+  const stationXY = [...new Set([...base.stations, ...(base.metro_stations || [])].map((s) => s[1]).concat(state.newStations))]
+    .filter((n) => !foreignCountry(n)).map(nodeCoord).filter(Boolean);
+  let points, title, why;
+  if (mode === 'metro') {
+    const subs = new Set(city.zones.flatMap((i) => zoneProps[i].subs.map((_, k) => zoneProps[i].sub0 + k)));
+    const plan = metroPlan(grid, subs, stationXY);
+    if (!plan) { say(`${city.name}에서 역이 없는 인구 밀집지를 충분히 찾지 못했습니다 (이미 역이 촘촘합니다).`); return; }
+    const used = new Set(allLinks().filter((l) => l.mode === 2 && l.name?.startsWith(city.name)).map((l) => l.name));
+    const no = req.number || (used.size + 1);
+    title = `${city.name} 도시철도 ${no}호선`;
+    points = plan.points.map(([lon, lat]) => ({ node: null, lon, lat, split: null }));
+    why = `${title} 추천안: 역 ${points.length}곳, 약 ${plan.km.toFixed(0)}km. 지금 역(반경 800m)이 닿지 않는 인구 밀집지 약 ${Math.round(plan.served / 1000).toLocaleString()}천 명을 잇습니다. 지도에서 확인하고 고친 뒤 착공하세요.`;
+  } else {
+    const spec = NEW_BUILDS[mode];
+    const a = cityCenter(zoneProps, city.zones, pop);
+    let bCity = req.cities[1];
+    if (!bCity) {
+      // 가장 가까운 큰 도시 (인구 30만 이상, 같은 도시 제외)
+      const big = new Map();
+      zoneProps.forEach((z, i) => { if (!z.ext && !city.zones.includes(i)) { const k = z.province?.match(/(시|특별자치시)$/) ? z.province : z.name; if (!big.has(k)) big.set(k, []); big.get(k).push(i); } });
+      let best = null, bd = Infinity;
+      for (const [k, zs] of big) {
+        if (zs.reduce((s0, i) => s0 + pop(i), 0) < 300000) continue;
+        const c = cityCenter(zoneProps, zs, pop), d = c && kmBetween(a[0], a[1], c[0], c[1]);
+        if (d > 15 && d < bd) { bd = d; best = { name: k.replace(/(특별자치시|특별시|광역시|시)$/, ''), zones: zs }; }
+      }
+      bCity = best;
+    }
+    if (!a || !bCity) { say('이을 상대 도시를 찾지 못했습니다.'); return; }
+    const b = cityCenter(zoneProps, bCity.zones, pop);
+    const snapTo = (c) => {
+      const n = nearestNode({ lng: c[0], lat: c[1] }, spec.mode, null, spec.mode === 0 ? 8 : 6);
+      return n != null ? { node: n, lon: nodeCoord(n)[0], lat: nodeCoord(n)[1], split: null } : { node: null, lon: c[0], lat: c[1], split: null };
+    };
+    points = [snapTo(a), snapTo(b)];
+    title = `${city.name}–${bCity.name} ${spec.label.replace(/ 신설.*$/, '')}`;
+    const d = kmBetween(a[0], a[1], b[0], b[1]);
+    why = `${title} 추천안: 두 도시 중심(인구 가중)을 잇는 직선 약 ${d.toFixed(0)}km. 경유지를 눌러 더하거나 기존 ${spec.mode ? '역' : 'IC'}에 붙여 고친 뒤 착공하세요.`;
+  }
+  const type = mode;
+  startDraft(type);
+  for (const p of points) { draft.points.push(p); nameDraftPoint(p); }
+  draft.lineName = title;
+  draft.lineNameEdited = true;
+  draft.recNote = why;
+  drawDraft();
+  renderBuild();
+  say(why);
+  const xs = draft.points.map((p) => p.lon), ys = draft.points.map((p) => p.lat);
+  map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: 80, maxZoom: 12 });
 }
 
 // ------------------------------------------------------------ 역·IC 신설 (기존 노선 위 한 점)
