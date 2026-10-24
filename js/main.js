@@ -1141,7 +1141,7 @@ function showRoute(r) {
   map.getSource('route').setData({ type: 'FeatureCollection', features: feats });
 }
 
-/** 그리는 중인 새 노선 위(10px 안)를 눌렀으면 그 구간 앞뒤 점 사이에 끼울 자리 {index, lon, lat} */
+/** 그리는 중인 새 노선 위(18px 안)를 눌렀으면 그 구간 앞뒤 점 사이에 끼울 자리 {index, lon, lat} */
 function draftInsertAt(lngLat) {
   if (!draft || draft.points.length < 2) return null;
   const p = map.project(lngLat);
@@ -1155,7 +1155,7 @@ function draftInsertAt(lngLat) {
       const dx = b.x - a.x, dy = b.y - a.y;
       const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
       const d = Math.hypot(a.x + t * dx - p.x, a.y + t * dy - p.y);
-      if (d <= 10 && (!best || d < best.d)) {
+      if (d <= 18 && (!best || d < best.d)) {
         const ll = map.unproject([a.x + t * dx, a.y + t * dy]);
         best = { d, index: i + 1, lon: ll.lng, lat: ll.lat };
       }
