@@ -108,5 +108,5 @@ export function appraisalHTML(a, fmt) {
       ${row(`지역균형발전 <span class="m">(소득 남측 평균의 ${Math.round(a.rel * 100)}%)</span>`, a.w.balance ? `${n2(a.w.balance)} · ${n2(a.balance)}` : '<span class="m">수도권 사업 (보지 않음)</span>')}
       ${row('<b>AHP 종합</b>', `<b class="${a.ok ? 'pos' : 'neg'}">${n2(a.ahp)} · ${a.ok ? '시행 타당' : '시행 부적절'}</b>`)}
     </table>
-    <p class="hint">할인율 ${(APPRAISAL.rate * 100).toFixed(1)}% · 운영 ${APPRAISAL.years}년 · 하루 편익 × ${APPRAISAL.daysPerYear}일. 편익은 지금 그대로(대조군)와 다 지은 뒤(처리군)의 한 해 통행배정 차이로, 이용자 편익은 반분법(rule of half)으로 셉니다. AHP 0.5 이상이면 시행이 타당하다고 봅니다.</p>`;
+    <p class="hint">할인율 ${(APPRAISAL.rate * 100).toFixed(1)}% · 운영 ${APPRAISAL.years}년 · 하루 편익 × ${APPRAISAL.daysPerYear}일. 편익은 지금 교통량을 그대로 두고 지금 망(대조)과 다 지은 망(처리)으로 수단·경로를 다시 구한 차이이며(바뀐 구간만 교통량을 다시 정함), 이용자 편익은 반분법(rule of half)으로 셉니다. AHP 0.5 이상이면 시행이 타당하다고 봅니다.</p>`;
 }

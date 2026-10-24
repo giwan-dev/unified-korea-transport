@@ -6,6 +6,7 @@ import { smoothSegments, polylineKm } from './curve.js';
 import { serviceLinks } from './services.js';
 import { initRail, operatorOf, OPERATORS, OP_FACTORS, MERGE_MIN_INTEGRATION, EQUITY_STEP } from './operators.js';
 import { MEGA, applyMega, TSR_FREIGHT } from './mega.js';
+import { dueum } from './local.js';
 
 const SAVE_KEY = 'ukt-save-v1';
 const START_YEAR = 2026;
@@ -588,7 +589,15 @@ export function placeKey(level, id) { return `${level === 'zone' ? 'z' : 'u'}:${
 
 /** 플레이어가 바꾼 이름이 있으면 그것, 없으면 원래 이름 */
 export function placeName(state, level, id, original) {
-  return state.placeNames?.[placeKey(level, id)] || original;
+  const key = placeKey(level, id);
+  const name = state.placeNames?.[key] || state.adminNames?.[key];
+  if (name) return name;
+  // 노동자구 폐지(행정구역 정리): 읍면동 단위 '…노동자구'를 '…리'로
+  let out = original;
+  if (level === 'unit' && state.local?.admin?.workers === 'abolish' && /노동자구$/.test(out || '')) out = out.replace(/노동자구$/, '리');
+  // 두음법칙(행정구역 정리): 남측 지명은 이미 맞춰져 있어 바뀌지 않는다
+  if (level === 'unit' && state.local?.admin?.dueum === 'apply') out = dueum(out);
+  return out;
 }
 
 /** 직접 이름 바꾸기: 비용 없이 표시만 바뀐다 */

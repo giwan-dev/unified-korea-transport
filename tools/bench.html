@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>연도 계산 벤치</title>
+  <style>body { font: 14px system-ui, sans-serif; margin: 24px; } pre { background: #f4f4f4; padding: 12px; }</style>
+</head>
+<body>
+  <h1>해마다 도는 계산 시간 재기</h1>
+  <p>기준 연도(data/baseline.*)에서 한 해를 넘기는 계산(advanceYear + 이어 배정)을 메인 스레드에서 돌리고 부분별 시간을 잽니다.</p>
+  <pre id="log"></pre>
+  <script type="module">
+    import { effectiveNetwork, newGame, initAirRoutes } from '../js/game/state.js';
+    import { seedServices } from '../js/game/services.js';
+    import { loadNetwork } from '../js/data/netpack.js';
+    import { extendWorld, urbanLanes } from '../js/game/world.js';
+    import { Model } from '../js/sim/model.js';
+    import { Graph } from '../js/sim/graph.js';
+    const log = (s) => { document.querySelector('#log').textContent += s + '\n'; };
+    const [zones, net, grid, bjson, bbin] = await Promise.all([
+      fetch('../data/zones.json').then((r) => r.json()),
+      loadNetwork('../data/'),
+      fetch('../data/grid.bin').then((r) => r.arrayBuffer()),
+      fetch('../data/baseline.json').then((r) => r.json()),
+      fetch('../data/baseline.bin').then((r) => r.arrayBuffer()),
+    ]);
+    const world = await fetch('../data/air_sea.json').then((r) => r.json());
+    extendWorld(net, zones, world);
+    urbanLanes(net, grid);
+    const state = newGame('normal');
+    initAirRoutes(state, world.routes || []);
+    seedServices(state, net);
+
+    // 부분별 시간: 메서드를 감싸 누적한다
+    const T = {};
+    const wrap = (proto, name, label = name) => {
+      const f = proto[name];
+      proto[name] = function (...a) { const t = performance.now(); const r = f.apply(this, a); T[label] = (T[label] || 0) + performance.now() - t; return r; };
+    };
+    for (const m of ['railCost', 'airCost', 'stationMatrix', 'updateCosts', 'advanceYear', 'airPaxFromOD']) wrap(Model.prototype, m);
+    wrap(Graph.prototype, 'shortestPaths', 'dijkstra');
+    wrap(Graph.prototype, 'loadTree', 'loadTree');
+
+    // ?mode=setup: 계산 워커 준비(모델 만들기·망 설정·기준선 읽기) 부분별 시간
+    if (new URLSearchParams(location.search).get('mode') === 'setup') {
+      for (const m of ['initSubzones', 'setNetwork', 'buildAccess', 'buildTransit', 'buildAir', 'buildOriginGroups', 'importBaseline', 'computeAccess', 'linkResults', 'zoneResults', 'subResults', 'exportBaseline']) wrap(Model.prototype, m);
+      const t0 = performance.now();
+      const m = new Model(zones, new Float32Array(grid));
+      const t1 = performance.now();
+      m.setNetwork(effectiveNetwork(net, state));
+      const t2 = performance.now();
+      m.importBaseline(bjson, bbin);
+      m.linkResults(); m.zoneResults(); m.subResults(); m.exportBaseline({}, null);
+      const t3 = performance.now();
+      log(`모델 ${Math.round(t1 - t0)} · 망 ${Math.round(t2 - t1)} · 기준선·결과 ${Math.round(t3 - t2)}ms`);
+      // 후보 역 검증: 가지치기 없이 모든 후보를 잰 결과와 같은지
+      if (new URLSearchParams(location.search).has('check')) {
+        const { kmBetween, accessMinutes } = await import('../js/sim/model.js');
+        const K = m.subSt.length / m.S;
+        let diff = 0;
+        for (let sI = 0; sI < m.S; sI++) {
+          const full = [];
+          for (let st = 0; st < m.stationNode.length; st++) {
+            const [nx, ny] = m.net.nodes[m.stationNode[st]];
+            if (kmBetween(m.subX[sI], m.subY[sI], nx, ny) > 25) continue;
+            full.push([st, m.subMean(sI, (x, y) => accessMinutes(kmBetween(x, y, nx, ny)))]);
+          }
+          full.sort((p, q) => p[1] - q[1]);
+          for (let k = 0; k < K; k++) {
+            const want = full[k] ? full[k][0] : -1;
+            if (m.subSt[sI * K + k] !== want && !(full[k] && Math.abs(m.subStAcc[sI * K + k] - full[k][1]) < 1e-9)) diff++;
+          }
+        }
+        log(`후보 역 검증: 소구역 ${m.S}개 중 다른 칸 ${diff}개`);
+      }
+      log(Object.entries(T).sort((a, b) => b[1] - a[1]).map(([n, v]) => `${n} ${Math.round(v)}ms`).join(' · '));
+      document.title = '완료';
+      throw new Error('done');
+    }
+    // ?mode=worker: 게임과 같은 워커 경로(보조 워커 병렬)로 한 해 넘기기 시간과 총계를 잰다
+    if (new URLSearchParams(location.search).get('mode') === 'worker') {
+      const worker = new Worker(new URL('../js/sim/worker.js', import.meta.url), { type: 'module' });
+      const ctxW = { integration: state.integration, policy: state.policy };
+      const netW = effectiveNetwork(net, state);
+      const wait = () => new Promise((res) => { worker.onmessage = (ev) => {
+        if (ev.data.type === 'progress') document.title = `${ev.data.label} ${Math.round(ev.data.value * 100)}%`;
+        if (ev.data.type === 'result' || ev.data.type === 'error') res(ev.data);
+      }; });
+      let p = wait();
+      const { helperPorts } = await import('../js/sim/pool.js');
+      const ports = new URLSearchParams(location.search).get('serial') ? [] : helperPorts();
+      worker.postMessage({ type: 'init', zones, grid, net: netW, ctx: ctxW, baseline: { json: bjson, bin: bbin }, ports }, ports);
+      await p;
+      for (let k = 0; k < 2; k++) {
+        const t0 = performance.now();
+        p = wait();
+        worker.postMessage({ type: 'step', net: netW, ctx: ctxW });
+        const r = await p;
+        if (r.type === 'error') { log('오류 ' + r.message); break; }
+        log(`워커 ${k + 1}회: ${((performance.now() - t0) / 1000).toFixed(2)}초 · 통행 ${Math.round(r.totals.trips)} 철도 ${Math.round(r.totals.rail)} 도로 ${Math.round(r.totals.road)}`);
+      }
+      document.title = '완료';
+      throw new Error('done');
+    }
+    const model = new Model(zones, new Float32Array(grid));
+    model.setNetwork(effectiveNetwork(net, state));
+    log(`baseline ${model.importBaseline(bjson, bbin) ? '읽음' : '못 읽음 (데이터 버전 다름)'}`);
+    const ctx = { integration: state.integration, policy: state.policy };
+    const runs = Number(new URLSearchParams(location.search).get('runs') || 2);
+    for (let k = 0; k < runs; k++) {
+      for (const key of Object.keys(T)) delete T[key];
+      const t0 = performance.now();
+      model.advanceYear(ctx.integration, ctx.policy);
+      const tot = model.assign(ctx.integration, null, true);
+      log(`  통행 ${Math.round(tot.trips)} 철도 ${Math.round(tot.rail)} 도로 ${Math.round(tot.road)}`);
+      const total = performance.now() - t0;
+      log(`${k + 1}회: 전체 ${(total / 1000).toFixed(2)}초 · ` + Object.entries(T).sort((a, b) => b[1] - a[1]).map(([n, v]) => `${n} ${(v / 1000).toFixed(2)}초`).join(' · '));
+    }
+    document.title = '완료';
+  </script>
+</body>
+</html>

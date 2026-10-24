@@ -29,6 +29,8 @@ export const P = {
   feederPenaltyMin: 10,       // 연계교통 대기·환승
   roadTerminalMin: 3,
   roadConnectors: 6,          // 소구역당 도로 접속 노드 수
+  originGroupKm2: 150,        // 승용차 출발 묶음: 존 면적이 이만큼(km²)의 n²배면 n묶음으로 나눠 경로를 따로 찾는다
+  originGroupsMax: 4,
   waitScale: 3160,            // 역 대기시간 = waitScale / √(일 이용객): 10만 명이면 10분
   waitMinMin: 8,
   waitMaxMin: 90,

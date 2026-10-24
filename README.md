@@ -127,7 +127,8 @@ bash pipeline/download.sh
 .venv/Scripts/python -X utf8 pipeline/build_grid.py      # 인구 격자·소구역·데이터 버전
 .venv/Scripts/python -X utf8 pipeline/build_names.py     # 옛 이름 되찾기 대상
 .venv/Scripts/python -X utf8 pipeline/build_roads.py     # 확대 시 보이는 OSM 도로 배경 (도별 파일)
-.venv/Scripts/python -X utf8 pipeline/build_water.py     # 큰 강·호수의 물 면 (한강·낙동강·대동강 등)
+.venv/Scripts/python -X utf8 pipeline/build_water.py     # 큰 강·호수의 물 면 (한강·낙동강·대동강 등)과 물가선
+.venv/Scripts/python -X utf8 pipeline/build_terrain.py   # 지형 격자 (새 노선의 경사·물 피하는 선형과 터널·교량 비율)
 ```
 
 (macOS·Linux에서는 `.venv/bin/python`)
@@ -162,6 +163,7 @@ docs/model.md           모델과 가정값 설명
 - 철도역의 소속 노선·북측 역·이름 없는 선로의 노선 이름, 계획 사업(남북 철도 복원)의 옛 선형: Zermoth의 KOREA RAILROAD DB Ver 2024.04 (Google Earth KMZ, https://zermoth.net/)를 참고 자료로 썼습니다.
   - 선로 도형은 OSM을 쓰고, 이 DB에서는 역이 서는 노선·역 이름·노선 이름 같은 사실 정보와 계획 경유점만 가져왔습니다. KMZ 파일은 저장소에 넣지 않습니다(`data/raw/`).
 - 인구 격자: [WorldPop](https://www.worldpop.org/) 2025 (R2025A) 1km constrained UN-adjusted, CC BY 4.0
+- 표고: Copernicus DEM GLO-90 (© DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018, provided under COPERNICUS by the European Union and ESA). 약 1.1km 격자로 줄인 data/terrain.bin
 - 배경지도의 주변국 육지·하천 중심선·호수·도시: [Natural Earth](https://www.naturalearthdata.com/) (공공 영역). 강·호수의 물 면은 OpenStreetMap
 - 라벨 글꼴의 숫자·영문 글리프: [OpenFreeMap](https://openfreemap.org/) 글꼴 서버 (한글은 브라우저 글꼴)
 - 철도 운영사 로고 (`assets/brand/`): 위키미디어 공용의 공용 영역(PD) 파일을 그대로 씁니다.

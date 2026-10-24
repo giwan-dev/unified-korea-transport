@@ -31,7 +31,10 @@ def read(data=ROOT / "data"):
                   ("power", "u1"), ("open", "<u2")):
         cols[k] = take(dt, L)
     counts = take("<u4", L)
-    verts = take("<i4", V * 2).astype(np.float64)
+    if meta.get("vertEncoding") == "delta":
+        verts = decode_verts(take("u1", meta["vertBytes"]), V * 2).astype(np.float64)
+    else:
+        verts = take("<i4", V * 2).astype(np.float64)
     verts[verts == 2147483647] = np.nan
     verts = verts.reshape(-1, 2) / meta["scale"]
     links, k = [], 0
@@ -42,6 +45,30 @@ def read(data=ROOT / "data"):
                       "open": int(cols["open"][i]), "kp": int(cols["kp"][i]), "tracks": int(cols["tracks"][i]), "geom": verts[k:k + c].tolist()})
         k += c
     return nodes, links, meta
+
+
+def decode_verts(b, n):
+    """netpack.encode_verts의 반대 (구분자는 INT32_MAX)"""
+    out = np.empty(n, dtype=np.int64)
+    prev = [0, 0]
+    p = 0
+    data = b.tobytes()
+    for k in range(n):
+        z = shift = 0
+        while True:
+            c = data[p]; p += 1
+            z |= (c & 0x7F) << shift
+            shift += 7
+            if not c & 0x80:
+                break
+        if z == 1:
+            out[k] = 2147483647
+            continue
+        z >>= 1
+        d = -((z + 1) >> 1) if z & 1 else z >> 1
+        prev[k % 2] += d
+        out[k] = prev[k % 2]
+    return out
 
 
 def near(lon, lat, km):

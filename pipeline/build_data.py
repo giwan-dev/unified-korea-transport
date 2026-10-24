@@ -71,6 +71,8 @@ CITY_CELLS = set()      # 도시 안인 바깥 격자 칸 (round(lon/GRID), roun
 CITY_ONLY_ROADS = {}   # 3차 도로(tertiary)까지 넣으면 계산망이 2.5배가 되어 해마다 계산이 너무 느려진다
 
 ROAD_CLASSES = ["motorway", "trunk", "primary", "secondary"]
+# 국도가 없어 지방도가 간선인 섬 (경도·위도 범위): 제주도, 울릉도
+ISLANDS_SECONDARY = [(126.1, 33.1, 127.0, 33.6), (130.75, 37.42, 130.95, 37.56)]
 ROAD_LINKS = {"motorway_link": "motorway", "trunk_link": "trunk", "primary_link": "primary", "secondary_link": "secondary"}
 WGS84_KM = 111.32
 
@@ -393,6 +395,14 @@ class NetHandler:
             rw = t.get("construction")
             opening = _opening_year(t, 2030)
         city_road = hw in CITY_ONLY_ROADS or (hw in ("secondary", "secondary_link") and self.country == "KR")
+        # 국도가 없는 섬(제주도·울릉도)은 지방도(secondary)가 간선이다: 대도시가 아니어도 넣는다
+        if city_road and hw in ("secondary", "secondary_link"):
+            try:
+                mid = w.nodes[len(w.nodes) // 2]
+                if any(x0 <= mid.lon <= x1 and y0 <= mid.lat <= y1 for x0, y0, x1, y1 in ISLANDS_SECONDARY):
+                    city_road = False
+            except osmium.InvalidLocationError:
+                pass
         if hw in ROAD_CLASSES or hw in ROAD_LINKS or hw in CITY_ONLY_ROADS:
             # 남측 2차 도로와 3차 도로는 대도시 안에서만 넣는다 (웨이 가운데 점 기준)
             if city_road:
@@ -790,8 +800,13 @@ def build_network(zones):
     # 존 접근점은 일반 간선에만 둔다: 고속도로 위에 두면 고속도로가 IC가 아닌 곳에서 끊긴다
     road_major = {k[1] for k, e in edges.items() if k[0] == "road" and e["cls"] not in ("secondary", "motorway")} | \
                  {k[2] for k, e in edges.items() if k[0] == "road" and e["cls"] not in ("secondary", "motorway")}
+    road_any = {k[1] for k in edges if k[0] == "road"} | {k[2] for k in edges if k[0] == "road"}
     for z in zones:
         z["road_cell"] = _nearest_cell((z["cx"], z["cy"]), road_major)
+        # 20km 안에 간선이 없으면(지방도만 있는 섬: 제주·울릉) 아무 도로에나 둔다. 바다 건너 육지 간선에 붙지 않게
+        c = z["road_cell"]
+        if math.hypot((c[0] * UNIT - z["cx"]) * 88, (c[1] * UNIT - z["cy"]) * 111) > 20:
+            z["road_cell"] = _nearest_cell((z["cx"], z["cy"]), road_any)
         keep.add(("road", z["road_cell"]))
 
     links = _contract(edges, keep)
@@ -1022,6 +1037,17 @@ def final_cleanup(nodes, links, stations, metro_stations, junctions, zone_nodes)
         for item in lst:
             item[1] = nmap.get(item[1], item[1])
     zone_nodes.clear(); zone_nodes.update(nmap.get(n, n) for n in list(zone_nodes))
+    # 고속도로의 짧은 토막(250m 미만)은 이웃 노드로 합친다: IC 접속점 주변에서 본선이 짧게 끊겨 V자로 꺾이던 곳 (우장산 수원문산고속도로)
+    nmap = contract_motorway_stubs(nodes, links, {n for _, n in junctions} | set(zone_nodes), {n: nm for nm, n in junctions})
+    for lst in (stations, metro_stations, junctions):
+        for item in lst:
+            item[1] = nmap.get(item[1], item[1])
+    zone_nodes.clear(); zone_nodes.update(nmap.get(n, n) for n in list(zone_nodes))
+    # 같은 역의 노드가 여럿(수서 6개, 서울 5개: 노선·승강장마다)이면 600m 안에서 링크로 이어진 것끼리 하나로
+    nmap = merge_station_twins(nodes, links, names)
+    for lst in (stations, metro_stations, junctions):
+        for item in lst:
+            item[1] = nmap.get(item[1], item[1])
     st = {n for _, n in stations}
     mst = {n for _, n in metro_stations}
     links = drop_parallel_duplicates(links)   # 틈 잇기·환승 선로가 기존 링크와 겹친 곳
@@ -1036,21 +1062,27 @@ def final_cleanup(nodes, links, stations, metro_stations, junctions, zone_nodes)
     protect = {0: {n for _, n in junctions} | zone_nodes, 1: st, 2: mst}
     links = remerge_chains(links, protect)
     for l in links:
-        l["geom"] = clean_geom(l["geom"])
+        gtx = l["mode"] == 1 and "광역급행" in (l["name"] or "")   # GTX는 대심도 직선 선로
+        l["geom"] = clean_geom(l["geom"], 40 if gtx else MAX_TURN.get(l["cls"], 110))
     return links
 
 
-def clean_geom(flat):
-    """마지막 도형 다듬기: 선 중간에서 110°보다 날카롭게 되돌아가는 점과, 끝 노드에서 되돌아가는 첫·끝 점을 뺀다
-    (링크를 잇거나 노드를 옮긴 뒤에 새로 생긴 톱니·돌기)"""
+# 선 중간에서 이보다 크게 꺾이는 꼭짓점은 톱니로 보고 뺀다 (도). 고속철도·고속도로는 실제로 급하게 꺾이지 않는다
+MAX_TURN = {"hsr": 40, "motorway": 60}
+
+
+def clean_geom(flat, max_turn=110):
+    """마지막 도형 다듬기: 선 중간에서 max_turn°보다 날카롭게 꺾이는 점과, 끝 노드에서 되돌아가는 첫·끝 점을 뺀다
+    (링크를 잇거나 노드를 옮긴 뒤, 나란한 선로를 합친 뒤 새로 생긴 톱니·돌기: 대전 도심 경부고속선)"""
     pts = [(flat[k], flat[k + 1]) for k in range(0, len(flat) - 1, 2)]
     if len(pts) < 3 or any(p[0] != p[0] for p in pts):
         return flat
+    limit = math.cos(math.radians(max_turn))
 
     def back(a, b, c):
         v1 = ((b[0] - a[0]) * 0.8, b[1] - a[1]); v2 = ((c[0] - b[0]) * 0.8, c[1] - b[1])
         n = math.hypot(*v1) * math.hypot(*v2)
-        return n > 0 and (v1[0] * v2[0] + v1[1] * v2[1]) / n < -0.34
+        return n > 0 and (v1[0] * v2[0] + v1[1] * v2[1]) / n < limit
     changed = True
     while changed and len(pts) > 2:
         changed = False
@@ -1112,6 +1144,82 @@ def collapse_close_nodes(nodes, links, keep_first, names=None, dist_km=0.07, max
             l["geom"] = list(nodes[a]) + g[2:-2] + list(nodes[b]) if len(g) >= 4 else list(nodes[a]) + list(nodes[b])
             l["a"], l["b"] = a, b
     log("close nodes collapsed", len(nmap))
+    return nmap
+
+
+def contract_motorway_stubs(nodes, links, keep, names, max_km=0.25):
+    """고속도로 링크가 max_km보다 짧으면 두 끝 노드를 하나로 모은다. 지킬 노드(IC·JCT·존 접근점)가 대표가 되고,
+    이름이 다른 두 IC는 모으지 않는다. 짧은 것부터, 실제 노드 거리로 다시 재며 모은다"""
+    parent = {}
+
+    def find(n):
+        while parent.get(n, n) != n:
+            parent[n] = parent.get(parent[n], parent[n])
+            n = parent[n]
+        return n
+    merged = 0
+    for l in sorted((l for l in links if l["mode"] == 0 and l["cls"] == "motorway" and not l.get("ext") and l["len"] < max_km),
+                    key=lambda l: l["len"]):
+        a, b = find(l["a"]), find(l["b"])
+        if a == b:
+            continue
+        d = math.hypot((nodes[a][0] - nodes[b][0]) * 88, (nodes[a][1] - nodes[b][1]) * 111)
+        if d > max_km:
+            continue
+        ka, kb = a in keep, b in keep
+        if ka and kb and not (names.get(a) and names.get(a) == names.get(b)):
+            continue
+        if kb and not ka:
+            a, b = b, a
+        parent[b] = a
+        merged += 1
+    nmap = {n: find(n) for n in parent if find(n) != n}
+    for l in links:
+        a, b = nmap.get(l["a"], l["a"]), nmap.get(l["b"], l["b"])
+        if (a, b) != (l["a"], l["b"]):
+            g = l["geom"]
+            l["geom"] = list(nodes[a]) + g[2:-2] + list(nodes[b]) if len(g) >= 4 else list(nodes[a]) + list(nodes[b])
+            l["a"], l["b"] = a, b
+    log("motorway stubs contracted", merged)
+    return nmap
+
+
+def merge_station_twins(nodes, links, names, max_km=0.6):
+    """이름이 같은 두 역 노드를 잇는 짧은 링크(600m 안)가 있으면 두 노드를 하나로 모은다.
+    한 역이 노선·승강장마다 노드를 따로 가져 GTX-A 수서→수서→수서처럼 같은 역이 줄줄이 찍히는 것을 막는다.
+    링크로 이어진 노드끼리만 모으므로 이름만 같은 먼 역(구성: 용인·북측)은 합치지 않는다"""
+    parent = {}
+
+    def find(n):
+        while parent.get(n, n) != n:
+            parent[n] = parent.get(parent[n], parent[n])
+            n = parent[n]
+        return n
+    for l in links:
+        if l["mode"] not in (1, 2) or l.get("ext") or l["len"] > max_km:
+            continue
+        na, nb = names.get(l["a"]), names.get(l["b"])
+        if na and na == nb and l["a"] != l["b"]:
+            ra, rb = find(l["a"]), find(l["b"])
+            if ra != rb:
+                parent[max(ra, rb)] = min(ra, rb)
+    nmap = {n: find(n) for n in parent if find(n) != n}
+    if not nmap:
+        return nmap
+    # 대표 자리는 묶음 노드들의 가운데
+    groups = defaultdict(list)
+    for n, r in nmap.items():
+        groups[r].append(n)
+    for r, ns in groups.items():
+        pts = [nodes[r]] + [nodes[n] for n in ns]
+        nodes[r] = [sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)]
+    for l in links:
+        a, b = nmap.get(l["a"], l["a"]), nmap.get(l["b"], l["b"])
+        if (a, b) != (l["a"], l["b"]) or a in groups or b in groups:
+            g = l["geom"]
+            l["geom"] = list(nodes[a]) + g[2:-2] + list(nodes[b]) if len(g) >= 4 else list(nodes[a]) + list(nodes[b])
+            l["a"], l["b"] = a, b
+    log("same-name station nodes merged", len(nmap))
     return nmap
 
 
