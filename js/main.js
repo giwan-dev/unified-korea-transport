@@ -12,7 +12,7 @@ import {
 import { MEGA, TSR_FREIGHT, megaGeometry, applyMega } from './game/mega.js';
 import { AIRPORT } from './game/catalog.js';
 import { setNameResolver, refreshNames, setRegions, setLinks, paintHotspots } from './ui/map.js';
-import { isNarrow, twinPrimary, mergeTwins, ROAD_RANK, motorwayMainline, flattenMainline, connectJunctions, smoothMainlineEnds, mainlineBubbles, roundMainlineCorners } from './ui/traffic.js';
+import { isNarrow, twinPrimary, mergeTwins, ROAD_RANK, motorwayMainline, bridgeMainlineGaps, flattenMainline, connectJunctions, smoothMainlineEnds, mainlineBubbles, roundMainlineCorners } from './ui/traffic.js';
 import { subFold, initPanelUI, toast } from './ui/panel.js';
 import { initPalette, openPalette, goSection } from './ui/palette.js';
 import { startGuide, guideShouldAutoShow, guideOnNewGame, getGuideMode, setGuideMode, GUIDE_MODES } from './ui/guide.js';
@@ -543,7 +543,9 @@ function linksFC() {
       return { a: l.a, b: l.b, mode: e.mode, k: `${road ? 'road' : `${e.cls}:${e.ext ? 1 : 0}`}:${pending(i) ? 1 : 0}`, rank: road ? ROAD_RANK[e.cls] ?? 9 : 0 };
     })())));
   // 고속도로는 본선만 고속도로로 그리고, IC 연결로·접속도로는 일반도로(주요 도로 굵기)로, JC 연결로는 그리지 않는다 (JC가 사거리로 보이게)
-  const mainline = motorwayMainline(all.map((l, i) => (state.replaced?.[i] || l.replaced ? null : linkAt(base, state, i))), nodeCoord, (i) => i >= base.links.length);
+  const mainEff = all.map((l, i) => (state.replaced?.[i] || l.replaced ? null : linkAt(base, state, i)));
+  const mainline = motorwayMainline(mainEff, nodeCoord, (i) => i >= base.links.length);
+  bridgeMainlineGaps(mainEff, mainline);   // 끊긴 본선 두 조각 사이의 짧은 일반도로 링크는 본선으로
   const features = all.map((l, i) => {
     const eff = linkAt(base, state, i);
     // 같은 역의 다른 노선 승강장을 잇는 환승 선로는 계산에만 쓰고 그리지 않는다 (서울역·용산역 주변이 지저분해진다)
@@ -555,7 +557,7 @@ function linksFC() {
     const parts = smoothParts(l, i);
     return {
       type: 'Feature', id: i,
-      properties: { id: i, mode: eff.mode, cls: eff.cls === 'motorway' && eff.mode === 0 && mainline[i] !== 1 ? 'primary' : eff.cls, minor: eff.mode === 0 && eff.cls === 'secondary' && !eff.kp ? 1 : 0, building: pending(i) ? 1 : 0, colour: eff.colour || '', ext: eff.ext ? 1 : 0, narrow: isNarrow(eff) ? 1 : 0, rstd: railStd(eff) },
+      properties: { id: i, mode: eff.mode, cls: eff.mode === 0 && mainline[i] === 1 ? 'motorway' : eff.cls === 'motorway' && eff.mode === 0 ? 'primary' : eff.cls, minor: eff.mode === 0 && eff.cls === 'secondary' && !eff.kp ? 1 : 0, building: pending(i) ? 1 : 0, colour: eff.colour || '', ext: eff.ext ? 1 : 0, narrow: isNarrow(eff) ? 1 : 0, rstd: railStd(eff) },
       geometry: parts.length > 1 ? { type: 'MultiLineString', coordinates: parts } : { type: 'LineString', coordinates: parts[0] },
     };
   });

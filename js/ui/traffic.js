@@ -438,16 +438,27 @@ export function roundMainlineCorners(features, main) {
   // 곡선 점 수: 깎는 길이 약 40m마다 하나 (2~8개)
   const steps = (a, q, b) => Math.max(2, Math.min(8, Math.round((kmXY(a, q) + kmXY(q, b)) / 0.04)));
   const mains = features.filter((f) => main[f.id] === 1 && f.properties.mode === 0 && f.geometry.type === 'LineString');
-  // 0) 좌표 반올림(약 1m)으로 생긴 10m 안의 점은 먼저 지운다 (양 끝은 그대로): 아주 짧은 마디는 각도가 제멋대로다
+  // 0) 깎기 전에 잔 점을 지운다 (양 끝은 그대로라 이어진 곳은 떨어지지 않는다)
+  //    - 좌표 반올림(약 1m)으로 생긴 10m 안의 점: 아주 짧은 마디는 각도가 제멋대로다
+  //    - 12m 안에서 크게(150° 미만) 꺾이는 점: 지방도를 고속도로로 고치는 이어받은 공사 구간처럼 원래 도형이 잘게 구불거리는 곳
+  //    지운 자리에 생기는 모서리는 아래에서 깎는다 (그래서 이 정리는 깎기 앞에서만 한다)
   for (const f of mains) {
     const c = f.geometry.coordinates;
     for (let k = c.length - 2; k >= 1; k--) if (kmXY(c[k], c[k + 1]) < 0.01 || kmXY(c[k], c[k - 1]) < 0.01) c.splice(k, 1);
+    for (let changed = true, guard = 0; changed && guard < 50; guard++) {
+      changed = false;
+      for (let k = 1; k + 1 < c.length; k++) {
+        if ((kmXY(c[k], c[k - 1]) < 0.012 || kmXY(c[k], c[k + 1]) < 0.012) && angle(c[k - 1], c[k], c[k + 1]) < 150) { c.splice(k, 1); changed = true; break; }
+      }
+    }
   }
   // 1) 선 안의 꺾인 점
   for (const f of mains) {
     const c = f.geometry.coordinates;
     for (let k = 1; k + 1 < c.length; k++) {
       if (angle(c[k - 1], c[k], c[k + 1]) >= 170) continue;
+      // 이웃 점이 20m도 안 되는 아주 작은 모서리는 깎는 대신 그 점을 지운다 (곡선 점이 몇 m 안에 몰려 고리가 생긴다)
+      if (kmXY(c[k], c[k - 1]) < 0.02 || kmXY(c[k], c[k + 1]) < 0.02) { c.splice(k, 1); k--; continue; }
       const a = toward(c[k], c[k - 1]), b = toward(c[k], c[k + 1]), n = steps(a, c[k], b);
       const pts = [];
       for (let s = 0; s <= n; s++) pts.push(bez(a, c[k], b, s / n));
@@ -474,10 +485,43 @@ export function roundMainlineCorners(features, main) {
     const e = x.first ? x.c[0] : x.c[x.c.length - 1];
     const xp = x.first ? x.c[1] : x.c[x.c.length - 2], yp = y.first ? y.c[1] : y.c[y.c.length - 2];
     if (!xp || !yp || angle(xp, e, yp) >= 170) continue;
-    const a = toward(e, xp), b = toward(e, yp), n = 2 * Math.ceil(steps(a, e, b) / 2), half = n / 2;
+    // 이음매 바로 옆 점이 20m 안이면 그 점을 지워 팔을 늘린다 (끝점은 그대로). 조각이 두 점뿐이면 그대로 깎는다
+    let shortArm = false;
+    for (const z of [x, y]) {
+      while (z.c.length > 2 && kmXY(e, z.first ? z.c[1] : z.c[z.c.length - 2]) < 0.02) z.c.splice(z.first ? 1 : z.c.length - 2, 1);
+      if (kmXY(e, z.first ? z.c[1] : z.c[z.c.length - 2]) < 0.004) shortArm = true;
+    }
+    if (shortArm) continue;
+    const xp2 = x.first ? x.c[1] : x.c[x.c.length - 2], yp2 = y.first ? y.c[1] : y.c[y.c.length - 2];
+    if (angle(xp2, e, yp2) >= 170) continue;
+    const a = toward(e, xp2), b = toward(e, yp2), n = 2 * Math.ceil(steps(a, e, b) / 2), half = n / 2;
     const xs = [], ys = [];   // 바깥(이웃 점 쪽)에서 가운데로
     for (let s = 0; s <= half; s++) { xs.push(bez(a, e, b, s / n)); ys.push(bez(b, e, a, s / n)); }
     if (x.first) x.c.splice(0, 1, ...xs.reverse()); else x.c.splice(x.c.length - 1, 1, ...xs);
     if (y.first) y.c.splice(0, 1, ...ys.reverse()); else y.c.splice(y.c.length - 1, 1, ...ys);
   }
+
+}
+
+/**
+ * 고속도로 본선이 노선망에서 두 조각으로 끊기고 그 사이를 짧은 일반도로 링크가 잇는 곳(예: 평양희천고속도로 순안 부근
+ * "순안거리" 300m)은 그 링크를 본선으로 이어 그린다: 양 끝 노드가 모두 본선 조각 하나씩에만 닿는(본선이 거기서 끝나는)
+ * 1.5km 안쪽의 도로 링크로, 양쪽 본선이 이름이 같은 한 고속도로일 때. main 배열에서 그 링크를 1(본선)로 바꾼다.
+ */
+export function bridgeMainlineGaps(links, main) {
+  const ends = new Map();   // 노드 → 닿은 본선 링크들
+  links.forEach((l, i) => {
+    if (!l || main[i] !== 1) return;
+    for (const nd of [l.a, l.b]) { if (!ends.has(nd)) ends.set(nd, []); ends.get(nd).push(i); }
+  });
+  let n = 0;
+  links.forEach((l, i) => {
+    if (!l || l.mode !== 0 || l.cls === 'motorway' || l.cls === 'ferry' || l.ext || main[i] || !(l.len <= 1.5)) return;
+    const ea = ends.get(l.a), eb = ends.get(l.b);
+    // 양 끝에서 본선이 하나씩 끝나고, 그 둘이 이름이 같은 한 고속도로일 때만
+    // (서로 다른 고속도로의 끝이나, 이름 없는 조각 사이의 동네 도로는 잇지 않는다)
+    const na = links[ea?.[0]]?.name, nb = links[eb?.[0]]?.name;
+    if (ea?.length === 1 && eb?.length === 1 && ea[0] !== eb[0] && na && na === nb) { main[i] = 1; n++; }
+  });
+  return n;
 }
