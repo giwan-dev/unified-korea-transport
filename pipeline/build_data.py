@@ -1098,6 +1098,7 @@ def final_cleanup(nodes, links, stations, metro_stations, junctions, zone_nodes)
     log("unnamed metro connectors dropped", n0 - len(links))
     protect = {0: {n for _, n in junctions} | zone_nodes, 1: st, 2: mst}
     links = remerge_chains(links, protect)
+    snap_nodes_to_motorway(nodes, links)
     for l in links:
         gtx = l["mode"] == 1 and "광역급행" in (l["name"] or "")   # GTX는 대심도 직선 선로
         l["geom"] = clean_geom(l["geom"], 40 if gtx else MAX_TURN.get(l["cls"], 110))
@@ -1216,6 +1217,57 @@ def prune_parallel_stubs(links, stops, near_km=0.15, max_km=12):
             drop.add(i)
     log("parallel stubs dropped", len(drop))
     return [l for i, l in enumerate(links) if i not in drop]
+
+
+def snap_nodes_to_motorway(nodes, links, max_km=0.6):
+    """고속도로 링크 두 개가 만나는 노드를 실제 고속도로 선 위로 옮긴다.
+    노드 자리는 칸 안 도로 점(왕복 차도·연결로·옆 도로)의 평균이라 본선에서 수백 m 떨어질 수 있고, 그러면 본선이
+    노드로 끌려가 V자로 꺾인다 (전국 이음매 270여 곳). 두 링크의 노드 쪽 점들(노드에서 max_km 안)로 만든 선에서
+    가장 가까운 점으로 옮기고, 그 노드에 닿은 모든 링크의 끝점도 옮긴다"""
+    at = defaultdict(list)
+    for i, l in enumerate(links):
+        if l["mode"] == 0 and not l.get("ext"):
+            at[l["a"]].append(i); at[l["b"]].append(i)
+
+    def side(i, n):
+        g = links[i]["geom"]
+        p = [(g[k], g[k + 1]) for k in range(0, len(g) - 1, 2) if g[k] == g[k]]
+        c = nodes[n]
+        if math.hypot(p[0][0] - c[0], p[0][1] - c[1]) > math.hypot(p[-1][0] - c[0], p[-1][1] - c[1]):
+            p = p[::-1]
+        out = []
+        for q in p[1:]:
+            out.append(q)
+            if math.hypot((q[0] - c[0]) * 88, (q[1] - c[1]) * 111) > max_km:
+                break
+        return out
+    moved = 0
+    for n, ids in at.items():
+        mw = [i for i in ids if links[i]["cls"] == "motorway"]
+        if len(mw) != 2:
+            continue
+        s1, s2 = side(mw[0], n), side(mw[1], n)
+        if not s1 or not s2:
+            continue
+        line = shapely.LineString([(x * 0.8, y) for x, y in s1[::-1] + s2])
+        c = nodes[n]
+        pt = shapely.Point(c[0] * 0.8, c[1])
+        d = line.distance(pt) * 111
+        if d < 0.02 or d > max_km:
+            continue
+        q = line.interpolate(line.project(pt))
+        new = [round(q.x / 0.8, 5), round(q.y, 5)]
+        old = list(c)
+        nodes[n] = new
+        for i in ids:
+            g = links[i]["geom"]
+            if len(g) >= 4 and g[0] == g[0]:
+                if links[i]["a"] == n:
+                    g[0], g[1] = new
+                if links[i]["b"] == n:
+                    g[-2], g[-1] = new
+        moved += 1
+    log("nodes snapped onto motorway line", moved)
 
 
 def contract_motorway_stubs(nodes, links, keep, names, max_km=0.25):

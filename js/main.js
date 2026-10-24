@@ -1365,8 +1365,9 @@ function draftLineName() {
   return draft.lineName;
 }
 
-function commitDraft() {
+async function commitDraft() {
   if (!draft || draft.points.length < 2) return;
+  if (terrainRule(draft.type) && !terrainReady()) { await loadTerrain(); if (!draft) return; }   // 착공 사업비도 지형을 넣어서
   const spec = NEW_BUILDS[draft.type];
   const last = draft.points[draft.points.length - 1];
   if (spec.mode === 0 && !attachRoadEnd(last)) { alert('끝점 5km 안에 이을 도로가 없습니다. 마지막 점을 도로 가까이에 찍어 주세요.'); return; }
@@ -3999,8 +4000,10 @@ function draftPointsOn(c) {
 }
 
 /** 그리는 중인 신설 노선 미리보기 (기존 노선 중간에 놓은 점도 그 자리를 잘라 이어서 계산) */
-function previewDraft() {
+async function previewDraft() {
   if (!draft || draft.points.length < 2) return;
+  // 지형 자료를 다 받은 뒤에 사업비를 잡는다 (먼저 누르면 지형 없는 사업비로 B/C가 두 번째와 달라졌다)
+  if (terrainRule(draft.type) && !terrainReady()) { await loadTerrain(); if (!draft) return; }
   const dc = draftCost();
   runPreview(`${draftLineName() || NEW_BUILDS[draft.type].label} 미리보기`, (c) => {
     const r = startNewBuild(base, c, { type: draft.type, points: draftPointsOn(c), names: {}, lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost });
