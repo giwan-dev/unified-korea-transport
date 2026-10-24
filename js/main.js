@@ -50,6 +50,9 @@ import {
   HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST, ADMIN_OPTIONS, ADMIN_DEFAULT, adminNames, HISTORIC_COUNTIES,
 } from './game/local.js';
 import { openAdminSetup } from './ui/setup.js';
+import { LANG, t, startI18n, setLang } from './i18n.js';
+startI18n();
+{ const ll = document.querySelector('#ld-lang'); if (ll) { ll.textContent = LANG === 'en' ? '한국어' : 'English'; ll.addEventListener('click', (e) => { e.preventDefault(); setLang(LANG === 'en' ? 'ko' : 'en'); }); } }
 import { buildReport, reportHTML, downloadReportImage, TIME_PAIRS, GOALS } from './ui/report.js';
 
 const APP_VERSION = 'Alpha 0.1';
@@ -1724,6 +1727,21 @@ function showGuide() {
   switchTab('status');
   const tab = (t) => () => switchTab(t);
   const phone = matchMedia('(max-width: 760px)').matches;   // 휴대폰: 패널이 지도 아래, Shift 끌기·Ctrl+K 없음
+  const end = () => { switchTab('status'); const sel = $('#guide-mode'); if (sel) sel.value = getGuideMode(); };
+  if (LANG === 'en') {
+    startGuide([
+      { target: '#map', title: 'Map', body: `Roads, railways and population of the whole peninsula. Road colour shows congestion (green → red); red triangles mark bottlenecks. Click a section to open upgrade options ${phone ? 'below' : 'on the right'}, or a station for its services and line diagram.${phone ? '' : ' <b>Shift-drag</b> to select many sections at once.'}` },
+      { target: '#topbar .stats', title: 'Budget and approval', body: 'An infrastructure budget arrives every year and construction is paid over several years. Unspent money carries over for one year only. Approval rises and falls with congestion, unresolved requests, completed projects and debt; as North–South integration grows, more of the North opens up.' },
+      { target: '#legend', title: 'Map view', body: 'Filter to roads, rail or air, or colour the map by population, income, happiness and more.' },
+      { target: '[data-panel=build]', before: tab('build'), title: 'Build: new lines', body: 'Pick a type (motorway, high-speed rail, metro…) and click points on the map to draw it. Lines follow the terrain and you see the cost and benefit–cost ratio right away. Use <b>Preview effect</b>, then <b>Start construction</b>. Planned projects such as GTX lines or the Seoul–Pyongyang HSR can be opened from the list below.' },
+      { target: '[data-panel=projects]', before: tab('projects'), title: 'Projects: money and works', body: 'Ongoing works and what they cost each year. You can speed projects up or slow them down. About 100 real projects under construction are already in progress.' },
+      { target: '[data-panel=ops]', before: tab('ops'), title: 'Operations: trains and flights', body: 'Plan express services, check rail operators and route economics, and open domestic or international air routes.' },
+      { target: '[data-panel=requests]', before: tab('requests'), title: 'Policy', body: 'Congestion complaints and local proposals pile up here; ignoring them costs approval. Migration policy, northern local autonomy and the administrative boundaries chosen in the first year are here too.' },
+      { target: '#btn-find', before: tab('status'), title: 'Find menu', body: `Lost? ${phone ? 'Tap ⌕' : 'Press <b>Ctrl+K</b> (or /)'} and type part of a name to jump to tabs, regions, lines or planned projects.` },
+      { target: '#btn-next', title: 'Next year', body: 'When your projects are set, advance the year: trips, congestion and migration are recalculated (10–20 s). <b>5 years ▶▶</b> runs five years in a row and stops when you start drawing. Reopen this tutorial with the <b>?</b> button.' },
+    ], end);
+    return;
+  }
   startGuide([
     { target: '#map', title: '지도', body: `남북 전체의 도로·철도와 인구입니다. 도로 색은 혼잡도(초록 → 빨강)이고, 빨간 세모는 정체가 심한 곳입니다. 구간을 누르면 ${phone ? '아래 패널' : '오른쪽'}에 개량 메뉴가, 역을 누르면 운행 계통과 노선도가 열립니다.${phone ? '' : ' <b>Shift를 누른 채 끌면</b> 여러 구간을 한꺼번에 고릅니다.'}` },
     { target: '#topbar .stats', title: '예산과 지지율', body: '해마다 SOC 예산이 들어오고, 공사비는 몇 해에 나눠 나갑니다. 쓰지 않은 예산은 한 해 치까지만 남습니다. 지지율은 정체·민원·완공 사업·부채로 오르내리고, 남북 통합도가 오르면 북측 관광지와 교류가 열립니다.' },
@@ -2338,6 +2356,9 @@ function chart(title, pts) {
 function renderSettings() {
   const el = $('[data-panel=settings]');
   el.innerHTML = `
+    <div class="name-row"><span style="flex:1">언어 · Language</span>
+      <select id="lang"><option value="ko" ${LANG === 'ko' ? 'selected' : ''}>한국어</option><option value="en" ${LANG === 'en' ? 'selected' : ''}>English (beta)</option></select></div>
+    ${LANG === 'en' ? '<p class="hint">English is in beta: the main screens, tutorial, setup and summary are translated; detailed panels and place names are still in Korean.</p>' : ''}
     <h3>도움말</h3>
     <div class="actions"><button class="small" id="help-guide">처음 안내 다시 보기</button><button class="small" id="help-find">메뉴 찾기 (Ctrl+K)</button></div>
     <div class="name-row"><span style="flex:1">게임을 열 때 처음 안내</span>
@@ -2361,6 +2382,7 @@ function renderSettings() {
     <h3 style="margin-top:16px">데이터</h3>
     <p class="hint">도로·철도·행정구역·지명: © OpenStreetMap 기여자 (ODbL)<br>인구 격자: WorldPop 2020 (CC BY 4.0)<br>소득·HDI 초기값과 공사비 단가는 게임용 가정값입니다. 자세한 내용은 저장소의 docs/model.md를 보세요.</p>`;
   $('#help-guide').onclick = showGuide;
+  $('#lang').onchange = (e) => setLang(e.target.value);
   $('#help-find').onclick = () => openPalette();
   $('#guide-mode').onchange = (e) => { setGuideMode(e.target.value); toast(`처음 안내: ${GUIDE_MODES[e.target.value]}`); };
   el.querySelectorAll('[data-goto-tab]').forEach((a) => { a.onclick = (e) => { e.preventDefault(); switchTab(a.dataset.gotoTab); }; });
@@ -3633,16 +3655,17 @@ function adminSetup(first) {
   const pick = (keys) => ADMIN_OPTIONS.filter((o) => keys.includes(o.key));
   openAdminSetup({
     esc, current: cur, defaults: { ...ADMIN_DEFAULT, _historic: 'keep', _goal: 'none' },
-    title: `${START_YEAR}년, 통일 첫해 행정구역 정리`,
-    intro: '남과 북의 행정구역을 어떻게 맞출지 지금 정합니다. 비용은 들지 않고, 정한 뒤에도 '
+    title: t(`${START_YEAR}년, 통일 첫해 행정구역 정리`, `${START_YEAR}: administrative boundaries after reunification`),
+    intro: t('남과 북의 행정구역을 어떻게 맞출지 지금 정합니다. 비용은 들지 않고, 정한 뒤에도 '
       + `${START_YEAR}년 안에는 민원·정책 탭에서 다시 고칠 수 있습니다. 다음 해로 넘기면 그대로 굳습니다. 소속 광역 단체가 바뀐 곳은 단체장을 새로 뽑습니다.`,
-    okLabel: first ? '정하고 시작하기' : '이대로 정리',
+    `Decide how to merge the administrative divisions of North and South. It is free, and you can change it from the Policy tab until the end of ${START_YEAR}; after that it is fixed. Provinces whose make-up changes elect new governors. (Place names stay in Korean.)`),
+    okLabel: first ? t('정하고 시작하기', 'Confirm and start') : t('이대로 정리', 'Apply'),
     groups: [
-      { title: '이번 판의 목표', hint: `통일 10년째(${START_YEAR + 10}년) 결산에서 달성했는지 봅니다. 현황 탭에서 진행 상황을 볼 수 있습니다.`,
-        options: [{ key: '_goal', label: '목표', choices: Object.entries(GOALS).map(([k, g]) => [k, g.label]) }] },
-      { title: '남북 정리', options: pick(['kaesong', 'propaganda', 'workers', 'ongjin', 'goseong', 'dueum']) },
-      { title: '북측 도 체계', options: [HISTORIC_PROV, ...pick(['jagang'])] },
-      { title: '분단 전 군 되살리기', hint: '분단으로 갈라지거나 없어진 군입니다. 되살리면 그 군에 속했던 읍면이 옛 군 이름으로 한 도에 묶입니다.',
+      { title: t('이번 판의 목표', 'Goal for this game'), hint: t(`통일 10년째(${START_YEAR + 10}년) 결산에서 달성했는지 봅니다. 현황 탭에서 진행 상황을 볼 수 있습니다.`, `Checked in the ${START_YEAR + 10} summary, ten years after reunification. Track progress in the Overview tab.`),
+        options: [{ key: '_goal', label: t('목표', 'Goal'), choices: Object.entries(GOALS).map(([k, g]) => [k, g.label]) }] },
+      { title: t('남북 정리', 'North–South'), options: pick(['kaesong', 'propaganda', 'workers', 'ongjin', 'goseong', 'dueum']) },
+      { title: t('북측 도 체계', 'Northern provinces'), options: [HISTORIC_PROV, ...pick(['jagang'])] },
+      { title: t('분단 전 군 되살리기', 'Restore pre-division counties'), hint: t('분단으로 갈라지거나 없어진 군입니다. 되살리면 그 군에 속했던 읍면이 옛 군 이름으로 한 도에 묶입니다.', 'Counties split or abolished by the division. Restoring one regroups its old townships under the old name in one province.'),
         options: ADMIN_OPTIONS.filter((o) => HIST_KEYS.has(o.key)) },
     ],
     onApply: (c) => {
@@ -4172,15 +4195,21 @@ function housingClick(e) {
   endHousingPick();
   const rows = Object.entries(HOUSING.sizes).map(([k, sz]) => {
     const pl = housingPlan({ size: k, zone: zp, lat, lon, access });
-    return `<div class="item"><div class="t">${sz.label} · ${sz.households.toLocaleString()}세대</div>
+    return LANG === 'en'
+      ? `<div class="item"><div class="t">${{ s: 'Small', m: 'Medium', l: 'New town' }[k]} · ${sz.households.toLocaleString('en')} homes</div>
+      <div class="m">Cost ${formatWon(pl.cost)} · ${pl.years} yrs · ${pl.persons.toLocaleString('en')} residents (${pl.net.toLocaleString('en')} net growth) · sales revenue ${formatWon(pl.revenue)}</div>
+      <button class="small primary" data-housing="${k}">Start construction</button></div>`
+      : `<div class="item"><div class="t">${sz.label} · ${sz.households.toLocaleString()}세대</div>
       <div class="m">사업비 ${formatWon(pl.cost)} · ${pl.years}년 · 입주 ${fmtPeople(pl.persons)} (그중 순증 ${fmtPeople(pl.net)}) · 분양 수익 ${formatWon(pl.revenue)}</div>
       <button class="small primary" data-housing="${k}">착공</button></div>`;
   }).join('');
   const wrap = document.createElement('div');
   wrap.className = 'setup-wrap';
-  wrap.innerHTML = `<div class="setup" role="dialog" aria-modal="true"><h2>택지지구 개발 · ${esc(name)}</h2>
-    <p class="setup-intro">주택 단지를 조성해 입주민을 받습니다. 입주 인구 가운데 일부는 새로 늘어나는 인구(새 가구·출산·해외 유입)이고, 나머지는 다른 시군에서 옮겨 옵니다.
-      지금 반경 3km 인구 ${fmtPeople(popNear(lon, lat, 3))} · 교통 접근성 ${access.toFixed(2)} (전국 중앙값 1, 낮으면 분양이 덜 됩니다)</p>
+  wrap.innerHTML = `<div class="setup" role="dialog" aria-modal="true"><h2>${t('택지지구 개발', 'Housing district')} · ${esc(name)}</h2>
+    <p class="setup-intro">${t(`주택 단지를 조성해 입주민을 받습니다. 입주 인구 가운데 일부는 새로 늘어나는 인구(새 가구·출산·해외 유입)이고, 나머지는 다른 시군에서 옮겨 옵니다.
+      지금 반경 3km 인구 ${fmtPeople(popNear(lon, lat, 3))} · 교통 접근성 ${access.toFixed(2)} (전국 중앙값 1, 낮으면 분양이 덜 됩니다)`,
+      `Build a housing estate. Part of the new residents is net population growth (new households, births, immigration); the rest moves in from other counties.
+      Population within 3 km now: ${Math.round(popNear(lon, lat, 3)).toLocaleString('en')} · accessibility ${access.toFixed(2)} (national median 1; lower sells worse)`)}</p>
     <div class="setup-body">${rows}</div>
     <div class="setup-btns"><span style="flex:1"></span><button class="small" data-housing="cancel">닫기</button></div></div>`;
   document.body.appendChild(wrap);
@@ -4691,9 +4720,9 @@ function goalHTML() {
   const G = GOALS[state.goal];
   if (!G?.check || !state.history.length) return '';
   const st = G.check({ h0: state.history[0], h1: state.history[state.history.length - 1], state, times1: goalTimes });
-  if (!st) return `<p class="report-goal">목표 · ${G.label} <span class="m">(재는 중)</span></p>`;
-  return `<p class="report-goal ${st.done ? 'good' : ''}">목표 · ${G.label}: 지금 <b>${st.now}</b> / 목표 ${st.target}${st.done ? ' · 달성' : ''}
-    <span class="m">(${START_YEAR + 10}년 결산에서 판정)</span></p>`;
+  if (!st) return `<p class="report-goal">${t('목표', 'Goal')} · ${G.label} <span class="m">(${t('재는 중', 'measuring')})</span></p>`;
+  return `<p class="report-goal ${st.done ? 'good' : ''}">${t('목표', 'Goal')} · ${G.label}: ${t('지금', 'now')} <b>${st.now}</b> / ${t('목표', 'target')} ${st.target}${st.done ? t(' · 달성', ' · achieved') : ''}
+    <span class="m">(${t(`${START_YEAR + 10}년 결산에서 판정`, `judged in the ${START_YEAR + 10} summary`)})</span></p>`;
 }
 
 /** 상징 구간(TIME_PAIRS)의 지금 소요 시간 (워커에 묻는다) */
@@ -4715,9 +4744,9 @@ async function showReport() {
   const years = [h0.year, state.year];
   const times1 = busy ? null : await routeTimes();
   const r = buildReport({ h0, h1, state, built: builtSummary(), times0: state.times0, times1 });
-  showNotice(`${years[0]}–${years[1]}년 결산`, `${reportHTML(r, years)}
+  showNotice(t(`${years[0]}–${years[1]}년 결산`, `Summary ${years[0]}–${years[1]}`), `${reportHTML(r, years)}
     <div class="actions" style="margin-top:10px"><button class="small primary" id="report-img">이미지로 저장 (SNS 공유용)</button></div>
-    ${years[1] === years[0] ? '<p class="hint">한 해 이상 넘겨야 변화가 보입니다.</p>' : ''}`);
+    ${years[1] === years[0] ? `<p class="hint">${t('한 해 이상 넘겨야 변화가 보입니다.', 'Advance at least one year to see changes.')}</p>` : ''}`);
   lastReport = { r, years };
 }
 // 결산 알림은 앞선 알림(관광지 해금 등) 뒤에 줄을 서므로 단추는 문서에 걸어 둔다

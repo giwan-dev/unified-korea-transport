@@ -263,7 +263,7 @@ table.cmp th.asc, table.cmp th.desc { color: var(--ink); }
 .report-t .bad { color: #c0392b; font-weight: 700; }
 .report-built { font-size: 12px; color: var(--muted); margin: 6px 0 0; line-height: 1.6; }
 .ld-ver { display: inline-block; margin-top: 4px; padding: 1px 7px; border-radius: 4px; background: var(--chip); color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
-.ld-contact { margin: 14px 0 0; text-align: right; font-size: 12px; color: var(--muted); }
+.ld-contact { margin: 14px 0 0; display: flex; gap: 6px; font-size: 12px; color: var(--muted); }
 .ld-contact a { color: inherit; }
 
 /* 노선 모식도 (지도 아래쪽에 겹쳐 띄움) */

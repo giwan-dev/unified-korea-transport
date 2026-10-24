@@ -1,6 +1,8 @@
 // 결산: 시작한 해와 지금을 견준 성적표와, 지도 위에 성적을 얹은 공유용 이미지.
 // 10년째(2036년)가 되면 저절로 한 번 뜨고, 현황 탭·메뉴 찾기에서 언제든 연다.
 
+import { t } from '../i18n.js';
+
 const URL_TEXT = 'radix24.github.io/unified-korea-transport';
 
 /**
@@ -9,40 +11,43 @@ const URL_TEXT = 'radix24.github.io/unified-korea-transport';
  */
 /** 결산의 상징 구간 (도심 좌표) */
 export const TIME_PAIRS = [
-  ['서울–평양', [126.978, 37.566], [125.754, 39.032]],
-  ['서울–원산', [126.978, 37.566], [127.443, 39.153]],
-  ['서울–부산', [126.978, 37.566], [129.040, 35.115]],
-  ['부산–신의주', [129.040, 35.115], [124.400, 40.100]],
-  ['광주–청진', [126.852, 35.160], [129.780, 41.790]],
+  [t('서울–평양', 'Seoul–Pyongyang'), [126.978, 37.566], [125.754, 39.032]],
+  [t('서울–원산', 'Seoul–Wonsan'), [126.978, 37.566], [127.443, 39.153]],
+  [t('서울–부산', 'Seoul–Busan'), [126.978, 37.566], [129.040, 35.115]],
+  [t('부산–신의주', 'Busan–Sinuiju'), [129.040, 35.115], [124.400, 40.100]],
+  [t('광주–청진', 'Gwangju–Chongjin'), [126.852, 35.160], [129.780, 41.790]],
 ];
-const MODE_KO = { rail: '고속철', conv: '철도', car: '승용차', transit: '버스·도시철도', air: '항공' };
-export function fmtMinutes(m) { const h = Math.floor(m / 60), mm = Math.round(m % 60); return h ? `${h}시간 ${mm}분` : `${mm}분`; }
+const MODE_KO = t({ rail: '고속철', conv: '철도', car: '승용차', transit: '버스·도시철도', air: '항공' }, { rail: 'HSR', conv: 'rail', car: 'car', transit: 'bus/metro', air: 'air' });
+export function fmtMinutes(m) { const h = Math.floor(m / 60), mm = Math.round(m % 60); return t(h ? `${h}시간 ${mm}분` : `${mm}분`, h ? `${h} h ${mm} min` : `${mm} min`); }
 
 /** 이번 판의 목표 (통일 10년째에 판정). ctx: {h0, h1, state, times1} */
 export const GOALS = {
-  none: { label: '목표 없이 자유롭게' },
-  sp90: { label: '서울–평양 90분 (철도·도로로)', check: (c) => { const t = c.times1?.[0]?.ground?.min; return t == null ? null : { now: fmtMinutes(t), target: '1시간 30분', done: t <= 90 }; } },
-  gap10: { label: '남북 소득 격차 10배 이하, 빚 없이', check: (c) => { const g = c.h1.krInc / Math.max(1, c.h1.kpInc); return { now: `${g.toFixed(1)}배 · 부채 ${Math.round(c.state.debt).toLocaleString()}억`, target: '10배 이하 · 부채 0', done: g <= 10 && c.state.debt <= 0 }; } },
-  jam50: { label: '정체 도로 절반으로', check: (c) => ({ now: `${Math.round(c.h1.congestedKm).toLocaleString()}km`, target: `${Math.round(c.h0.congestedKm / 2).toLocaleString()}km 이하`, done: c.h1.congestedKm <= c.h0.congestedKm / 2 }) },
-  transit50: { label: '철도·대중교통 분담 50%', check: (c) => { const v = c.h1.rail + c.h1.transit; return { now: `${(v * 100).toFixed(1)}%`, target: '50% 이상', done: v >= 0.5 }; } },
-  kphappy: { label: '북측 주민 행복도 70', check: (c) => ({ now: c.h1.happyKP.toFixed(1), target: '70 이상', done: c.h1.happyKP >= 70 }) },
+  none: { label: t('목표 없이 자유롭게', 'No goal (sandbox)') },
+  sp90: { label: t('서울–평양 90분 (철도·도로로)', 'Seoul–Pyongyang in 90 min (by rail or road)'), check: (c) => { const m = c.times1?.[0]?.ground?.min; return m == null ? null : { now: fmtMinutes(m), target: t('1시간 30분', '1 h 30 min'), done: m <= 90 }; } },
+  gap10: { label: t('남북 소득 격차 10배 이하, 빚 없이', 'Income gap under 10× with no debt'), check: (c) => { const g = c.h1.krInc / Math.max(1, c.h1.kpInc); return { now: t(`${g.toFixed(1)}배 · 부채 ${Math.round(c.state.debt).toLocaleString()}억`, `${g.toFixed(1)}× · debt ₩${Math.round(c.state.debt / 10).toLocaleString('en')}B`), target: t('10배 이하 · 부채 0', '≤10× · no debt'), done: g <= 10 && c.state.debt <= 0 }; } },
+  jam50: { label: t('정체 도로 절반으로', 'Halve congested roads'), check: (c) => ({ now: `${Math.round(c.h1.congestedKm).toLocaleString()}km`, target: t(`${Math.round(c.h0.congestedKm / 2).toLocaleString()}km 이하`, `≤ ${Math.round(c.h0.congestedKm / 2).toLocaleString('en')} km`), done: c.h1.congestedKm <= c.h0.congestedKm / 2 }) },
+  transit50: { label: t('철도·대중교통 분담 50%', '50% rail & transit share'), check: (c) => { const v = c.h1.rail + c.h1.transit; return { now: `${(v * 100).toFixed(1)}%`, target: t('50% 이상', '≥ 50%'), done: v >= 0.5 }; } },
+  kphappy: { label: t('북측 주민 행복도 70', 'Northern happiness 70'), check: (c) => ({ now: c.h1.happyKP.toFixed(1), target: t('70 이상', '≥ 70'), done: c.h1.happyKP >= 70 }) },
 };
 
 export function buildReport({ h0, h1, state, built, times0 = null, times1 = null }) {
   const pct = (v) => `${(v * 100).toFixed(1)}%`;
-  const won = (v) => (v >= 10000 ? `${(v / 10000).toFixed(1)}조` : `${Math.round(v).toLocaleString()}억`);
+  const won = (v) => t(v >= 10000 ? `${(v / 10000).toFixed(1)}조` : `${Math.round(v).toLocaleString()}억`, v >= 10000 ? `₩${(v / 10000).toFixed(1)}T` : `₩${(v / 10).toFixed(0)}B`);
   const gap = (h) => h.krInc / Math.max(1, h.kpInc);
   const share = (h) => h.rail + h.transit;
+  // 좋아졌으면 true, 나빠졌으면 false, 그대로면 null
+  const better = (now, before, higher = true, eps = 1e-9) => (Math.abs(now - before) <= eps ? null : (now > before) === higher);
   const rows = [
-    { label: '철도·대중교통 분담', from: pct(share(h0)), to: pct(share(h1)), good: share(h1) > share(h0) + 0.002 ? true : share(h1) < share(h0) - 0.002 ? false : null },
-    { label: '정체 도로', from: `${Math.round(h0.congestedKm).toLocaleString()}km`, to: `${Math.round(h1.congestedKm).toLocaleString()}km`, good: h1.congestedKm < h0.congestedKm },
-    { label: '남북 소득 격차', from: `${gap(h0).toFixed(1)}배`, to: `${gap(h1).toFixed(1)}배`, good: gap(h1) < gap(h0) },
-    { label: '북측 주민 행복도', from: h0.happyKP.toFixed(1), to: h1.happyKP.toFixed(1), good: h1.happyKP > h0.happyKP },
-    { label: '남측 주민 행복도', from: h0.happyKR.toFixed(1), to: h1.happyKR.toFixed(1), good: h1.happyKR >= h0.happyKR },
-    { label: '남북 통합도', from: `${Math.round((h0.integration ?? 0.15) * 100)}%`, to: `${Math.round(state.integration * 100)}%`, good: true },
-    { label: '지지율', from: `${Math.round(h0.approval)}%`, to: `${Math.round(state.approval)}%`, good: state.approval >= h0.approval },
-    { label: '부채', from: won(h0.debt || 0), to: won(state.debt), good: state.debt <= (h0.debt || 0) ? null : false },
+    { label: t('철도·대중교통 분담', 'Rail & transit share'), from: pct(share(h0)), to: pct(share(h1)), good: better(share(h1), share(h0), true, 0.002) },
+    { label: t('정체 도로', 'Congested roads'), from: `${Math.round(h0.congestedKm).toLocaleString()}km`, to: `${Math.round(h1.congestedKm).toLocaleString()}km`, good: better(h1.congestedKm, h0.congestedKm, false, 0.5) },
+    { label: t('남북 소득 격차', 'Income gap'), from: `${gap(h0).toFixed(1)}×`, to: `${gap(h1).toFixed(1)}×`, good: better(gap(h1), gap(h0), false, 0.05) },
+    { label: t('북측 주민 행복도', 'Northern happiness'), from: h0.happyKP.toFixed(1), to: h1.happyKP.toFixed(1), good: better(h1.happyKP, h0.happyKP, true, 0.05) },
+    { label: t('남측 주민 행복도', 'Southern happiness'), from: h0.happyKR.toFixed(1), to: h1.happyKR.toFixed(1), good: better(h1.happyKR, h0.happyKR, true, 0.05) },
+    { label: t('남북 통합도', 'Integration'), from: `${Math.round((h0.integration ?? 0.15) * 100)}%`, to: `${Math.round(state.integration * 100)}%`, good: better(state.integration, h0.integration ?? 0.15, true, 0.005) },
+    { label: t('지지율', 'Approval'), from: `${Math.round(h0.approval)}%`, to: `${Math.round(state.approval)}%`, good: better(state.approval, h0.approval, true, 0.5) },
+    { label: t('부채', 'Debt'), from: won(h0.debt || 0), to: won(state.debt), good: better(state.debt, h0.debt || 0, false, 1) },
   ];
+
   // 점수(100점): 혼잡 줄이기 25 · 대중교통 분담 15 · 소득 격차 20 · 북측 행복도 15 · 통합도 10 · 지지율 10 · 부채 5
   const clamp = (v) => Math.max(0, Math.min(1, v));
   const score = Math.round(
@@ -53,8 +58,8 @@ export function buildReport({ h0, h1, state, built, times0 = null, times1 = null
     + 10 * clamp(state.integration)
     + 10 * clamp(state.approval / 70)
     + 5 * clamp(1 - state.debt / 300000));
-  const grade = score >= 85 ? '국토 대개조의 설계자' : score >= 70 ? '믿음직한 교통 장관' : score >= 55 ? '무난한 교통 행정'
-    : score >= 40 ? '아직 갈 길이 먼 교통망' : '막힌 길 위의 통일';
+  const grade = score >= 85 ? t('국토 대개조의 설계자', 'Architect of a new Korea') : score >= 70 ? t('믿음직한 교통 장관', 'A trusted transport minister') : score >= 55 ? t('무난한 교통 행정', 'Steady administration')
+    : score >= 40 ? t('아직 갈 길이 먼 교통망', 'A long way to go') : t('막힌 길 위의 통일', 'Reunified, but gridlocked');
   // 상징 구간 소요 시간 (시작한 해 → 지금, 가장 빠른 수단)
   const times = (times0 && times1) ? TIME_PAIRS.map(([name], k) => times0[k] && times1[k] && {
     name, from: fmtMinutes(times0[k].min), to: fmtMinutes(times1[k].min), mode: MODE_KO[times1[k].k] || '', good: times1[k].min < times0[k].min - 1 ? true : times1[k].min > times0[k].min + 1 ? false : null,
@@ -70,15 +75,16 @@ export function reportHTML(r, years) {
     <td class="num ${row.good === true ? 'good' : row.good === false ? 'bad' : ''}">${row.to}</td></tr>`;
   const b = r.built;
   return `<div class="report">
-    <div class="report-score"><b>${r.score}</b><span>점 · ${r.grade}</span></div>
-    ${r.goal ? `<p class="report-goal ${r.goal.done ? 'good' : ''}">목표 · ${r.goal.label}: <b>${r.goal.done ? '달성' : '아직'}</b> (지금 ${r.goal.now} · 목표 ${r.goal.target})</p>` : ''}
-    <p class="hint">${years[0]}년 → ${years[1]}년, ${years[1] - years[0]}년 동안의 변화입니다.</p>
+    <div class="report-score"><b>${r.score}</b><span>${t('점', 'pts')} · ${r.grade}</span></div>
+    ${r.goal ? `<p class="report-goal ${r.goal.done ? 'good' : ''}">${t('목표', 'Goal')} · ${r.goal.label}: <b>${r.goal.done ? t('달성', 'achieved') : t('아직', 'not yet')}</b> (${t('지금', 'now')} ${r.goal.now} · ${t('목표', 'target')} ${r.goal.target})</p>` : ''}
+    <p class="hint">${t(`${years[0]}년 → ${years[1]}년, ${years[1] - years[0]}년 동안의 변화입니다.`, `Changes over ${years[1] - years[0]} years, ${years[0]} → ${years[1]}.`)}</p>
     <table class="report-t">${r.rows.map(cell).join('')}</table>
-    ${r.times.length ? `<h4 style="margin:10px 0 2px">주요 구간 소요 시간 (가장 빠른 수단)</h4>
+    ${r.times.length ? `<h4 style="margin:10px 0 2px">${t('주요 구간 소요 시간 (가장 빠른 수단)', 'Key journey times (fastest mode)')}</h4>
       <table class="report-t">${r.times.map((t) => `<tr><td>${t.name} <span class="m">${t.mode}</span></td><td class="num">${t.from}</td><td class="num">→</td>
         <td class="num ${t.good === true ? 'good' : t.good === false ? 'bad' : ''}">${t.to}</td></tr>`).join('')}</table>` : ''}
-    <p class="report-built">놓은 노선: 고속철도 ${b.hsr}km · 일반·광역철도 ${b.rail}km · 도시철도 ${b.metro}km · 고속도로·국도 ${b.road}km<br>
-      직접 벌여 완공한 사업 ${b.done}건 (개량 ${b.upgrades}건)</p>
+    <p class="report-built">${t(`놓은 노선: 고속철도 ${b.hsr}km · 일반·광역철도 ${b.rail}km · 도시철도 ${b.metro}km · 고속도로·국도 ${b.road}km<br>
+      직접 벌여 완공한 사업 ${b.done}건 (개량 ${b.upgrades}건)`, `Built: HSR ${b.hsr} km · rail ${b.rail} km · metro ${b.metro} km · roads ${b.road} km<br>
+      Projects you completed: ${b.done} (${b.upgrades} upgrades)`)}</p>
   </div>`;
 }
 
@@ -103,19 +109,19 @@ export function downloadReportImage(map, r, years, fileName) {
         roundRect(g, x, y, w, h, 18); g.fill();
         g.fillStyle = '#1d232b';
         g.font = '800 34px "Pretendard", "Malgun Gothic", sans-serif';
-        g.fillText('통일 한반도 교통망', x + 32, y + 62);
+        g.fillText(t('통일 한반도 교통망', 'Unified Korea Transport'), x + 32, y + 62);
         g.font = '600 20px "Pretendard", "Malgun Gothic", sans-serif';
         g.fillStyle = '#5b6470';
-        g.fillText(`${years[0]}년 → ${years[1]}년 결산`, x + 32, y + 98);
+        g.fillText(t(`${years[0]}년 → ${years[1]}년 결산`, `Summary ${years[0]} → ${years[1]}`), x + 32, y + 98);
         g.fillStyle = '#1f5fbf';
         g.font = '800 88px "Pretendard", "Malgun Gothic", sans-serif';
         g.fillText(String(r.score), x + 32, y + 200);
         const sw = g.measureText(String(r.score)).width;
         g.font = '700 26px "Pretendard", "Malgun Gothic", sans-serif';
-        g.fillText('점', x + 40 + sw, y + 200);
+        g.fillText(t('점', 'pts'), x + 40 + sw, y + 200);
         g.fillStyle = '#1d232b';
         g.font = '700 26px "Pretendard", "Malgun Gothic", sans-serif';
-        g.fillText(r.goal ? `${r.grade} · 목표 ${r.goal.done ? '달성' : '미달'}` : r.grade, x + 32, y + 246);
+        g.fillText(r.goal ? `${r.grade} · ${t('목표', 'goal')} ${r.goal.done ? t('달성', 'achieved') : t('미달', 'missed')}` : r.grade, x + 32, y + 246);
         let yy = y + 296;
         const line = (label, text, good, step) => {
           g.fillStyle = '#5b6470'; g.fillText(label, x + 32, yy);
@@ -130,7 +136,7 @@ export function downloadReportImage(map, r, years, fileName) {
         if (r.times.length) {
           yy += 10;
           g.fillStyle = '#1d232b'; g.font = '700 20px "Pretendard", "Malgun Gothic", sans-serif';
-          g.fillText('주요 구간 소요 시간', x + 32, yy); yy += 32;
+          g.fillText(t('주요 구간 소요 시간', 'Key journey times'), x + 32, yy); yy += 32;
           g.font = '500 20px "Pretendard", "Malgun Gothic", sans-serif';
           for (const t of r.times) line(t.name, `${t.from} → ${t.to}`, t.good, 32);
         }
@@ -138,7 +144,7 @@ export function downloadReportImage(map, r, years, fileName) {
         g.fillStyle = '#1d232b';
         g.font = '600 20px "Pretendard", "Malgun Gothic", sans-serif';
         g.font = '600 18px "Pretendard", "Malgun Gothic", sans-serif';
-        g.fillText(`고속철도 ${b.hsr}km · 철도 ${b.rail}km · 도시철도 ${b.metro}km · 도로 ${b.road}km`, x + 32, yy + 14);
+        g.fillText(t(`고속철도 ${b.hsr}km · 철도 ${b.rail}km · 도시철도 ${b.metro}km · 도로 ${b.road}km`, `HSR ${b.hsr} km · rail ${b.rail} km · metro ${b.metro} km · roads ${b.road} km`), x + 32, yy + 14);
         g.fillStyle = '#5b6470';
         g.font = '500 18px "Pretendard", "Malgun Gothic", sans-serif';
         g.fillText(URL_TEXT, x + 32, y + h - 28);
