@@ -1384,16 +1384,20 @@ export class Model {
   }
 
   /** 1년 진행: 소득 수렴, 건강·교육, 인구이동, 자연증감 */
-  advanceYear(integration, policy) {
+  advanceYear(integration, policy, sez = []) {
     const { Z } = this;
     this.computeAccess();
     this.frontier *= 1 + P.frontierGrowth;
+    // 경제특구: 투자가 몰려 소득이 빨리 따라잡고(수렴 속도 ×1.8, 목표 +15%), 일자리를 찾아 사람이 모인다(편의 +)
+    const special = new Set(sez);
     for (let i = 0; i < Z; i++) {
       if (this.isExt[i]) continue;
-      const target = this.incomeTarget(i);
-      const r = this.isKP[i]
+      const sz = special.has(i);
+      const target = this.incomeTarget(i) * (sz ? 1.15 : 1);
+      if (sz) this.amenity[i] += 0.02;
+      const r = (this.isKP[i]
         ? P.convergenceKPBase + P.convergenceKPIntegrated * integration
-        : P.convergenceKR;
+        : P.convergenceKR) * (sz ? 1.8 : 1);
       this.income[i] = Math.exp(Math.log(this.income[i]) + r * (Math.log(target) - Math.log(this.income[i])));
       this.le[i] += 0.08 * (this.leTarget(i) - this.le[i]);
       const ii = incomeIndex(this.income[i]);

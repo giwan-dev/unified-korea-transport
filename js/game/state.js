@@ -790,7 +790,7 @@ function completeProject(base, state, p) {
     if (s) s.built = true;
     return;
   }
-  if (p.kind === 'vehicles' || p.kind === 'devel' || p.kind === 'housing') return;   // 역세권 개발·택지지구는 해 넘길 때 main이 정산한다 (settleDevels·settleHousing)
+  if (p.kind === 'vehicles' || p.kind === 'devel' || p.kind === 'housing' || p.kind === 'sez') return;   // 역세권 개발·택지지구는 해 넘길 때 main이 정산한다 (settleDevels·settleHousing)
   if (p.kind === 'mega') { applyMega(base, state, p.mega); return; }
   if (p.kind === 'osm') { for (const i of p.links) state.osm.opened[i] = true; return; }   // 계통 차량 추가 구입 (편성 수는 고칠 때 이미 바뀌었다)
   if (p.kind === 'airRoute') {

@@ -2,7 +2,7 @@
 import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView, LAYER_VIEWS } from './ui/map.js';
 import { Namer } from './game/naming.js';
 import {
-  newGame, START_YEAR, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
+  newGame, START_YEAR, startProject, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
   updateCongestion, defaultFix, updateApproval, canAfford, isKP, linksUnderWork, UPGRADES, NEW_BUILDS, upgradeCost,
   placeName, setPlaceName, startRestoreName, RENAME, startAirport, startAirportExpand, renameLine, splitLink,
   fundFor, settlePPP, settleRail, renameKPLines, KP_LINE_RENAME, LINE_RENAME_COST, railDividend, railEquity, mergeRail, OP_FACTORS, initOngoing, linkPending, setProjectPace, PACES,
@@ -34,6 +34,7 @@ import { trainBrand, autoBrand } from './game/trainnames.js';
 import { seedInterKoreaAir, airlinesHTML } from './game/airlines.js';
 import { develPlan, startDevel, settleDevels } from './game/devel.js';
 import { HOUSING, housingPlan, startHousing, settleHousing } from './game/housing.js';
+import { rollEvent } from './game/events.js';
 import { newlyUnlocked, unlockedTourKP, unlockAt } from './game/tourism.js';
 import { showNotice } from './ui/notice.js';
 import { placeIntroHTML } from './game/cities.js';
@@ -91,6 +92,7 @@ globalThis.__perf = perf;
 
 async function init() {
   mark('init');
+  if (location.hash.startsWith('#s=')) await openSharedFromURL();
   // 계산 워커(와 보조 워커)는 먼저 띄워 둔다: 모듈을 받고 읽는 동안 이쪽은 데이터를 받는다
   worker = new Worker(new URL('./sim/worker.js', import.meta.url), { type: 'module' });
   const ports = new URLSearchParams(location.search).has('serial') ? [] : helperPorts();   // ?serial: 한 워커로만
@@ -211,7 +213,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { perf, map, base, worker: () => worker, countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
@@ -322,7 +324,36 @@ const loading = {
 };
 
 function ctx() {
-  return { integration: state.integration, policy: state.policy };
+  return { integration: state.integration, policy: state.policy, sez: (state.sez || []).filter((z) => z.done).map((z) => z.zone) };
+}
+
+// ------------------------------------------------------------ 경제특구
+
+const SEZ = { cost: 10000, years: 3, max: 5 };
+function sezHTML(i) {
+  const z = zoneProps[i];
+  if (z.ext || z.country !== 'KP') return '';
+  const cur = (state.sez || []).find((s) => s.zone === i);
+  if (cur) return `<h4>경제특구</h4><p class="hint">${cur.done ? `${cur.year}년 지정 · 소득이 빨리 오르고 일자리를 찾아 사람이 모입니다.` : `조성 중 (${cur.year + SEZ.years}년 지정)`}</p>`;
+  const n = (state.sez || []).length;
+  return `<h4>경제특구</h4><p class="hint">외국인·남측 기업 투자를 받는 특구로 지정합니다. 소득 수렴이 빨라지고(×1.8, 목표 +15%) 사람이 모여듭니다. 교통이 좋은 곳일수록 효과가 큽니다.</p>
+    <button class="small primary" data-sez="${i}" ${n >= SEZ.max ? 'disabled' : ''}>경제특구 지정 · ${formatWon(SEZ.cost)} · ${SEZ.years}년${n >= SEZ.max ? ` (최대 ${SEZ.max}곳)` : ''}</button>`;
+}
+function startSEZ(i) {
+  if (!canAfford(state, SEZ.cost, SEZ.years)) { alert('예산과 차입 한도가 부족합니다.'); return; }
+  const id = crypto.randomUUID();
+  (state.sez ||= []).push({ id, zone: i, year: state.year, done: false });
+  startProject(state, { id, kind: 'sez', links: [], stations: [], cost: SEZ.cost, years: SEZ.years, label: `${zoneName(i)} 경제특구 조성` });
+  save(state); renderAll(); select({ type: 'zone', id: i });
+}
+function settleSEZ(done) {
+  const ids = new Set(done.filter((p) => p.kind === 'sez').map((p) => p.id));
+  for (const s of state.sez || []) {
+    if (!ids.has(s.id) || s.done) continue;
+    s.done = true;
+    state.integration = Math.min(1, state.integration + 0.01);
+    state.log.unshift(`${state.year}년 ${zoneName(s.zone)} 경제특구 지정 (남북 통합도 +1%p)`);
+  }
 }
 
 function resetNamer() {
@@ -412,6 +443,8 @@ function applyResult(res) {
   // 해 넘김 뒤에는 보이는 탭만 다시 그린다 (모든 탭을 그리면 1~2초). 다른 탭은 열 때 그린다
   if (stepped) renderVisible(); else renderAll();
   mark('y: rendered');
+  // 올해의 사건 (이어 넘기는 중에는 첫 번째 대응을 저절로 고르고 기록만 남긴다)
+  if (stepped) { const ev = rollEvent({ state, rng, zones: zoneProps, zoneName, bigCities: bigCities() }); if (ev) showEvent(ev); }
   // 통일 10년째: 결산을 한 번 띄운다 (이어 넘기기도 여기서 멈춘다)
   if (stepped && state.year >= START_YEAR + 10 && !state.report10) {
     state.report10 = true; save(state);
@@ -466,6 +499,7 @@ function nextYear() {
   const opened = done.some((p) => p.kind === 'new');   // 플레이어가 놓은 새 노선 (이어받은 공사는 해마다 열려서 뺀다)
   // 완공된 역세권 개발: 분양 수익과 인구 순유입
   const dev = [...settleDevels(state, done), ...settleHousing(state, done)];
+  settleSEZ(done);
   // 남북 통합도가 오르면 북측 관광지가 하나씩 열린다
   for (const s of newlyUnlocked(state, tourSites)) {
     const z = zoneOfSite(s);
@@ -1579,6 +1613,13 @@ function addFeatureStatesAfterRebuild() { refreshLinks(); }
 function bindUI() {
   $('#btn-next').onclick = nextYear;
   $('#btn-next5').onclick = () => runYears(5);
+  // 건설 탭 사업 비교: 안 빼기
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-cmp-del]');
+    if (!b) return;
+    if (b.dataset.cmpDel === 'all') state.compare = []; else state.compare.splice(+b.dataset.cmpDel, 1);
+    save(state); renderBuild();
+  });
   // 현황 탭의 결산 단추 (탭을 다시 그려도 한 번만 묶이게 문서에 건다)
   document.addEventListener('click', (e) => { if (e.target.closest('#btn-report')) showReport(); });
   $('#btn-measure').onclick = () => (measure ? endMeasure() : startMeasure());
@@ -1884,7 +1925,7 @@ function renderBuild() {
   const tools = Object.entries(NEW_BUILDS).map(([k, v]) =>
     `<button data-build="${k}" class="${draft?.type === k ? 'on' : ''}">${v.label}<span class="c">${formatWon(v.perKm)}/km · ${v.years}년</span></button>`).join('')
     + `<button data-build="airport" class="${draft?.type === 'airport' ? 'on' : ''}">${AIRPORT.build.label}<span class="c">${formatWon(AIRPORT.build.cost)} · ${AIRPORT.build.years}년</span></button>`;
-  let body = `<div class="tool-row"><button class="small" data-padd="station">역 신설 (노선 위 한 점)</button><button class="small" data-padd="ic">IC 신설 (고속도로 위 한 점)</button>
+  let body = `${compareHTML()}<div class="tool-row"><button class="small" data-padd="station">역 신설 (노선 위 한 점)</button><button class="small" data-padd="ic">IC 신설 (고속도로 위 한 점)</button>
     <button class="small svc-pick-b">역 골라 특급·급행 짜기</button><button class="small" id="housing-pick" title="지도에서 고른 곳에 주택 단지를 조성합니다 (인구 순증)">택지지구 개발</button></div>
     <div class="name-row" style="margin-bottom:4px"><input type="text" id="rec-text" placeholder="예: 평양에 도시철도 3호선을 짓고 싶어, 노선을 추천해줘" style="flex:1">
       <button class="small primary" id="rec-go">노선 추천</button></div>
@@ -2307,7 +2348,7 @@ function renderSettings() {
     <h3 style="margin-top:16px">저장 슬롯</h3>
     <p class="hint">진행은 자동 저장되고, 여기에 따로 세 개까지 남겨 두었다가 되돌릴 수 있습니다.</p>
     ${slotsHTML()}
-    <div class="actions"><button class="small" id="save-export">파일로 내보내기</button><button class="small" id="save-import">파일 불러오기</button></div>
+    <div class="actions"><button class="small" id="save-export">파일로 내보내기</button><button class="small" id="save-import">파일 불러오기</button><button class="small" id="save-link">공유 링크 복사</button></div>
     <input type="file" id="save-file" accept=".json,application/json" hidden>
     <p class="hint">다른 기기·브라우저로 옮기거나 다른 사람과 판을 주고받을 때 씁니다. 지도 자료가 바뀌기 전에 만든 파일은 불러올 수 없습니다.</p>
     <h3 style="margin-top:16px">새 게임</h3>
@@ -2326,6 +2367,7 @@ function renderSettings() {
   bindSlots(el);
   $('#help-bug').onclick = reportBug;
   $('#save-export').onclick = exportSave;
+  $('#save-link').onclick = copyShareLink;
   $('#save-import').onclick = () => $('#save-file').click();
   $('#save-file').onchange = (e) => { const f = e.target.files?.[0]; if (f) importSave(f); e.target.value = ''; };
   $('#btn-new').onclick = () => {
@@ -2495,6 +2537,7 @@ function renderSelection() {
     if (!r.ok) return alert(r.reason);
     save(state); renderAll();
   });
+  el.querySelector('[data-sez]')?.addEventListener('click', (e) => startSEZ(+e.currentTarget.dataset.sez));
   const zn = el.querySelector('#zone-name');
   if (zn) {
     el.querySelector('#zone-rename').onclick = () => {
@@ -4346,7 +4389,91 @@ function onPreview(m) {
     ${airDeltaHTML(B, A)}
     ${extra.html ? extra.html({ ...res, touched }, A, clone) : ''}
     ${m.benefit ? previewAppraisal(m.benefit, res, touched, extra, clone) : ''}
+    <div class="actions"><button class="small" id="cmp-add">비교에 담기 (A·B·C안)</button></div>
     <p class="hint">실제 효과는 해마다 조금씩 나타나고, 인구·소득 변화에 따라 달라집니다.</p>`);
+  const ca = $('#cmp-add');
+  if (ca) ca.onclick = () => { addCompare(); ca.disabled = true; ca.textContent = '담았습니다 (건설 탭 위)'; };
+}
+
+// ------------------------------------------------------------ 해마다 일어나는 사건
+
+/** 국제 행사 후보 도시: 광역시·평양 (가장 인구가 많은 구) + 북측 큰 도시 */
+function bigCities() {
+  const out = [];
+  for (const prov of ['부산광역시', '인천광역시', '대구광역시', '광주광역시', '대전광역시', '평양시']) {
+    let best = -1;
+    zoneProps.forEach((z, i) => { if (!z.ext && z.province === prov && (best < 0 || z.pop > zoneProps[best].pop)) best = i; });
+    if (best >= 0) out.push([prov.replace(/(광역시|시)$/, ''), best]);
+  }
+  for (const nm of ['원산시', '함흥시', '청진시', '신의주시']) {
+    const i = zoneProps.findIndex((z) => z.name === nm && !z.ext);
+    if (i >= 0) out.push([nm.replace(/시$/, ''), i]);
+  }
+  return out;
+}
+
+function showEvent(ev) {
+  const decide = (k) => {
+    const msg = ev.choices[k].apply(state);
+    (state.events ||= []).push({ key: ev.key, year: state.year, choice: k });
+    state.log.unshift(`${state.year}년 ${msg}`);
+    save(state); renderAll();
+  };
+  if (autoYears > 0) { decide(0); return; }
+  const wrap = document.createElement('div');
+  wrap.className = 'setup-wrap';
+  wrap.innerHTML = `<div class="setup" role="dialog" aria-modal="true"><h2>${esc(ev.title)}</h2>
+    <p class="setup-intro">${esc(ev.body)}</p>
+    <div class="setup-btns" style="flex-direction:column;align-items:stretch">${ev.choices.map((c, k) => `<button class="${k ? '' : 'primary'}" data-ev-choice="${k}">${esc(c.label)}</button>`).join('')}</div></div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-ev-choice]');
+    if (!b) return;
+    wrap.remove();
+    decide(+b.dataset.evChoice);
+  });
+}
+
+// ------------------------------------------------------------ 사업 비교 (A·B·C안)
+
+/** 마지막 효과 미리보기를 비교 목록에 담는다 (세 개까지, 넘치면 오래된 것부터 뺀다) */
+function addCompare() {
+  const p = lastPreview;
+  if (!p) return;
+  const a = p.appraisal;
+  const built = previewBuilt();
+  const list = (state.compare ||= []);
+  list.push({ title: p.title, year: state.year, cost: built.cost, years: built.years, km: built.km,
+    newUse: Math.round(p.newUse), dRail: Math.round(p.dRail), dTrips: Math.round(p.dTrips), dVhm: Math.round(p.dVhm),
+    congB: Math.round(p.congB), congA: Math.round(p.congA), bc: a ? +a.bc.toFixed(2) : null, ahp: a ? +a.ahp.toFixed(3) : null, npv: a ? Math.round(a.npv) : null });
+  while (list.length > 3) list.shift();
+  save(state); renderBuild();
+}
+/** 미리보기한 사업의 사업비·공기·길이 (그리기 중이면 그 노선) */
+function previewBuilt() {
+  if (draft && draft.type !== 'airport' && draft.points.length > 1) { const d = draftCost(); return { cost: d.cost, years: d.years, km: d.km }; }
+  const e = lastPreview?.extra || {};
+  return { cost: e.cost ?? null, years: e.years ?? null, km: e.km ?? null };
+}
+
+function compareHTML() {
+  const list = state.compare || [];
+  if (!list.length) return '';
+  const L = 'ABC';
+  const best = (k, hi = true) => { const v = list.map((x) => x[k]).filter((x) => x != null); return v.length ? (hi ? Math.max(...v) : Math.min(...v)) : null; };
+  const cell = (x, k, fmt, hi = true) => { const b = best(k, hi); const v = x[k]; return `<td class="num ${v != null && v === b && list.length > 1 ? 'good' : ''}">${v == null ? '-' : fmt(v)}</td>`; };
+  const sg = (v) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toLocaleString()}`;
+  const rows = [
+    ['B/C', 'bc', (v) => v.toFixed(2)], ['AHP', 'ahp', (v) => v.toFixed(3)], ['순현재가치', 'npv', (v) => formatWon(v)],
+    ['사업비', 'cost', (v) => formatWon(v), false], ['철도 이용 변화 (명/일)', 'dRail', sg], ['유발 통행 (통행/일)', 'dTrips', sg],
+    ['도로 차량 시간 (대·시간/일)', 'dVhm', sg, false], ['정체 도로 뒤 (km)', 'congA', (v) => v.toLocaleString(), false], ['새 구간 최대 이용', 'newUse', (v) => v.toLocaleString()],
+  ];
+  return `<details class="fold" open><summary>사업 비교 (${list.length})</summary>
+    <table class="report-t cmp-t"><tr><td></td>${list.map((x, i) => `<td class="num"><b>${L[i]}안</b><div class="m" title="${esc(x.title)}">${esc(x.title.slice(0, 18))}</div></td>`).join('')}</tr>
+      ${rows.map(([label, k, f, hi]) => `<tr><td>${label}</td>${list.map((x) => cell(x, k, f, hi !== false)).join('')}</tr>`).join('')}</table>
+    <p class="hint">효과 미리보기의 결과입니다. 초록은 그 줄에서 가장 나은 안입니다. 같은 해·같은 조건에서 미리보기한 것끼리 견주세요.</p>
+    <div class="actions">${list.map((_, i) => `<button class="small" data-cmp-del="${i}">${L[i]}안 빼기</button>`).join('')}<button class="small" data-cmp-del="all">모두 지우기</button></div>
+  </details>`;
 }
 
 /** 미리보기: 이용이 크게 바뀌는 공항 (공항철도 등) */
@@ -4477,6 +4604,48 @@ function reportBug() {
     `최근 오류: ${errLog.slice(-3).join(' | ').slice(0, 600) || '없음'}`,
     `최근 기록: ${(state?.log || []).slice(0, 3).join(' / ').slice(0, 300)}`];
   location.href = `mailto:${BUG_MAIL}?subject=${encodeURIComponent(`[통일 한반도 교통망 ${APP_VERSION}] 오류 제보`)}&body=${encodeURIComponent(lines.join('\n'))}`;
+}
+
+// 공유 링크: 저장(계산 상태는 빼고, 기록은 줄여서)을 압축해 주소의 #s= 뒤에 담는다. 받은 쪽은 그 판을 열고 계산을 다시 한다
+async function packState() {
+  // 받은 쪽에서 다시 만드는 것(계산 상태·체감 기준·혼잡 목록)과 지난 기록(지난 선거·끝난 제안·다 지은 이어받은 공사)은 뺀다
+  const { snapshot, subBase, zoneGainPrev, congestion, compare, approvalWhy, ...rest } = state;
+  const local = { ...state.local, elections: (state.local?.elections || []).slice(-1), proposals: (state.local?.proposals || []).filter((p) => p.status === 'open') };
+  const lite = { ...rest, local, congestion: {}, log: (state.log || []).slice(0, 20), projects: state.projects.filter((p) => !(p.kind === 'osm' && p.status === 'done')) };
+  const bytes = new TextEncoder().encode(JSON.stringify({ app: 'unified-korea-transport', v: APP_VERSION, state: lite }));
+  const cs = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+  const buf = new Uint8Array(await new Response(cs).arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+async function unpackState(code) {
+  const bin = atob(code.replace(/-/g, '+').replace(/_/g, '/'));
+  const buf = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  const ds = new Blob([buf]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return JSON.parse(await new Response(ds).text());
+}
+async function copyShareLink() {
+  try {
+    const url = `${location.origin}${location.pathname}#s=${await packState()}`;
+    await navigator.clipboard.writeText(url).catch(() => prompt('이 주소를 복사하세요', url));
+    toast(url.length > 8000 ? `링크를 복사했습니다 (${Math.round(url.length / 1000)}천 자: 길어서 일부 SNS에서는 잘릴 수 있습니다. 그럴 땐 파일로 내보내 주세요)` : `공유 링크를 복사했습니다 (${url.length.toLocaleString()}자)`);
+  } catch (e) { alert(`공유 링크를 만들지 못했습니다: ${e.message}`); }
+}
+/** 주소에 #s=가 있으면 그 판을 연다 (게임을 시작하기 전에 부른다). 열었으면 true */
+async function openSharedFromURL() {
+  const m = location.hash.match(/^#s=([A-Za-z0-9_-]+)/);
+  if (!m) return false;
+  history.replaceState(null, '', location.pathname);
+  let v;
+  try { v = await unpackState(m[1]); } catch { alert('공유 링크를 읽지 못했습니다.'); return false; }
+  const st = v?.state;
+  if (v?.app !== 'unified-korea-transport' || !st?.year) return false;
+  if (!confirm(`공유받은 ${st.year}년 판을 열까요? 지금 진행은 슬롯이나 파일로 저장해 두지 않았다면 사라집니다.`)) return false;
+  st.log = [`공유받은 판을 열었습니다 (${st.year}년). 계산 상태는 처음부터 다시 맞춥니다.`, ...(st.log || [])];
+  save(st);
+  clearSim();
+  return true;
 }
 
 function exportSave() {
@@ -5056,6 +5225,7 @@ function zonePanel(id) {
       <tr><td>이용 철도역</td><td>${stName ? esc(stName) : '없음 (25km 밖)'}</td></tr>
     </table>
     ${localZoneHTML(id)}
+    ${sezHTML(id)}
     ${targets.map((t) => restoreRow(t)).join('')}
     <h4>이름 바꾸기</h4>
     <div class="name-row"><input type="text" id="zone-name" value="${esc(name)}">

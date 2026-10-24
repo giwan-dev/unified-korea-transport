@@ -107,7 +107,13 @@ async function handle(msg) {
       if (!msg.snapshot) {
         // 새 게임: 미리 계산한 기준 연도가 있으면 그대로 쓴다
         if (bl && model.importBaseline(bl.json, bl.bin)) { wmark('baseline imported'); results(bl.json.totals); }
-        else {
+        else if (bl?.json.snapshot) {
+          // 망이 바뀐 판(공유 링크로 연 판 등): 기준 연도의 보정 상수·인구는 그대로 쓰고 지금 망으로 한 번 배정한다 (수십 초)
+          model.restore(bl.json.snapshot);
+          const totals = await assign(lastNet, msg.ctx.integration, progress('받은 판의 통행배정'), false);
+          model.computeAccess();
+          results(totals);
+        } else {
           // 미리 계산한 기준 연도가 없거나 망 크기가 다르면 처음부터 보정한다 (몇 분 걸린다)
           post('progress', { label: `기준 연도 처음부터 계산 중${bl ? ` (기준선 크기 다름: 링크 ${bl.json.sizes.L}/${model.volume.length}, 역 ${bl.json.sizes.NS}/${model.boardings.length}, 항공 ${bl.json.sizes.AA}/${model.airOD.length})` : ''}`, value: 0 });
           results(calibrateFresh(msg.ctx));
@@ -134,7 +140,7 @@ async function handle(msg) {
       if (msg.ctx.dev?.length) model.applyDevelopments(msg.ctx.dev);
       // 열린 북측 관광지만 관광 수요를 끈다 (해금)
       if (msg.ctx.tourKP?.length === model.tourKP.length) model.tourKP.set(msg.ctx.tourKP);
-      model.advanceYear(msg.ctx.integration, msg.ctx.policy);
+      model.advanceYear(msg.ctx.integration, msg.ctx.policy, msg.ctx.sez || []);
       wmark('advanced');
       // 새 노선이 개통한 해에는 지난해 교통량과 반씩 섞어 이용이 빨리 자리 잡게 한다
       results(await assign(lastNet, msg.ctx.integration, progress('통행배정'), true, msg.opened ? 1 : null));
