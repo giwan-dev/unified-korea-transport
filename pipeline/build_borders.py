@@ -113,6 +113,13 @@ def main():
     country = [f["properties"]["country"] for f in sgg]
     kp = [k for k in range(len(sgg)) if country[k] == "KP"]
     kp_tree = shapely.STRtree([geoms[k] for k in kp])
+    # 북측 OSM 시군 경계는 이웃끼리 딱 맞지 않아 땅 한가운데에 '이웃 없는 경계'(가는 틈)가 생긴다 (토산–금천–장풍).
+    # 해안선이 아닌 육지 안쪽(바다에서 500m 넘게 떨어진 곳)의 그런 경계는 1km 안의 이웃 시군과의 경계로 고친다
+    import geopandas as gpd
+    land_all = unary_union(gpd.read_file(f"zip://{(ROOT / 'data' / 'raw' / 'ne_10m_land.zip').as_posix()}").clip((124, 33, 132, 43.5)).geometry)
+    inland = land_all.buffer(-0.005)
+    all_tree = shapely.STRtree(geoms)
+    fixed = 0
     for i, b in enumerate(bounds):
         rest = b.difference(unary_union(shared[i]).buffer(1e-6)) if shared[i] else b
         for part, code in ((rest.difference(dmz), -1), (rest.intersection(dmz), -2)) if dmz is not None else ((rest, -1),):
@@ -125,7 +132,18 @@ def main():
                 for nb, piece in split_by_neighbor(ln, kp_tree, kp, geoms):
                     feats.append((ids[i], ids[nb] if nb is not None else -2, piece))
                 continue
+            if code == -1 and country[i] == "KP":
+                others = [k for k in range(len(geoms)) if k != i]
+                for nb, piece in split_by_neighbor(ln, shapely.STRtree([geoms[k] for k in others]), others, geoms, reach=0.01):
+                    if nb is not None and inland.contains(piece.interpolate(0.5, normalized=True)):
+                        fixed += 1
+                        if ids[i] < ids[nb]:   # 틈 양쪽 선 가운데 하나만 그린다
+                            feats.append((ids[i], ids[nb], piece))
+                    else:
+                        feats.append((ids[i], -1, piece))
+                continue
             feats.append((ids[i], code, ln))
+    print("inland gaps turned into borders", fixed, file=sys.stderr)
     water = water_edges(geoms, ids)
     print("water edges", len(water), file=sys.stderr)
     feats += water

@@ -64,7 +64,7 @@ button.small { min-height: var(--btn-h-sm); padding: 0 10px; font-size: 12px; }
 button.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; box-shadow: none; }
 /* 나란히 놓인 단추 사이 간격 (flex·grid 묶음은 gap으로) */
 #side button + button { margin-left: var(--s2); }
-:is(.row, .pace, .tools, .econ-bar, .name-row, .ld-tabs, .btns, .item.line) > button + button { margin-left: 0; }
+:is(.row, .pace, .tools, .econ-bar, .name-row, .ld-tabs, .btns, .item.line) > button + button, #side :is(.row, .pace, .tools, .econ-bar, .name-row, .ld-tabs, .btns, .item.line) > button + button { margin-left: 0; }
 
 input[type=text], select {
   font: inherit; font-size: 13px; min-height: var(--btn-h-sm); padding: 0 8px; border-radius: var(--r-sm);
@@ -249,6 +249,19 @@ table.cmp th.asc, table.cmp th.desc { color: var(--ink); }
 .ld-steps li.now, .ld-steps li.ok { color: var(--ink); }
 .ld-steps li.ok .p { width: 100% !important; background: var(--good); }
 .ld-tip { font-size: 12px; color: var(--muted); }
+#btn-next5 { white-space: nowrap; }
+.lg-toggle { display: none; }
+#btn-next5.on { background: var(--accent-soft); border-color: var(--accent); }
+/* 결산 */
+.report-score { display: flex; align-items: baseline; gap: 6px; margin: 2px 0 4px; }
+.report-score b { font-size: 40px; color: var(--accent); line-height: 1; }
+.report-score span { font-weight: 700; }
+.report-t { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0; }
+.report-t td { padding: 3px 4px; border-bottom: 1px solid var(--line); }
+.report-t .num { text-align: right; white-space: nowrap; }
+.report-t .good { color: var(--good, #1b8a4b); font-weight: 700; }
+.report-t .bad { color: #c0392b; font-weight: 700; }
+.report-built { font-size: 12px; color: var(--muted); margin: 6px 0 0; line-height: 1.6; }
 .ld-ver { display: inline-block; margin-top: 4px; padding: 1px 7px; border-radius: 4px; background: var(--chip); color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
 .ld-contact { margin: 14px 0 0; text-align: right; font-size: 12px; color: var(--muted); }
 .ld-contact a { color: inherit; }
@@ -358,7 +371,16 @@ details.fold-sub > .fold-body { padding: 0 var(--s2) var(--s2); }
   #selection > div:first-child { top: -12px; margin: -12px -12px 6px; padding: 10px 12px 8px; }
   #btn-next { padding: 0 10px; white-space: nowrap; }
   #legend { width: 150px; padding: 6px 8px; }
-  #legend .lg-more { display: none; }
+  #legend .lg-more, #legend:not(.open) .lg-extra { display: none; }
+  #legend.open .lg-more { display: block; }
+  #legend .lg-toggle { display: block; width: 100%; margin-top: 6px; }
+  /* 상단 바 두 줄: 단추는 위, 연도·예산·지지율·통합도는 아래 한 줄 전체 */
+  #topbar { flex-wrap: wrap; row-gap: 4px; }
+  #topbar .stats { order: 3; flex: 1 0 100%; justify-content: space-between; }
+  #topbar .brand { display: none; }
+  #topbar button { min-width: 36px; padding: 0 8px; }
+  #btn-find .lbl, #btn-find kbd { display: none; }
+  #btn-next5 { margin-left: auto; }
   .panel, #selection:not([hidden]) { padding: var(--s3); }
   details.fold { margin: 0 calc(-1 * var(--s3)); padding: 0 var(--s3); }
   #tabs button { min-height: 40px; padding: 0 10px; flex: 1 0 auto; }
@@ -481,3 +503,9 @@ details > summary.flash { animation: flash 1.4s ease-out; }
 .setup-row select { max-width: 52%; }
 .setup-btns { display: flex; gap: 8px; align-items: center; padding: 12px 20px 16px; border-top: 1px solid var(--line, #e3e6ea); }
 @media (max-width: 560px) { .setup-row { flex-direction: column; align-items: stretch; gap: 4px; } .setup-row select { max-width: none; } }
+
+/* 철도 그리기: 커서 옆 역 반경 인구 */
+#catch { position: fixed; z-index: 30; pointer-events: none; background: rgba(29, 35, 43, .85); color: #fff; font-size: 12px; font-weight: 600; padding: 3px 7px; border-radius: 6px; white-space: nowrap; }
+
+.report-goal { margin: 4px 0 8px; padding: 6px 10px; border-radius: 6px; background: var(--chip); font-size: 13px; }
+.report-goal.good { background: #e3f4ea; color: #1b6b3d; }

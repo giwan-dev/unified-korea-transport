@@ -271,7 +271,7 @@ def to_fc(rows, props):
 
 
 # 분단으로 갈라지거나 없어진 군 가운데 게임에서 되살릴 수 있는 군 (pipeline/historic_counties.json: 읍면동·북측 권역별 1945년 소속 조사)
-RESTORABLE = {"장단군", "김화군", "철원군", "연천군", "연백군", "양구군", "인제군"}
+RESTORABLE = {"장단군", "김화군", "철원군", "연천군", "연백군", "인제군"}   # 양구군: 옛 수입면 땅(금강군)이 양구와 닿지 않아(월경지) 뺐다
 
 
 def tag_historic(units):
@@ -313,6 +313,21 @@ def tag_historic(units):
         for u in us:
             if not u.get("piece"):
                 u["hist_main"] = main if main in RESTORABLE else None
+    # 떼어 낸 조각이 같은 옛 군의 다른 땅과 닿지 않으면(되살렸을 때 월경지가 된다) 떼지 않는다
+    by_hist = defaultdict(list)
+    for u in units:
+        h = u.get("piece") or u.get("hist_main")
+        if h:
+            by_hist[h].append(u)
+    for key, us in by_hist.items():
+        for zkey in {(u["country"], u["province"], u["zone"]) for u in us if u.get("piece")}:
+            part = [u for u in us if u.get("piece") and (u["country"], u["province"], u["zone"]) == zkey]
+            rest = unary_union([u["geom"] for u in us if u not in part])
+            if rest.is_empty or not unary_union([u["geom"] for u in part]).buffer(0.004).intersects(rest):
+                for u in part:
+                    del u["piece"]
+                n -= len(part)
+                log("historic piece dropped (exclave)", key, zkey[2])
     log("historic pieces (units split off)", n)
 
 

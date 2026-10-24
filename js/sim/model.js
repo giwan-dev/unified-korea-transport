@@ -1428,7 +1428,9 @@ export class Model {
       let tot = 0;
       for (let i = 0; i < this.Z; i++) if (i !== z && !this.isExt[i] && this.isKP[i] === this.isKP[z]) tot += this.pop[i];
       if (!(tot > 0)) continue;
-      for (let i = 0; i < this.Z; i++) if (i !== z && !this.isExt[i] && this.isKP[i] === this.isKP[z]) this.pop[i] -= (d.persons * this.pop[i]) / tot;
+      // net: 입주 인구 가운데 전국 인구가 새로 느는 몫 (택지지구). 나머지만 같은 쪽 다른 존에서 인구 비례로 옮겨 온다
+      const moved = d.persons * (1 - Math.max(0, Math.min(1, d.net || 0)));
+      for (let i = 0; i < this.Z; i++) if (i !== z && !this.isExt[i] && this.isKP[i] === this.isKP[z]) this.pop[i] -= (moved * this.pop[i]) / tot;
       const s0 = this.zoneSub0[z], n = this.zoneSubN[z];
       let best = s0, bd = Infinity;
       for (let s = s0; s < s0 + n; s++) {
@@ -1786,14 +1788,17 @@ export class Model {
       // 경로 비용에는 고속선 운임 차이(분)가 들어 있으므로, 보여 주는 시간은 그것을 뺀 실제 시간이다
       const L = this.net.links;
       const premium = (l) => (L[l].mode === 1 && L[l].cls === 'hsr' && !L[l].via ? (L[l].len * (P.railFarePerKm.hsr - P.railFarePerKm.conv)) / P.vot : 0);
-      const railTrip = (cost, pair, g) => {
+      const railTrip = (cost, pair, g, timeOnly = false) => {
         g.shortestPaths(this.stationNode[pair.s], cost);
         const raw = pathLinks(g, this.stationNode[pair.t]);
-        const ride = raw.reduce((acc, l) => acc + cost[l] - premium(l), 0);
+        const ride = raw.reduce((acc, l) => acc + cost[l] - (timeOnly ? 0 : premium(l)), 0);
         const links = raw.flatMap((l) => L[l].via || [l]);
         const km = links.reduce((acc, l) => acc + L[l].len, 0);
         const hsrKm = links.reduce((acc, l) => acc + (L[l].cls === 'hsr' ? L[l].len : 0), 0);
-        return { ...pair, min: pair.access + this.stationWait[pair.s] + ride + pair.egress, km, hsrKm, links, wait: this.stationWait[pair.s],
+        const free = raw.reduce((acc, l) => acc + this.freeTime[l], 0);   // 혼잡 없이 달리는 시간 (검수용)
+        const worst = raw.map((l) => [l, cost[l] - premium(l) - this.freeTime[l]]).sort((x, y) => y[1] - x[1]).slice(0, 3)
+          .map(([l, d]) => `${L[l].name || l}${L[l].via ? '(계통)' : ''}:+${d.toFixed(0)}분 v/c ${(this.volume[l] / Math.max(1, this.capacity[l])).toFixed(2)}`);
+        return { ...pair, min: pair.access + this.stationWait[pair.s] + ride + pair.egress, km, hsrKm, links, wait: this.stationWait[pair.s], free, worst,
           cost: Math.round(km * P.railFarePerKm.conv + hsrKm * (P.railFarePerKm.hsr - P.railFarePerKm.conv)) };
       };
       const pairOf = (b0) => b0 && { s: b0.s, t: b0.t, access: b0.a, egress: b0.b };
@@ -1803,7 +1808,12 @@ export class Model {
         const c = a + this.stationWait[s] + this.stD[s * NS + t] + b;
         if (isFinite(c) && (!bestPair || c < bestPair.c)) bestPair = { c, s, t, a, b };
       }
-      if (best && bestPair) out.rail = railTrip(this.cost, pairOf(bestPair), this.rail);
+      if (best && bestPair) {
+        out.rail = railTrip(this.cost, pairOf(bestPair), this.rail);
+        // 시간만 따진 가장 빠른 철도 (경로 비용의 고속선 운임 몫을 뺀다): 운임이 싼 느린 길(일반선 고속화·광역급행)로 돌지 않는 시간
+        const timeCost = Float64Array.from(this.cost, (c, l) => c - premium(l));
+        out.railFast = railTrip(timeCost, pairOf(bestPair), this.rail, true);
+      }
       // 일반철도만 (고속선을 타지 않고): 고속선 구간과 고속 계통을 막은 비용으로 다시 찾는다
       if (sa.length && sb.length) {
         const conv = Float64Array.from(this.cost, (c, l) => (L[l].mode === 1 && L[l].cls === 'hsr' ? Infinity : c));

@@ -253,6 +253,21 @@ async function handle(msg) {
       post('probe', { id: msg.id, v: { volume: h(m.volume), wait: h(m.stationWait), subW: h(m.subW), airOD: h(m.airOD), pop: h(m.pop), ccomp: h(m.ccomp), cost: h(m.cost), boardings: h(m.boardings), subRoadAcc: h(m.subRoadAcc), subStAcc: h(m.subStAcc), subSt: h(m.subSt), latent: h(m.latentOD), airPen: h(m.airPenalty), routePen: h(m.routePenalty), grp: h(m.grpSub), metroLocal: h(m.metroLocal || []), freshCap: h(m.stationFreshCap || []), svc: h(m.svcTrains) } });
     } else if (msg.type === 'route') {
       post('route', { route: model.routeQuery(msg.from, msg.to) });
+    } else if (msg.type === 'routes') {
+      // 결산용: 여러 구간의 가장 빠른 수단과 시간
+      const out = msg.pairs.map(([a, b]) => {
+        const r = model.routeQuery(a, b);
+        let best = null;
+        let ground = null;   // 항공을 뺀 가장 빠른 수단 (목표 판정용)
+        for (const key of ['railFast', 'rail', 'conv', 'car', 'transit', 'air']) {
+          const k = key === 'railFast' ? 'rail' : key;
+          if (!(r[key] && r[key].min > 0)) continue;
+          if (!best || r[key].min < best.min) best = { k, min: r[key].min };
+          if (k !== 'air' && (!ground || r[key].min < ground.min)) ground = { k, min: r[key].min };
+        }
+        return best && { ...best, ground };
+      });
+      post('routes', { id: msg.id, out });
     } else if (msg.type === 'baseline') {
       // 개발용: 기준 연도를 계산해 돌려준다 (tools/baseline.html)
       model = new Model(msg.zones, new Float32Array(msg.grid));

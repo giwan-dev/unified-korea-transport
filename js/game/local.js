@@ -79,8 +79,6 @@ export const HISTORIC_COUNTIES = [
     choices: [['keep', '지금대로 둔다'], ['restore', '분단 전 경계로 되찾는다']], prov: { restore: ['경기도', 'KR'] } },
   { key: 'yeonbaek', name: '연백군', label: '연백군 (북측 연안군·배천군으로 나뉨)',
     choices: [['keep', '연안군·배천군으로 둔다'], ['restore', '연백군으로 합친다']], prov: { restore: ['황해남도', 'KP'] } },
-  { key: 'yanggu', name: '양구군', label: '양구군 (옛 수입면 땅이 북측 금강군에)',
-    choices: [['keep', '지금대로 둔다'], ['restore', '분단 전 경계로 되찾는다']], prov: { restore: KR_GW } },
   { key: 'inje', name: '인제군', label: '인제군 (옛 서화면 북쪽이 북측 금강군에)',
     choices: [['keep', '지금대로 둔다'], ['restore', '분단 전 경계로 되찾는다']], prov: { restore: KR_GW } },
 ];
@@ -162,9 +160,12 @@ export function mayorTitle(name) {
   return `${name}장`;
 }
 
-/** 이 존(시군구)에 지방자치가 시행 중인지: 남측은 처음부터, 북측은 도입 이벤트 뒤 */
+/** 이 존(시군구)에 지방자치가 시행 중인지: 남측은 처음부터, 북측은 도입 이벤트 뒤.
+ *  남북은 지금 소속 광역 단체 쪽으로 가른다: 북측 도로 옮긴 남측 군(장단 → 개성시, 옹진 → 황해남도)은 북측과 같이,
+ *  남측 도로 옮긴 북측 군(개성 → 경기도)은 남측과 같이 */
 export function hasAutonomy(state, z) {
-  return z.country === 'KR' || initLocal(state).autonomyKP;
+  const side = adminOverride(state, z)?.side || z.country;
+  return side === 'KR' || initLocal(state).autonomyKP;
 }
 
 /** 같은 입력이면 같은 값 (지역마다 고정된 성향 차이) */

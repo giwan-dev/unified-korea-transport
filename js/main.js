@@ -33,6 +33,7 @@ import { showLineDiagram, stopLineDiagram } from './ui/linediagram.js';
 import { trainBrand, autoBrand } from './game/trainnames.js';
 import { seedInterKoreaAir, airlinesHTML } from './game/airlines.js';
 import { develPlan, startDevel, settleDevels } from './game/devel.js';
+import { HOUSING, housingPlan, startHousing, settleHousing } from './game/housing.js';
 import { newlyUnlocked, unlockedTourKP, unlockAt } from './game/tourism.js';
 import { showNotice } from './ui/notice.js';
 import { placeIntroHTML } from './game/cities.js';
@@ -48,6 +49,14 @@ import {
   HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST, ADMIN_OPTIONS, ADMIN_DEFAULT, adminNames, HISTORIC_COUNTIES,
 } from './game/local.js';
 import { openAdminSetup } from './ui/setup.js';
+import { buildReport, reportHTML, downloadReportImage, TIME_PAIRS, GOALS } from './ui/report.js';
+
+const APP_VERSION = 'Alpha 0.1';
+const BUG_MAIL = 'evrgrn0528@gmail.com';
+// 오류 제보에 함께 보낼 최근 오류 (화면에 안 보이는 것도)
+const errLog = [];
+addEventListener('error', (e) => errLog.push(`${e.message} @${(e.filename || '').split('/').pop()}:${e.lineno}`));
+addEventListener('unhandledrejection', (e) => errLog.push(String(e.reason?.message || e.reason)));
 import { initRail, operatorOf, opInfo, opBadge, OPERATORS, MERGE_MIN_INTEGRATION, EQUITY_STEP, FOREIGN_OPERATORS, foreignOpBadge } from './game/operators.js';
 
 const $ = (s) => document.querySelector(s);
@@ -133,6 +142,9 @@ async function init() {
   initLocal(state);
   initPPP(state);
   if (!Object.keys(state.local.offices).length) holdElection('all', '지방선거 (게임 시작 시점)');
+  // 지방자치가 없는 북측 도의 단체장 (예전 저장: 장단·옹진을 북측 도로 옮기면 그 도에 도지사를 뽑던 것)은 지운다
+  { const regs = regions(); for (const k of Object.keys(state.local.offices)) if (k.startsWith('g:') && !regs.has(k.slice(2))) delete state.local.offices[k]; }
+  syncMayors();   // 시군 단체장은 한 시군에 하나 (예전 저장: 옛 군 땅 조각마다 군수가 있던 것)
   // OSM 공사 중 노선 → 진행 중 사업 (이름 없는 구간은 가까운 시군 이름으로)
   initOngoing(base, state, (l) => {
     const [x, y] = base.nodes[l.a];
@@ -199,7 +211,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { perf, map, base, select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { perf, map, base, worker: () => worker, countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
@@ -331,9 +343,10 @@ function onWorker(ev) {
     setBusy(true, m.label, m.value);
     if (!result) { loading.progress('sim', m.value); loading.label('sim', m.label); }
   }
-  else if (m.type === 'error') { setBusy(false); console.error(m.message); alert('시뮬레이션 오류\n' + m.message); }
+  else if (m.type === 'error') { setBusy(false); autoYears = 0; errLog.push(`worker: ${m.message}`); console.error(m.message); alert('시뮬레이션 오류\n' + m.message); }
   else if (m.type === 'result') applyResult(m);
-  else if (m.type === 'route') showRoute(m.route);
+  else if (m.type === 'route') { window.__route = m.route; showRoute(m.route); }
+  else if (m.type === 'routes') { routeWaits.get(m.id)?.(m.out); routeWaits.delete(m.id); }
   else if (m.type === 'preview') onPreview(m);
   else if (m.type === 'probe') window.__probe = m.v;
   else if (m.type === 'warn') console.warn(m.message);
@@ -385,9 +398,12 @@ function applyResult(res) {
       krInc: res.summary.KR.income, kpInc: res.summary.KP.income,
       kpToKr: res.summary.kpToKr, rail: res.totals.rail / res.totals.trips, congestedKm, trips: res.totals.trips,
       air: res.totals.air / res.totals.trips, road: res.totals.road / res.totals.trips, transit: res.totals.transit / res.totals.trips,
-      happyKR: avgHappiness().KR, happyKP: avgHappiness().KP, debt: state.debt, approval: state.approval,
+      happyKR: avgHappiness().KR, happyKP: avgHappiness().KP, debt: state.debt, approval: state.approval, integration: state.integration,
     });
   }
+  // 결산의 비교 기준: 시작한 해의 상징 구간 소요 시간을 한 번 재 둔다
+  if (!state.times0 && state.year === (state.history[0]?.year ?? state.year)) routeTimes().then((t) => { state.times0 = t; save(state); });
+  if (state.goal === 'sp90') routeTimes().then((t) => { goalTimes = t; renderStatus(); });
   mark('y: applied');
   save(state);
   mark('y: saved');
@@ -396,9 +412,36 @@ function applyResult(res) {
   // 해 넘김 뒤에는 보이는 탭만 다시 그린다 (모든 탭을 그리면 1~2초). 다른 탭은 열 때 그린다
   if (stepped) renderVisible(); else renderAll();
   mark('y: rendered');
+  // 통일 10년째: 결산을 한 번 띄운다 (이어 넘기기도 여기서 멈춘다)
+  if (stepped && state.year >= START_YEAR + 10 && !state.report10) {
+    state.report10 = true; save(state);
+    autoYears = 0; updateAutoBtn();
+    setTimeout(() => showReport(), 600);
+  } else if (stepped && autoYears > 0) {
+    autoYears--;
+    if (autoYears > 0 && draft) { autoYears = 0; toast('노선을 그리는 중이라 이어 넘기기를 멈췄습니다.'); }
+    updateAutoBtn();
+    if (autoYears > 0) setTimeout(() => { if (autoYears > 0 && !busy) nextYear(); }, 500);
+  }
 }
 
 let pendingStep = false;
+// 여러 해 이어 넘기기: 남은 해 (0이면 멈춤)
+let autoYears = 0;
+function runYears(n) {
+  if (autoYears) { autoYears = 0; updateAutoBtn(); toast('이어 넘기기를 멈춥니다 (지금 계산 중인 해까지).'); return; }
+  if (busy || !result) return;
+  autoYears = n;
+  updateAutoBtn();
+  nextYear();
+}
+function updateAutoBtn() {
+  const b = $('#btn-next5');
+  if (!b) return;
+  b.textContent = autoYears ? `멈춤 (${autoYears})` : '5년 ▶▶';
+  b.classList.toggle('on', !!autoYears);
+  b.disabled = !result || (busy && !autoYears);
+}
 let gains = null;   // 읍면동 체감 교통 개선 (시작 대비 점수)
 
 function nextYear() {
@@ -422,7 +465,7 @@ function nextYear() {
   openWaitingServices(state, effectiveNetwork(base, state), base.stations);
   const opened = done.some((p) => p.kind === 'new');   // 플레이어가 놓은 새 노선 (이어받은 공사는 해마다 열려서 뺀다)
   // 완공된 역세권 개발: 분양 수익과 인구 순유입
-  const dev = settleDevels(state, done);
+  const dev = [...settleDevels(state, done), ...settleHousing(state, done)];
   // 남북 통합도가 오르면 북측 관광지가 하나씩 열린다
   for (const s of newlyUnlocked(state, tourSites)) {
     const z = zoneOfSite(s);
@@ -843,19 +886,30 @@ function paintZones() {
   }
   const z = result.zones;
   const accRef = median(Array.from(z.access));
+  // 한 시군으로 보이는 존들(옛 군 땅 조각 포함)은 한 색으로: 인구는 합, 나머지는 인구 가중 평균
+  const grp = new Map();
+  for (let i = 0; i < zoneProps.length; i++) { const r = countyRep(i); if (!grp.has(r)) grp.set(r, []); grp.get(r).push(i); }
+  const agg = (i, arr) => {
+    const zs = grp.get(countyRep(i));
+    if (zs.length === 1) return arr[i];
+    let s = 0, w = 0;
+    for (const j of zs) { const p = Math.max(z.pop[j], 1); s += arr[j] * p; w += p; }
+    return s / w;
+  };
+  const sumOf = (i, f) => grp.get(countyRep(i)).reduce((t, j) => t + f(j), 0);
   for (let i = 0; i < zoneProps.length; i++) {
     let v = null;
-    if (metric === 'pop') v = z.pop[i];
-    else if (metric === 'popChange') v = z.pop[i] / Math.max(zoneProps[i].pop, 1) - 1;
-    else if (metric === 'hdi') v = z.hdi[i];
-    else if (metric === 'income') v = z.income[i];
-    else if (metric === 'access') v = z.access[i] / accRef;
-    else if (metric === 'happiness') v = happiness?.[i];
+    if (metric === 'pop') v = sumOf(i, (j) => z.pop[j]);
+    else if (metric === 'popChange') v = sumOf(i, (j) => z.pop[j]) / Math.max(sumOf(i, (j) => zoneProps[j].pop), 1) - 1;
+    else if (metric === 'hdi') v = agg(i, z.hdi);
+    else if (metric === 'income') v = agg(i, z.income);
+    else if (metric === 'access') v = agg(i, z.access) / accRef;
+    else if (metric === 'happiness') v = happiness ? agg(i, happiness) : null;
     else if (metric === 'partyMayor') v = partyValue(i, 'mayor');
     else if (metric === 'partyGov') v = partyValue(i, 'gov');
-    else if (metric === 'voteMayor') v = pShare(state.local.offices[`m:${i}`]);
+    else if (metric === 'voteMayor') v = pShare(state.local.offices[mayorKey(i)]);
     else if (metric === 'voteGov') v = zoneProps[i].ext ? null : pShare(state.local.offices[`g:${regionOf(state, zoneProps[i])}`]);
-    else if (metric === 'mayorApproval') v = state.local.offices[`m:${i}`]?.approval ?? null;
+    else if (metric === 'mayorApproval') v = state.local.offices[mayorKey(i)]?.approval ?? null;
     map.setFeatureState({ source: 'zones', id: i }, { color: sub ? null : colorFor(metric, v) });
   }
 }
@@ -864,7 +918,7 @@ function paintZones() {
 function subMetric(metric, i) {
   const [z] = subInfo(i);
   if (zoneProps[z].ext) return null;
-  return subValue(metric, { zoneHappy: happiness?.[z], approval: state.approval, mayor: state.local.offices[`m:${z}`]?.approval, gain: gains?.[i] || 0 });
+  return subValue(metric, { zoneHappy: happiness?.[z], approval: state.approval, mayor: state.local.offices[mayorKey(z)]?.approval, gain: gains?.[i] || 0 });
 }
 
 let subIndex = null;
@@ -891,6 +945,7 @@ function bindMap() {
     if (secPick) { sectionClick(e.lngLat); return; }
     if (svcPick) { servicePickClick(e.lngLat); return; }
     if (pointAdd) { pointAddClick(e.lngLat); return; }
+    if (housingPick) { housingClick(e); return; }
     if (draft?.type === 'airport') { placeAirport(e.lngLat); return; }
     if (draft) { addDraftPoint(e.lngLat); return; }
     const box = [[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]];
@@ -911,6 +966,9 @@ function bindMap() {
     select(null);
   });
   map.on('dblclick', (e) => { if (draft) { e.preventDefault(); } });
+  let catchT = 0;
+  map.on('mousemove', (e) => { const t = performance.now(); if (t - catchT < 60) return; catchT = t; catchLabel(e); });
+  map.on('mouseout', () => catchLabel(null));
   enableBoxSelect();
   for (const l of ['roads', 'roads-minor', 'rails', 'metro', 'points', 'plans-line']) {
     map.on('mouseenter', l, () => { if (!draft) map.getCanvas().style.cursor = 'pointer'; });
@@ -963,12 +1021,12 @@ function select(sel) {
   if (selection?.type === 'multi') for (const i of selection.ids) map.setFeatureState({ source: 'links', id: i }, { sel: false });
   if (sel?.type === 'multi') for (const i of sel.ids) map.setFeatureState({ source: 'links', id: i }, { sel: true });
   if (selection?.type === 'link') for (const i of selection.section?.ids || [selection.id]) map.setFeatureState({ source: 'links', id: i }, { sel: false });
-  if (selection?.type === 'zone') map.setFeatureState({ source: 'zones', id: selection.id }, { sel: false });
+  if (selection?.type === 'zone') for (const j of countyZones(selection.id)) map.setFeatureState({ source: 'zones', id: j }, { sel: false });
   if (selection?.type === 'sub') map.setFeatureState({ source: 'subs', id: selection.id }, { sel: false });
   selection = sel;
   if (sel?.type === 'sub') map.setFeatureState({ source: 'subs', id: sel.id }, { sel: true });
   if (sel?.type === 'link') for (const i of sel.section?.ids || [sel.id]) map.setFeatureState({ source: 'links', id: i }, { sel: true });
-  if (sel?.type === 'zone') map.setFeatureState({ source: 'zones', id: sel.id }, { sel: true });
+  if (sel?.type === 'zone') for (const j of countyZones(sel.id)) map.setFeatureState({ source: 'zones', id: j }, { sel: true });
   renderSelection();
 }
 
@@ -984,8 +1042,62 @@ function startDraft(type) {
   loadTerrain().then(() => { if (draft) renderBuild(); });
   map.getCanvas().style.cursor = 'crosshair';
   map.doubleClickZoom.disable();
+  // 철도를 그리는 동안은 어디에 사람이 많은지 보이게 읍면동 인구 밀도로 칠한다 (끝나면 원래 보기로)
+  if (NEW_BUILDS[type]?.mode >= 1 && metric !== 'subDensity' && metric !== 'density') {
+    metricBeforeDraft = metric;
+    metric = 'subDensity';
+    paintZones(); renderLegend();
+    toast('노선을 그리는 동안 읍면동 인구 밀도를 보여 줍니다. 커서 옆 숫자는 역 반경 인구입니다.');
+  }
   switchTab('build');
   renderBuild();
+}
+
+let metricBeforeDraft = null;
+function endDraftView() {
+  catchLabel(null);
+  if (metricBeforeDraft == null) return;
+  metric = metricBeforeDraft;
+  metricBeforeDraft = null;
+  paintZones(); renderLegend();
+}
+
+/** 역 반경(도시철도 1km, 철도 3km) 인구: 1km 격자를 0.05° 칸으로 묶어 둔 색인으로 빨리 센다 */
+let popBins = null;
+function popNear(lon, lat, km) {
+  if (!popBins) {
+    popBins = new Map();
+    for (let c = 0; c < grid.length; c += 4) {
+      const k = `${Math.floor(grid[c] / 0.05)}:${Math.floor(grid[c + 1] / 0.05)}`;
+      if (!popBins.has(k)) popBins.set(k, []);
+      popBins.get(k).push(c);
+    }
+  }
+  const kx = 111.32 * Math.cos((lat * Math.PI) / 180), ky = 110.57, r2 = km * km;
+  const bx = Math.floor(lon / 0.05), by = Math.floor(lat / 0.05), rx = Math.ceil(km / kx / 0.05), ry = Math.ceil(km / ky / 0.05);
+  let sum = 0;
+  for (let i = bx - rx; i <= bx + rx; i++) for (let j = by - ry; j <= by + ry; j++) {
+    for (const c of popBins.get(`${i}:${j}`) || []) {
+      const dx = (grid[c] - lon) * kx, dy = (grid[c + 1] - lat) * ky;
+      if (dx * dx + dy * dy <= r2) sum += grid[c + 2];
+    }
+  }
+  return sum;
+}
+const catchKm = (type) => (NEW_BUILDS[type]?.mode === 2 ? 1 : 3);
+function fmtPeople(v) { return v >= 10000 ? `${(v / 10000).toFixed(1)}만 명` : `${Math.round(v).toLocaleString()}명`; }
+
+/** 커서 옆 역 반경 인구 (철도 그리기 중) */
+function catchLabel(e) {
+  let el = document.querySelector('#catch');
+  if (!e || !draft || !(NEW_BUILDS[draft.type]?.mode >= 1)) { if (el) el.hidden = true; return; }
+  if (!el) { el = document.createElement('div'); el.id = 'catch'; document.body.appendChild(el); }
+  const km = catchKm(draft.type);
+  el.textContent = `반경 ${km}km ${fmtPeople(popNear(e.lngLat.lng, e.lngLat.lat, km))}`;
+  const r = map.getContainer().getBoundingClientRect();
+  el.style.left = `${r.left + e.point.x + 14}px`;
+  el.style.top = `${r.top + e.point.y + 14}px`;
+  el.hidden = false;
 }
 
 function cancelDraft() {
@@ -995,6 +1107,7 @@ function cancelDraft() {
   map.getCanvas().style.cursor = '';
   map.doubleClickZoom.enable();
   map.getSource('draft').setData({ type: 'FeatureCollection', features: [] });
+  endDraftView();
   renderBuild();
 }
 
@@ -1448,6 +1561,7 @@ async function commitDraft() {
   }
   draft.points.forEach((p) => { p.reserved = false; });
   draft = null;
+  endDraftView();
   map.getCanvas().style.cursor = '';
   map.doubleClickZoom.enable();
   map.getSource('draft').setData({ type: 'FeatureCollection', features: [] });
@@ -1464,6 +1578,9 @@ function addFeatureStatesAfterRebuild() { refreshLinks(); }
 
 function bindUI() {
   $('#btn-next').onclick = nextYear;
+  $('#btn-next5').onclick = () => runYears(5);
+  // 현황 탭의 결산 단추 (탭을 다시 그려도 한 번만 묶이게 문서에 건다)
+  document.addEventListener('click', (e) => { if (e.target.closest('#btn-report')) showReport(); });
   $('#btn-measure').onclick = () => (measure ? endMeasure() : startMeasure());
   document.querySelectorAll('#tabs button').forEach((b) => { b.onclick = () => switchTab(b.dataset.tab); });
   watchFolds();
@@ -1480,6 +1597,11 @@ function bindUI() {
   // 통일 첫해: 행정구역 정리 창을 먼저 띄우고, 정하면 사용법 안내로 이어진다
   if (needsAdminSetup()) setTimeout(() => adminSetup(true), 400);
   else if (guideShouldAutoShow()) setTimeout(showGuide, 600);
+  $('#legend').addEventListener('click', (e) => {
+    if (!e.target.closest('.lg-toggle')) return;
+    $('#legend').classList.toggle('open');
+    e.target.textContent = $('#legend').classList.contains('open') ? '범례 접기' : '범례 더 보기';
+  });
   $('#legend').addEventListener('change', (e) => {
     if (e.target.id === 'metric') { metric = e.target.value; paintZones(); renderLegend(); }
     if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); syncRailKind(map); renderLegend(); }
@@ -1490,7 +1612,7 @@ function bindUI() {
   });
   document.addEventListener('keydown', (e) => {
     if (!draft || e.target.tagName === 'INPUT') return;
-    if (e.key === 'Escape') cancelDraft();
+    if (e.key === 'Escape') { cancelDraft(); endHousingPick(); }
     if (e.key === 'Enter') commitDraft();
     if (e.key === 'Backspace') removeLastPoint();
   });
@@ -1511,7 +1633,9 @@ function paletteCommands() {
   add('운행', '역 골라 특급·급행 짜기', () => { switchTab('build'); startServicePick(); }, { keywords: '운행 계통 열차 노선 운행', order: 3 });
   add('예산', '예산·사업 투입 속도', () => switchTab('projects'), { hint: `가용 ${formatWon(state.budget)}`, keywords: '돈 부채 공사 진행', order: 3 });
   add('도움말', '처음 안내 다시 보기', showGuide, { keywords: '튜토리얼 도움말 사용법', order: 9 });
-  add('도움말', '오류 제보·의견 보내기', () => { location.href = 'mailto:evrgrn0528@gmail.com'; }, { hint: 'evrgrn0528@gmail.com', keywords: '버그 오류 신고 제보 문의 메일 error report', order: 9 });
+  add('도움말', '오류 제보·의견 보내기', reportBug, { hint: BUG_MAIL, keywords: '버그 오류 신고 제보 문의 메일 error report', order: 9 });
+  add('진행', '5년 이어 넘기기', () => runYears(5), { keywords: '여러 해 자동 진행 빨리', order: 0 });
+  add('현황', '결산 보기·이미지로 저장', showReport, { keywords: '성적 점수 결과 공유 이미지 캡처', order: 1 });
   // 묶음 안 깊숙한 항목으로 바로 가기 (정책·이벤트는 민원·정책 탭, 운영 성격은 운영 탭)
   const deep = [
     ['정책', '광역시 독립·승격', 'requests', '지방자치', '광역시', '광역시 승격 독립 시 도'],
@@ -1558,16 +1682,17 @@ function paletteCommands() {
 function showGuide() {
   switchTab('status');
   const tab = (t) => () => switchTab(t);
+  const phone = matchMedia('(max-width: 760px)').matches;   // 휴대폰: 패널이 지도 아래, Shift 끌기·Ctrl+K 없음
   startGuide([
-    { target: '#map', title: '지도', body: '남북 전체의 도로·철도와 인구입니다. 도로 색은 혼잡도(초록 → 빨강)이고, 빨간 세모는 정체가 심한 곳입니다. 구간을 누르면 오른쪽에 개량 메뉴가, 역을 누르면 운행 계통과 노선도가 열립니다. <b>Shift를 누른 채 끌면</b> 여러 구간을 한꺼번에 고릅니다.' },
+    { target: '#map', title: '지도', body: `남북 전체의 도로·철도와 인구입니다. 도로 색은 혼잡도(초록 → 빨강)이고, 빨간 세모는 정체가 심한 곳입니다. 구간을 누르면 ${phone ? '아래 패널' : '오른쪽'}에 개량 메뉴가, 역을 누르면 운행 계통과 노선도가 열립니다.${phone ? '' : ' <b>Shift를 누른 채 끌면</b> 여러 구간을 한꺼번에 고릅니다.'}` },
     { target: '#topbar .stats', title: '예산과 지지율', body: '해마다 SOC 예산이 들어오고, 공사비는 몇 해에 나눠 나갑니다. 쓰지 않은 예산은 한 해 치까지만 남습니다. 지지율은 정체·민원·완공 사업·부채로 오르내리고, 남북 통합도가 오르면 북측 관광지와 교류가 열립니다.' },
     { target: '#legend', title: '보기 메뉴', body: '도로만·철도만·항공만 걸러 보거나, 인구·소득·행복도 같은 지표로 지도를 색칠합니다.' },
     { target: '[data-panel=build]', before: tab('build'), title: '건설: 새 노선 놓기', body: '종류(고속도로·고속철도·도시철도 등)를 고르고 지도에 점을 차례로 찍으면 노선이 그려집니다. 산·강은 지형을 따라 돌아가고, 공사비와 B/C가 바로 나옵니다. <b>효과 미리보기</b>로 통행 변화를 본 뒤 <b>착공</b>하세요. 아래 목록의 GTX·서부선·서울–평양 고속철도 같은 계획 사업은 눌러서 바로 열 수 있습니다.' },
     { target: '[data-panel=projects]', before: tab('projects'), title: '사업: 공사와 돈', body: '진행 중인 공사와 해마다 들어갈 돈입니다. 사업마다 투입 속도를 빠르게·느리게 바꿀 수 있습니다. 처음부터 진행 중인 사업 100여 건(실제 공사 중인 노선)이 들어 있습니다.' },
     { target: '[data-panel=ops]', before: tab('ops'), title: '운영: 열차와 항공', body: '역을 골라 특급·급행 계통을 짜고, 코레일·북측 철도 회사의 수지와 노선별 영업계수를 봅니다. 국제선·국내선 항공 노선도 여기서 엽니다.' },
     { target: '[data-panel=requests]', before: tab('requests'), title: '민원·정책', body: '혼잡 구간 확장 요구와 지자체 제안이 쌓입니다. 오래 두면 지지율이 떨어집니다. 이주 정책, 북측 지방자치, 통일 첫해에 정한 행정구역도 여기 있습니다.' },
-    { target: '#btn-find', before: tab('status'), title: '메뉴 찾기', body: '어디 있는지 모르겠으면 <b>Ctrl+K</b>(또는 /)를 누르고 이름 일부나 초성을 쳐 보세요. 탭·지역·노선·계획 사업으로 바로 갑니다.' },
-    { target: '#btn-next', title: '다음 해', body: '사업을 벌였으면 다음 해로 넘깁니다. 한 해 동안의 통행·혼잡과 인구 이동을 다시 계산합니다 (10~20초). 이 안내는 상단의 <b>?</b> 단추로 다시 볼 수 있습니다.' },
+    { target: '#btn-find', before: tab('status'), title: '메뉴 찾기', body: `어디 있는지 모르겠으면 ${phone ? '⌕ 단추를 누르고' : '<b>Ctrl+K</b>(또는 /)를 누르고'} 이름 일부나 초성을 쳐 보세요. 탭·지역·노선·계획 사업으로 바로 갑니다.` },
+    { target: '#btn-next', title: '다음 해', body: '사업을 벌였으면 다음 해로 넘깁니다. 한 해 동안의 통행·혼잡과 인구 이동을 다시 계산합니다 (10~20초). <b>5년 ▶▶</b>는 다섯 해를 이어서 넘기고, 노선을 그리기 시작하면 멈춥니다. 이 안내는 상단의 <b>?</b> 단추로 다시 볼 수 있습니다.' },
   ], () => { switchTab('status'); const sel = $('#guide-mode'); if (sel) sel.value = getGuideMode(); });   // "다시 보지 않기"를 누르면 설정 칸도 맞춘다
 }
 
@@ -1641,9 +1766,10 @@ function watchFolds() {
 function setBusy(on, label = '', v = 0) {
   busy = on;
   $('#busy').hidden = !on;
-  $('.busy-label').textContent = label;
+  $('.busy-label').textContent = autoYears ? `${label} · 이어 넘기기 ${autoYears}년 남음` : label;
   $('#busy-bar').style.width = `${Math.round(v * 100)}%`;
   $('#btn-next').disabled = on || !result;
+  updateAutoBtn();
 }
 
 const PANEL_RENDER = () => ({ status: renderStatus, build: renderBuild, projects: renderProjects, requests: renderRequests,
@@ -1680,10 +1806,15 @@ function renderTop() {
   $('#s-approval').textContent = `${state.approval.toFixed(0)}%`;
   $('#s-integration').textContent = `${Math.round(state.integration * 100)}%`;
   $('#btn-next').disabled = busy || !result;
+  updateAutoBtn();
 }
 
 let layerView = 'all';
-function renderLegend() { $('#legend').innerHTML = legendHTML(metric, layerView) + railKindLegend() + trainsLegend(); }
+function renderLegend() {
+  // 좁은 화면에서는 고르기 칸과 색 띠만 보이고, 나머지는 '범례 더 보기'로 편다 (지도를 덜 가리게)
+  $('#legend').innerHTML = legendHTML(metric, layerView) + `<div class="lg-extra">${railKindLegend()}${trainsLegend()}</div>`
+    + `<button type="button" class="small lg-toggle">${$('#legend').classList.contains('open') ? '범례 접기' : '범례 더 보기'}</button>`;
+}
 
 function fmtPop(v) { return v >= 1e6 ? `${(v / 1e6).toFixed(2)}백만` : `${Math.round(v / 1000).toLocaleString()}천`; }
 function pct(v, d = 1) { return `${(v * 100).toFixed(d)}%`; }
@@ -1710,7 +1841,9 @@ function renderStatus() {
     ['남북 소득 격차', `${(s.KR.income / s.KP.income).toFixed(1)}배`, prev ? delta(last.krInc / last.kpInc, prev.krInc / prev.kpInc, (v) => `${v.toFixed(1)}`, -1) : ''],
   ];
   el.innerHTML = `
-    <h3>${state.year}년 현황</h3>
+    <div class="row" style="display:flex;align-items:center;gap:8px"><h3 style="flex:1">${state.year}년 현황</h3>
+      <button class="small" id="btn-report" title="시작한 해와 견준 성적표, SNS 공유용 이미지">결산 보기</button></div>
+    ${goalHTML()}
     <div class="kpis">${tiles.map(([k, v, d]) => `<div><span class="k">${k}</span><span class="v">${v}</span>${d ? `<span class="d">${d}</span>` : ''}</div>`).join('')}</div>
     ${state.approvalWhy ? `<h4>지지율 ${state.approval.toFixed(0)}% (목표 ${state.approvalTarget.toFixed(0)}%)</h4>
     <table class="kv">${state.approvalWhy.map(([k, v], i) => `<tr><td>${esc(k)}</td><td class="${i && v > 0 ? 'pos' : v < 0 ? 'neg' : ''}">${i && v > 0 ? '+' : ''}${v}</td></tr>`).join('')}</table>
@@ -1752,7 +1885,7 @@ function renderBuild() {
     `<button data-build="${k}" class="${draft?.type === k ? 'on' : ''}">${v.label}<span class="c">${formatWon(v.perKm)}/km · ${v.years}년</span></button>`).join('')
     + `<button data-build="airport" class="${draft?.type === 'airport' ? 'on' : ''}">${AIRPORT.build.label}<span class="c">${formatWon(AIRPORT.build.cost)} · ${AIRPORT.build.years}년</span></button>`;
   let body = `<div class="tool-row"><button class="small" data-padd="station">역 신설 (노선 위 한 점)</button><button class="small" data-padd="ic">IC 신설 (고속도로 위 한 점)</button>
-    <button class="small svc-pick-b wide">역 골라 특급·급행 짜기</button></div>
+    <button class="small svc-pick-b">역 골라 특급·급행 짜기</button><button class="small" id="housing-pick" title="지도에서 고른 곳에 주택 단지를 조성합니다 (인구 순증)">택지지구 개발</button></div>
     <div class="name-row" style="margin-bottom:4px"><input type="text" id="rec-text" placeholder="예: 평양에 도시철도 3호선을 짓고 싶어, 노선을 추천해줘" style="flex:1">
       <button class="small primary" id="rec-go">노선 추천</button></div>
     <p class="hint" id="rec-msg">${esc(recMsg)}</p>
@@ -1787,6 +1920,7 @@ function renderBuild() {
       ${draft.planFilled ? `<p class="hint">계획 노선이 기존 국도·지방도와 만나는 곳에 IC ${draft.planFilled}곳을 넣었습니다. 필요 없으면 목록에서 지우세요.</p>` : ''}
       <table class="kv" style="margin-top:8px">
         <tr><td>길이</td><td>${km.toFixed(1)} km</td></tr>
+        ${NEW_BUILDS[draft.type].mode >= 1 ? `<tr><td>역 반경 ${catchKm(draft.type)}km 인구</td><td>${fmtPeople(draft.points.filter((q) => q.name && q.kind !== 'IC').reduce((t, q) => t + popNear(q.lon, q.lat, catchKm(draft.type)), 0))} <span class="m">(역 ${draft.points.filter((q) => q.name && q.kind !== 'IC').length}곳, 겹친 곳도 셈)</span></td></tr>` : ''}
         <tr><td>사업비</td><td>${formatWon(cost)}</td></tr>
         <tr><td>공사 기간 · 연 분담</td><td>${years}년 · ${formatWon(cost / years)}</td></tr>
         ${foreignKm > 0.5 ? `<tr><td>외국 구간 (상대국 절반 부담)</td><td>${foreignKm.toFixed(0)} km</td></tr>` : ''}
@@ -1815,6 +1949,8 @@ function renderBuild() {
   el.querySelectorAll('[data-plan]').forEach((b) => { b.onclick = () => openPlan(b.dataset.plan); });
   el.querySelectorAll('.svc-pick-b').forEach((b) => { b.onclick = startServicePick; });
   el.querySelectorAll('[data-padd]').forEach((b) => { b.onclick = () => startPointAdd(b.dataset.padd); });
+  const hp = el.querySelector('#housing-pick');
+  if (hp) hp.onclick = startHousingPick;
   const py = el.querySelector('#prev-years');
   if (py) py.onchange = () => { previewYears = +py.value; };
   const recGo = () => recommendRoute(el.querySelector('#rec-text').value);
@@ -1864,11 +2000,12 @@ function pointRow(p, i) {
     const toggle = spec.mode >= 1 ? `<button class="small" data-ptoggle="${i}">역 설치</button>` : '';
     return `<div class="name-row"><span class="kind">${tag}</span><span style="flex:1;color:var(--muted)">경유점 ${i + 1}</span>${toggle}</div>`;
   }
-  if (p.existing) return `<div class="name-row"><span class="kind">${tag}</span><span style="flex:1">${esc(p.name)}</span></div>`;
+  const catchment = spec.mode >= 1 ? `<span class="m" title="역 반경 ${catchKm(draft.type)}km 인구">${fmtPeople(popNear(p.lon, p.lat, catchKm(draft.type)))}</span>` : '';
+  if (p.existing) return `<div class="name-row"><span class="kind">${tag}</span><span style="flex:1">${esc(p.name)}</span>${catchment}</div>`;
   const toggle = spec.mode >= 1 && i > 0 && i < draft.points.length - 1 ? `<button class="small" data-ptoggle="${i}">통과</button>` : '';
   return `<div class="name-row"><span class="kind">${p.kind === 'station' ? '역' : p.kind}</span>
     <input type="text" data-pname="${i}" value="${esc(p.name)}">
-    <button class="small" data-pauto="${i}" title="자동 이름">↻</button>${toggle}</div>`;
+    <button class="small" data-pauto="${i}" title="자동 이름">↻</button>${catchment}${toggle}</div>`;
 }
 
 function renameDraftPoint(i, name) {
@@ -2164,11 +2301,15 @@ function renderSettings() {
     <div class="actions"><button class="small" id="help-guide">처음 안내 다시 보기</button><button class="small" id="help-find">메뉴 찾기 (Ctrl+K)</button></div>
     <div class="name-row"><span style="flex:1">게임을 열 때 처음 안내</span>
       <select id="guide-mode">${Object.entries(GUIDE_MODES).map(([k, v]) => `<option value="${k}" ${getGuideMode() === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
-    <p class="hint">오류 제보·의견: <a href="mailto:evrgrn0528@gmail.com">evrgrn0528@gmail.com</a></p>
+    <div class="actions"><button class="small" id="help-bug">오류 제보하기</button></div>
+    <p class="hint">버전·연도·지도 위치·브라우저 정보가 채워진 메일이 열립니다 (${BUG_MAIL}). 무엇이 이상했는지만 적어 보내 주세요.</p>
     <p class="hint">정책·지방자치·행정구역·국가 대형 사업은 <a href="#" data-goto-tab="requests">민원·정책 탭</a>, 항공 자동 운영·철도 회사·노선 정리는 <a href="#" data-goto-tab="ops">운영 탭</a>에 있습니다.</p>
     <h3 style="margin-top:16px">저장 슬롯</h3>
     <p class="hint">진행은 자동 저장되고, 여기에 따로 세 개까지 남겨 두었다가 되돌릴 수 있습니다.</p>
     ${slotsHTML()}
+    <div class="actions"><button class="small" id="save-export">파일로 내보내기</button><button class="small" id="save-import">파일 불러오기</button></div>
+    <input type="file" id="save-file" accept=".json,application/json" hidden>
+    <p class="hint">다른 기기·브라우저로 옮기거나 다른 사람과 판을 주고받을 때 씁니다. 지도 자료가 바뀌기 전에 만든 파일은 불러올 수 없습니다.</p>
     <h3 style="margin-top:16px">새 게임</h3>
     <div class="name-row"><span style="flex:1">난이도</span>
       <select id="difficulty">${Object.entries(DIFFICULTY).map(([k, v]) => `<option value="${k}" ${state.difficulty === k ? 'selected' : ''}>${v.label} (연 ${formatWon(v.annualBudget)})</option>`).join('')}</select></div>
@@ -2183,6 +2324,10 @@ function renderSettings() {
   $('#guide-mode').onchange = (e) => { setGuideMode(e.target.value); toast(`처음 안내: ${GUIDE_MODES[e.target.value]}`); };
   el.querySelectorAll('[data-goto-tab]').forEach((a) => { a.onclick = (e) => { e.preventDefault(); switchTab(a.dataset.gotoTab); }; });
   bindSlots(el);
+  $('#help-bug').onclick = reportBug;
+  $('#save-export').onclick = exportSave;
+  $('#save-import').onclick = () => $('#save-file').click();
+  $('#save-file').onchange = (e) => { const f = e.target.files?.[0]; if (f) importSave(f); e.target.value = ''; };
   $('#btn-new').onclick = () => {
     if (!confirm('지금 게임을 지우고 새로 시작할까요?')) return;
     guideOnNewGame();
@@ -2355,7 +2500,7 @@ function renderSelection() {
     el.querySelector('#zone-rename').onclick = () => {
       const v = zn.value.trim();
       if (!v) return;
-      setPlaceName(state, 'zone', selection.id, v);
+      for (const j of countyZones(selection.id)) setPlaceName(state, 'zone', j, v);   // 한 시군으로 보이는 존 모두
       save(state); refreshNames(map); renderAll();
     };
   }
@@ -3109,12 +3254,8 @@ function holdElection(only = 'all', reason = '') {
       for (const i of zs) {
         if (Array.isArray(only)) break;   // 광역 단체만 새로 뽑는 경우 (행정구역 개편·독립)
         if (only === 'kp' && zoneProps[i].country !== 'KP') continue;
-        const z = zoneProps[i], mk = `m:${i}`, mc = L.offices[mk];
-        const rm = runElection(leanP(z), mc, rng, mood);
-        if (mc && mc.party === rm.party) { mc.approval = 50 + (mc.approval - 50) / 2; mc.terms = (mc.terms || 1) + 1; }
-        else L.offices[mk] = { title: mayorTitle(zoneName(i)), zone: i, party: rm.party, since: state.year, approval: 50, accepted: 0, delivered: 0, terms: 1 };
-        L.offices[mk].share = rm.share;
-        may[rm.party]++;
+        if (countyRep(i) !== i) continue;   // 한 시군에 단체장은 하나 (옛 군 땅을 떼어 낸 계산용 조각은 몸통 단체장이 맡는다)
+        may[electMayor(i, mood)]++;
       }
     }
   }
@@ -3162,6 +3303,43 @@ function zoneOfLink(id) {
   return best;
 }
 
+/** 시군 단체장 선거 (존 i가 그 시군의 대표 존). 이긴 정당을 돌려준다 */
+function electMayor(i, mood = 0) {
+  const L = state.local, mk = `m:${i}`, mc = L.offices[mk];
+  const rm = runElection(leanP(zoneProps[i]), mc, rng, mood);
+  if (mc && mc.party === rm.party) { mc.approval = 50 + (mc.approval - 50) / 2; mc.terms = (mc.terms || 1) + 1; mc.title = mayorTitle(zoneName(i)); }
+  else L.offices[mk] = { title: mayorTitle(zoneName(i)), zone: i, party: rm.party, since: state.year, approval: 50, accepted: 0, delivered: 0, terms: 1 };
+  L.offices[mk].share = rm.share;
+  return rm.party;
+}
+
+// 지도에서 한 시군으로 보이는 존들(countyKey가 같은 존)의 대표: 가장 넓은 존. 시군 단체장·제안은 대표 존 번호로 단다
+let countyRepCache = null;
+function countyRep(i) {
+  const sig = JSON.stringify([state.local?.admin, state.local?.historic, state.local?.independent, state.adminNames, state.placeNames]);
+  if (countyRepCache?.sig !== sig) {
+    const best = new Map();
+    zoneProps.forEach((z, j) => { const k = countyKey(j), b = best.get(k); if (b == null || (z.area || 0) > (zoneProps[b].area || 0)) best.set(k, j); });
+    countyRepCache = { sig, rep: zoneProps.map((_, j) => best.get(countyKey(j))) };
+  }
+  return countyRepCache.rep[i];
+}
+function mayorKey(i) { return `m:${countyRep(i)}`; }
+/** 존 i와 한 시군으로 보이는 존들 (옛 군 땅을 떼어 낸 조각 포함) */
+function countyZones(i) { const r = countyRep(i); return zoneProps.map((_, j) => j).filter((j) => countyRep(j) === r); }
+
+/** 행정구역을 바꾼 뒤 시군 단체장 정리: 대표가 아닌 존의 단체장은 없애고, 단체장이 없는 시군은 새로 뽑고, 직함은 지금 이름으로 */
+function syncMayors() {
+  const L = state.local;
+  for (const k of Object.keys(L.offices)) {
+    if (!k.startsWith('m:')) continue;
+    const i = +k.slice(2);
+    if (countyRep(i) !== i || !hasAutonomy(state, zoneProps[i])) { delete L.offices[k]; continue; }
+    L.offices[k].title = mayorTitle(zoneName(i));
+  }
+  for (const [, zs] of regions()) for (const i of zs) if (countyRep(i) === i && !L.offices[`m:${i}`]) electMayor(i);
+}
+
 /** 단체장 제안: 자기 지역의 혼잡 민원 가운데 가장 급한 것 (광역단체장은 해마다 1건, 시군구청장은 전국에서 6건) */
 function proposeProjects() {
   const L = state.local;
@@ -3190,8 +3368,8 @@ function proposeProjects() {
   let n = 0;
   for (const c of cand) {
     if (n >= 6) break;
-    if (used.has(c.r) || !L.offices[`m:${c.zi}`]) continue;
-    if (add(`m:${c.zi}`, c)) n++;
+    if (used.has(c.r) || !L.offices[mayorKey(c.zi)]) continue;
+    if (add(mayorKey(c.zi), c)) n++;
   }
 }
 
@@ -3408,22 +3586,25 @@ function needsAdminSetup() {
 /** 행정구역 정리 창. first: 게임을 막 시작한 때 (닫으면 사용법 안내로 이어진다) */
 function adminSetup(first) {
   const L = initLocal(state);
-  const cur = { ...ADMIN_DEFAULT, ...(L.admin || {}), _historic: L.historic ? 'historic' : 'keep' };
+  const cur = { ...ADMIN_DEFAULT, ...(L.admin || {}), _historic: L.historic ? 'historic' : 'keep', _goal: state.goal || 'none' };
   const pick = (keys) => ADMIN_OPTIONS.filter((o) => keys.includes(o.key));
   openAdminSetup({
-    esc, current: cur, defaults: { ...ADMIN_DEFAULT, _historic: 'keep' },
+    esc, current: cur, defaults: { ...ADMIN_DEFAULT, _historic: 'keep', _goal: 'none' },
     title: `${START_YEAR}년, 통일 첫해 행정구역 정리`,
     intro: '남과 북의 행정구역을 어떻게 맞출지 지금 정합니다. 비용은 들지 않고, 정한 뒤에도 '
       + `${START_YEAR}년 안에는 민원·정책 탭에서 다시 고칠 수 있습니다. 다음 해로 넘기면 그대로 굳습니다. 소속 광역 단체가 바뀐 곳은 단체장을 새로 뽑습니다.`,
     okLabel: first ? '정하고 시작하기' : '이대로 정리',
     groups: [
+      { title: '이번 판의 목표', hint: `통일 10년째(${START_YEAR + 10}년) 결산에서 달성했는지 봅니다. 현황 탭에서 진행 상황을 볼 수 있습니다.`,
+        options: [{ key: '_goal', label: '목표', choices: Object.entries(GOALS).map(([k, g]) => [k, g.label]) }] },
       { title: '남북 정리', options: pick(['kaesong', 'propaganda', 'workers', 'ongjin', 'goseong', 'dueum']) },
       { title: '북측 도 체계', options: [HISTORIC_PROV, ...pick(['jagang'])] },
       { title: '분단 전 군 되살리기', hint: '분단으로 갈라지거나 없어진 군입니다. 되살리면 그 군에 속했던 읍면이 옛 군 이름으로 한 도에 묶입니다.',
         options: ADMIN_OPTIONS.filter((o) => HIST_KEYS.has(o.key)) },
     ],
     onApply: (c) => {
-      const { _historic: hist, ...admin } = c;
+      const { _historic: hist, _goal: goal, ...admin } = c;
+      state.goal = goal;
       const was = cur;
       const changed = ADMIN_OPTIONS.filter((o) => admin[o.key] !== was[o.key]);
       const histChanged = (hist === 'historic') !== !!L.historic;
@@ -3488,6 +3669,8 @@ function reorganize(change, logMsg) {
   }
   for (const k of Object.keys(L.offices)) if (k.startsWith('g:') && !regions().has(k.slice(2))) delete L.offices[k];
   holdElection(changed, '행정구역 개편 뒤 광역단체장 선거');
+  syncMayors();
+  if (result && map) paintZones();   // 한 시군 한 색: 묶음이 바뀌었다
   state.log.unshift(logMsg);
   save(state); renderAll();
 }
@@ -3499,13 +3682,13 @@ function localZoneHTML(i) {
   const L = state.local, r = regionOf(state, z);
   return `<h4>지방자치 · ${esc(r)}</h4>
     <div class="m" style="margin:2px 0">${officeLine(L.offices[`g:${r}`])}</div>
-    <div class="m" style="margin:2px 0">${officeLine(L.offices[`m:${i}`])}</div>`;
+    <div class="m" style="margin:2px 0">${officeLine(L.offices[mayorKey(i)])}</div>`;
 }
 
 /** 정당 지도 값: 국민의힘 1, 민주당 0, 미시행 null */
 function partyValue(i, level) {
   const L = state.local, z = zoneProps[i];
-  const off = level === 'gov' ? L.offices[`g:${regionOf(state, z)}`] : L.offices[`m:${i}`];
+  const off = level === 'gov' ? L.offices[`g:${regionOf(state, z)}`] : L.offices[mayorKey(i)];
   return off ? (off.party === 'P' ? 1 : 0) : null;
 }
 
@@ -3914,6 +4097,64 @@ function recommendRoute(text) {
 
 // ------------------------------------------------------------ 역·IC 신설 (기존 노선 위 한 점)
 
+// ------------------------------------------------------------ 택지지구 개발
+
+let housingPick = false;
+function startHousingPick() {
+  cancelDraft();
+  housingPick = true;
+  map.getCanvas().style.cursor = 'crosshair';
+  if (metric !== 'subDensity' && metric !== 'density') { metricBeforeDraft = metric; metric = 'subDensity'; paintZones(); renderLegend(); }
+  toast('택지지구를 놓을 곳을 지도에서 누르세요 (Esc: 취소). 교통이 좋은 곳일수록 분양이 잘 됩니다.');
+}
+function endHousingPick() {
+  if (!housingPick) return;
+  housingPick = false;
+  map.getCanvas().style.cursor = '';
+  endDraftView();
+}
+
+function housingClick(e) {
+  const zf = map.queryRenderedFeatures(e.point, { layers: ['zones-fill'] })[0];
+  const zi = zf ? zf.id : -1;
+  if (!(zi >= 0) || zoneProps[zi]?.ext || !result) { toast('남북 땅 안을 누르세요.'); return; }
+  const { lng: lon, lat } = e.lngLat;
+  // 이름: 누른 곳에서 가장 가까운 읍면동
+  const zp = zoneProps[zi];
+  let best = 0, bd = Infinity;
+  zp.subs.forEach(([x, y], k) => { const d = (x - lon) ** 2 + (y - lat) ** 2; if (d < bd) { bd = d; best = k; } });
+  const sub = subsFC?.features[zp.sub0 + best]?.properties?.name;
+  const name = sub && sub !== zp.name ? `${zoneName(zi)} ${sub}` : zoneName(zi);
+  const access = result.zones.access[zi] / median(Array.from(result.zones.access));
+  endHousingPick();
+  const rows = Object.entries(HOUSING.sizes).map(([k, sz]) => {
+    const pl = housingPlan({ size: k, zone: zp, lat, lon, access });
+    return `<div class="item"><div class="t">${sz.label} · ${sz.households.toLocaleString()}세대</div>
+      <div class="m">사업비 ${formatWon(pl.cost)} · ${pl.years}년 · 입주 ${fmtPeople(pl.persons)} (그중 순증 ${fmtPeople(pl.net)}) · 분양 수익 ${formatWon(pl.revenue)}</div>
+      <button class="small primary" data-housing="${k}">착공</button></div>`;
+  }).join('');
+  const wrap = document.createElement('div');
+  wrap.className = 'setup-wrap';
+  wrap.innerHTML = `<div class="setup" role="dialog" aria-modal="true"><h2>택지지구 개발 · ${esc(name)}</h2>
+    <p class="setup-intro">주택 단지를 조성해 입주민을 받습니다. 입주 인구 가운데 일부는 새로 늘어나는 인구(새 가구·출산·해외 유입)이고, 나머지는 다른 시군에서 옮겨 옵니다.
+      지금 반경 3km 인구 ${fmtPeople(popNear(lon, lat, 3))} · 교통 접근성 ${access.toFixed(2)} (전국 중앙값 1, 낮으면 분양이 덜 됩니다)</p>
+    <div class="setup-body">${rows}</div>
+    <div class="setup-btns"><span style="flex:1"></span><button class="small" data-housing="cancel">닫기</button></div></div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-housing]');
+    if (!b) return;
+    if (b.dataset.housing !== 'cancel') {
+      const plan = housingPlan({ size: b.dataset.housing, zone: zp, lat, lon, access });
+      const r = startHousing(state, { name, zone: zi, lon, lat, size: b.dataset.housing, plan });
+      if (!r.ok) { alert(r.reason); return; }
+      save(state); renderAll();
+      toast(`${name} 택지지구 착공 (${plan.years}년 뒤 입주)`);
+    }
+    wrap.remove();
+  });
+}
+
 let pointAdd = null;   // {kind: 'station'|'ic', pick: {link, lon, lat, mode, name, road}}
 
 function startPointAdd(kind) {
@@ -4221,6 +4462,105 @@ function previewStraighten() {
     return buildNow(c, p);
   }, { kind: 'new', cost: pl.cost, years: pl.years, km: pl.newKm, cls: straight.cls === 'hsr' ? 'hsr' : 'conv', mode: 1 });
 }
+
+// ------------------------------------------------------------ 오류 제보·저장 파일·결산
+
+function reportBug() {
+  const c = map?.getCenter();
+  const lines = ['무엇이 이상했는지 적어 주세요 (어디서, 무엇을 눌렀을 때):', '', '', '---- 아래는 자동으로 채운 정보입니다 ----',
+    `버전: ${APP_VERSION} · 데이터 ${dataStamp || '-'}`,
+    `게임: ${state?.year}년 · 난이도 ${state?.difficulty} · 사업 ${state?.projects?.length ?? 0}건`,
+    `지도: ${c ? `${c.lng.toFixed(4)}, ${c.lat.toFixed(4)} · 확대 ${map.getZoom().toFixed(1)}` : '-'}`,
+    `선택: ${selection ? `${selection.type} ${selection.id ?? ''}` : '-'}`,
+    `화면: ${innerWidth}×${innerHeight} @${devicePixelRatio}`,
+    `브라우저: ${navigator.userAgent}`,
+    `최근 오류: ${errLog.slice(-3).join(' | ').slice(0, 600) || '없음'}`,
+    `최근 기록: ${(state?.log || []).slice(0, 3).join(' / ').slice(0, 300)}`];
+  location.href = `mailto:${BUG_MAIL}?subject=${encodeURIComponent(`[통일 한반도 교통망 ${APP_VERSION}] 오류 제보`)}&body=${encodeURIComponent(lines.join('\n'))}`;
+}
+
+function exportSave() {
+  const blob = new Blob([JSON.stringify({ app: 'unified-korea-transport', version: APP_VERSION, savedAt: Date.now(), state })], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `통일교통망_${state.year}년.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+async function importSave(file) {
+  let v;
+  try { v = JSON.parse(await file.text()); } catch { alert('저장 파일을 읽지 못했습니다.'); return; }
+  const st = v?.state;
+  if (v?.app !== 'unified-korea-transport' || !st?.year) { alert('이 게임의 저장 파일이 아닙니다.'); return; }
+  if (dataStamp && st.dataStamp && st.dataStamp !== dataStamp) { alert(`지도 자료가 바뀌기 전에 만든 파일이라 불러올 수 없습니다 (파일 ${st.dataStamp} · 지금 ${dataStamp}).`); return; }
+  if (!confirm(`${st.year}년 저장 파일을 불러올까요? 지금 진행은 슬롯이나 파일로 저장하지 않았다면 사라집니다.`)) return;
+  save(st);
+  clearSim();
+  location.reload();
+}
+
+/** 놓은 노선 길이(km)와 완공 사업 수 */
+function builtSummary() {
+  const out = { hsr: 0, rail: 0, metro: 0, road: 0, done: 0, upgrades: 0 };
+  const kind = { hsr: 'hsr', tunnelRail: 'hsr', gtx: 'rail', rail: 'rail', metro: 'metro', motorway: 'road', trunk: 'road', tunnelRoad: 'road' };
+  for (const p of state.projects) {
+    // 처음부터 이어받은 공사(OSM 공사 중 노선)는 플레이어 사업이 아니므로 세지 않는다
+    if (p.status !== 'done' || p.kind === 'osm') continue;
+    out.done++;
+    if (p.kind === 'upgrade') out.upgrades++;
+    if (p.kind !== 'new' || !kind[p.type]) continue;
+    out[kind[p.type]] += p.links.reduce((sum, id) => sum + (linkAt(base, state, id)?.len || 0), 0);
+  }
+  for (const k of ['hsr', 'rail', 'metro', 'road']) out[k] = Math.round(out[k]);
+  return out;
+}
+
+/** 현황 탭 맨 위: 이번 판의 목표와 지금 상태 */
+let goalTimes = null;   // 서울–평양 목표용 최근 소요 시간 (해마다 잰다)
+function goalHTML() {
+  const G = GOALS[state.goal];
+  if (!G?.check || !state.history.length) return '';
+  const st = G.check({ h0: state.history[0], h1: state.history[state.history.length - 1], state, times1: goalTimes });
+  if (!st) return `<p class="report-goal">목표 · ${G.label} <span class="m">(재는 중)</span></p>`;
+  return `<p class="report-goal ${st.done ? 'good' : ''}">목표 · ${G.label}: 지금 <b>${st.now}</b> / 목표 ${st.target}${st.done ? ' · 달성' : ''}
+    <span class="m">(${START_YEAR + 10}년 결산에서 판정)</span></p>`;
+}
+
+/** 상징 구간(TIME_PAIRS)의 지금 소요 시간 (워커에 묻는다) */
+const routeWaits = new Map();
+let routeSeq = 0;
+function routeTimes() {
+  const id = ++routeSeq;
+  return new Promise((res) => {
+    routeWaits.set(id, res);
+    worker.postMessage({ type: 'routes', id, pairs: TIME_PAIRS.map(([, a, b]) => [a, b]) });
+  });
+}
+
+/** 결산: 시작한 해와 지금을 견준 성적표 (이미지로 저장 단추) */
+async function showReport() {
+  const h = state.history;
+  if (!h.length || !result) { alert('아직 결산할 기록이 없습니다.'); return; }
+  const h0 = h[0], h1 = h[h.length - 1];
+  const years = [h0.year, state.year];
+  const times1 = busy ? null : await routeTimes();
+  const r = buildReport({ h0, h1, state, built: builtSummary(), times0: state.times0, times1 });
+  showNotice(`${years[0]}–${years[1]}년 결산`, `${reportHTML(r, years)}
+    <div class="actions" style="margin-top:10px"><button class="small primary" id="report-img">이미지로 저장 (SNS 공유용)</button></div>
+    ${years[1] === years[0] ? '<p class="hint">한 해 이상 넘겨야 변화가 보입니다.</p>' : ''}`);
+  lastReport = { r, years };
+}
+// 결산 알림은 앞선 알림(관광지 해금 등) 뒤에 줄을 서므로 단추는 문서에 걸어 둔다
+let lastReport = null;
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('#report-img');
+  if (!b || !lastReport) return;
+  const { r, years } = lastReport;
+  b.disabled = true; b.textContent = '저장하는 중…';
+  await downloadReportImage(map, r, years, `통일교통망_${years[0]}-${years[1]}_결산.png`);
+  b.textContent = '저장했습니다';
+});
 
 // ------------------------------------------------------------ 저장 슬롯
 
@@ -4691,22 +5031,28 @@ function zonePanel(id) {
   const name = zoneName(id);
   if (!result) return header(name);
   const r = result.zones;
-  const st = r.station[id];
+  // 한 시군으로 보이는 존들(옛 군 땅 조각 포함)을 합쳐 보인다: 인구·순이동은 더하고, 나머지는 인구 가중 평균
+  const zs = countyZones(id);
+  const pop = zs.reduce((s, j) => s + r.pop[j], 0), pop0 = zs.reduce((s, j) => s + Math.max(zoneProps[j].pop, 0), 0);
+  const avg = (arr) => (pop > 0 ? zs.reduce((s, j) => s + arr[j] * r.pop[j], 0) / pop : arr[id]);
+  const main = zs.reduce((b, j) => (r.pop[j] > r.pop[b] ? j : b), zs[0]);
+  const st = r.station[main];
   const stName = st >= 0 ? nodeNames().get(st)?.name : null;
-  const change = r.pop[id] / Math.max(z.pop, 1) - 1;
+  const change = pop / Math.max(pop0, 1) - 1;
   const accRef = median(Array.from(r.access));
-  const targets = historic.filter((t) => t.zone === id);
+  const targets = historic.filter((t) => zs.includes(t.zone));
+  const hists = [...new Set(zs.map((j) => zoneProps[j].hist).filter((h) => h && h !== name))];
   return `${header(name)}
     <table class="kv">
       <tr><td>소속</td><td>${esc(regionOf(state, z))} (${z.country === 'KP' ? '북' : '남'})${name !== z.name ? ` · 원래 이름 ${esc(z.name)}` : ''}</td></tr>
-      ${z.hist && z.hist !== name ? `<tr><td>분단 전</td><td>옛 ${esc(z.hist)}${z.piece ? ' 땅 (지금 시군 안의 한 부분)' : ''} <br><span class="hint">민원·정책 탭 › 행정구역 정리에서 되살릴 수 있습니다</span></td></tr>` : ''}
-      ${happiness ? `<tr><td>주민 행복도</td><td>${happiness[id].toFixed(1)}</td></tr>` : ''}
-      <tr><td>인구</td><td>${fmtPop(r.pop[id])} <span class="${change >= 0 ? 'pos' : 'neg'}">(${change >= 0 ? '+' : ''}${pct(change)})</span></td></tr>
-      <tr><td>지난해 순이동</td><td>${Math.round(r.netMig[id]).toLocaleString()}명</td></tr>
-      <tr><td>HDI</td><td>${r.hdi[id].toFixed(3)}</td></tr>
-      <tr><td>기대수명</td><td>${r.le[id].toFixed(1)}세</td></tr>
-      <tr><td>1인당 소득</td><td>$${Math.round(r.income[id]).toLocaleString()}</td></tr>
-      <tr><td>접근성 (중앙값=1)</td><td>${(r.access[id] / accRef).toFixed(2)}</td></tr>
+      ${hists.length ? `<tr><td>분단 전</td><td>옛 ${hists.map(esc).join('·')} 땅이 들어 있습니다<br><span class="hint">민원·정책 탭 › 행정구역 정리에서 되살릴 수 있습니다 (${START_YEAR}년)</span></td></tr>` : ''}
+      ${happiness ? `<tr><td>주민 행복도</td><td>${avg(happiness).toFixed(1)}</td></tr>` : ''}
+      <tr><td>인구</td><td>${fmtPop(pop)} <span class="${change >= 0 ? 'pos' : 'neg'}">(${change >= 0 ? '+' : ''}${pct(change)})</span></td></tr>
+      <tr><td>지난해 순이동</td><td>${Math.round(zs.reduce((s, j) => s + r.netMig[j], 0)).toLocaleString()}명</td></tr>
+      <tr><td>HDI</td><td>${avg(r.hdi).toFixed(3)}</td></tr>
+      <tr><td>기대수명</td><td>${avg(r.le).toFixed(1)}세</td></tr>
+      <tr><td>1인당 소득</td><td>$${Math.round(avg(r.income)).toLocaleString()}</td></tr>
+      <tr><td>접근성 (중앙값=1)</td><td>${(avg(r.access) / accRef).toFixed(2)}</td></tr>
       <tr><td>이용 철도역</td><td>${stName ? esc(stName) : '없음 (25km 밖)'}</td></tr>
     </table>
     ${localZoneHTML(id)}
