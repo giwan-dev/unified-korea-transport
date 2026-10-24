@@ -457,198 +457,285 @@ export class Model {
    * @param {boolean} [warm] 지난해 교통량에서 이어 시작 (반복 수를 줄인다)
    */
   assign(integration, progress, warm = false, offsetOverride = null) {
-    const { Z, net } = this;
-    const L = net.links;
-    const nNodes = net.nodes.length;
-    const NS = this.stationNode.length;
-    const R = P.roadConnectors, M = P.metroCandidates;
-    const aux = new Float64Array(L.length);
-    const auxT = new Float64Array(this.transitLinkCount);
-    const nodeDemand = new Float64Array(nNodes);
-    const stOD = new Float64Array(NS * NS);
-    const croad = new Float64Array(Z), ctr = new Float64Array(Z);
-    const egress = new Int32Array(this.S);   // 대중교통 도착 소구역별 하차 노드
-    const mass = this.tripMass();
-    // 관광 통행: 목적지 쪽 질량에 관광 매력도를 더한다 (방문객 1명 ≈ 인구 tourismMass명)
-    const tmass = new Float64Array(Z);
-    for (let j = 0; j < Z; j++) tmass[j] = ((this.tour[j] + this.tourKP[j] * integration) * P.tourismMass) / 1e4;
+    const run = this.startAssign(integration, warm, offsetOverride);
+    for (let it = 1; it <= run.iters; it++) {
+      this.beginIteration(run);
+      const all = [];
+      for (let i = 0; i < this.Z; i++) all.push(i);
+      this.originPass(run, it, all, progress);
+      this.endIteration(run, it);
+    }
+    this.updateCosts();
+    return run.totals;
+  }
+
+  /**
+   * assign과 같은 계산을 보조 워커(pool)에 나눠 한다. 출발 존별 최단경로·수단분담·트리 싣기가 시간의 대부분이고
+   * 출발 존마다 서로 독립이라, 반복마다 같은 상태(교통량·역 대기·항공 수요)를 보조 워커에 맞춰 준 뒤 존을 나눠 맡긴다.
+   * @param {{size:number, run:(msg:object)=>Promise<object[]>}} pool 보조 워커 묶음 (size개, run은 워커마다 결과 하나)
+   */
+  async assignParallel(pool, integration, progress, warm = false, offsetOverride = null) {
+    const run = this.startAssign(integration, warm, offsetOverride);
+    const parts = pool.size + 1;
+    for (let it = 1; it <= run.iters; it++) {
+      // 보조 워커: 같은 교통량에서 비용·역 간 시간을 다시 구하고 제 몫의 존을 계산한다
+      const pending = pool.run((k) => ({
+        type: 'origins', it, iters: run.iters, integration, part: k + 1, parts,
+        volume: this.volume, stationWait: this.stationWait, airOD: this.airOD,
+      }));
+      this.beginIteration(run);
+      const mine = [];
+      for (let i = 0; i < this.Z; i += parts) mine.push(i);
+      this.originPass(run, it, mine, progress);
+      for (const r of await pending) this.mergeOrigins(run, r, it);
+      this.endIteration(run, it);
+    }
+    this.updateCosts();
+    return run.totals;
+  }
+
+  /** 배정 한 번에 쓰는 작업 공간 */
+  startAssign(integration, warm, offsetOverride) {
+    const L = this.net.links;
+    const A = this.airports.length;
     const iters = warm ? P.msaIterationsWarm : P.msaIterations;
     // 지난해 교통량을 앞선 반복 몇 번 분으로 친다 (한 번의 전량배정이 혼잡을 다시 한곳에 몰지 않도록 1/4씩 섞는다)
     // 새 노선이 열린 해(offsetOverride)에도 나머지 망은 평소대로 천천히 섞고, 지난해 이용이 없던 링크(새로 열린 구간)만
     // 빨리 섞어 첫해 이용이 바로 잡히게 한다. 망 전체를 빨리 섞으면 혼잡이 출렁여 총 통행이 몇 %씩 튄다.
     const offset = warm ? P.warmMsaOffset : 0;
     const fresh = warm && offsetOverride != null ? this.volume.map((v) => (v === 0 ? 1 : 0)) : null;
-    const freshOffset = offsetOverride ?? offset;
+    return {
+      integration, iters, offset, fresh, freshOffset: offsetOverride ?? offset,
+      aux: new Float64Array(L.length),
+      stOD: new Float64Array(this.stationNode.length ** 2),
+      airOD: new Float64Array(A * A), latentOD: new Float64Array(A * A),
+      totals: null, D: null,
+    };
+  }
+
+  beginIteration(run) {
+    this.updateCosts();
+    run.aux.fill(0);
+    run.stOD.fill(0);
+    run.airOD.fill(0);
+    run.latentOD.fill(0);
+    run.D = this.stationMatrix();
+    run.totals = { trips: 0, rail: 0, road: 0, transit: 0, air: 0, intl: 0, vhm: 0, kpkr: 0, krTrips: 0, krTransit: 0 };
+  }
+
+  /** 보조 워커 하나의 결과를 더한다 */
+  mergeOrigins(run, r, it) {
+    for (let k = 0; k < r.aux.length; k++) run.aux[k] += r.aux[k];
+    for (let k = 0; k < r.stOD.length; k++) if (r.stOD[k]) run.stOD[k] += r.stOD[k];
+    for (let k = 0; k < r.airOD.length; k++) { run.airOD[k] += r.airOD[k]; run.latentOD[k] += r.latentOD[k]; }
+    const Z = this.Z;
+    for (const i of r.zones) this.ccomp.set(r.ccomp.subarray(i * Z, i * Z + Z), i * Z);
+    if (it === run.iters) {
+      for (const [k, v] of Object.entries(r.totals)) {
+        if (k === 'tourDest') { run.totals.tourDest ||= {}; for (const [j, x] of Object.entries(v)) run.totals.tourDest[j] = (run.totals.tourDest[j] || 0) + x; }
+        else run.totals[k] = (run.totals[k] || 0) + v;
+      }
+    }
+  }
+
+  /** 보조 워커 쪽: 주 워커와 같은 교통량으로 맞춘 뒤 제 몫의 출발 존을 계산해 돌려준다 */
+  originsFor(msg) {
+    this.volume.set(msg.volume);
+    this.stationWait.set(msg.stationWait);
+    this.airOD.set(msg.airOD);
+    this.airPaxFromOD();
+    const run = this.startAssign(msg.integration, false, null);
+    run.iters = msg.iters;
+    this.beginIteration(run);
+    const zones = [];
+    for (let i = msg.part; i < this.Z; i += msg.parts) zones.push(i);
+    this.originPass(run, msg.it, zones, null);
+    return { aux: run.aux, stOD: run.stOD, airOD: run.airOD, latentOD: run.latentOD, totals: run.totals, ccomp: this.ccomp, zones };
+  }
+
+  /** 출발 존들(zoneList)의 승용차·대중교통 최단경로, 수단분담, 트리 싣기 */
+  originPass(run, it, zoneList, progress) {
+    const { Z, net } = this;
+    const L = net.links;
+    const nNodes = net.nodes.length;
+    const NS = this.stationNode.length;
+    const R = P.roadConnectors, M = P.metroCandidates;
+    const { aux, stOD, airOD, latentOD, totals, D, iters, integration } = run;
+    const auxT = this.auxT && this.auxT.length === this.transitLinkCount ? this.auxT : (this.auxT = new Float64Array(this.transitLinkCount));
+    const nodeDemand = this.nodeDemandBuf && this.nodeDemandBuf.length === nNodes ? this.nodeDemandBuf : (this.nodeDemandBuf = new Float64Array(nNodes));
+    const croad = new Float64Array(Z), ctr = new Float64Array(Z);
+    const egress = new Int32Array(this.S);   // 대중교통 도착 소구역별 하차 노드
+    const mass = this.tripMass();
+    // 관광 통행: 목적지 쪽 질량에 관광 매력도를 더한다 (방문객 1명 ≈ 인구 tourismMass명)
+    const tmass = new Float64Array(Z);
+    for (let j = 0; j < Z; j++) tmass[j] = ((this.tour[j] + this.tourKP[j] * integration) * P.tourismMass) / 1e4;
     const pick = [];
     const lam = P.logitLambda;
     const A = this.airports.length;
-    const airOD = new Float64Array(A * A), latentOD = new Float64Array(A * A);
-    let totals = null;
+    let done = 0;
 
-    for (let it = 1; it <= iters; it++) {
-      this.updateCosts();
-      aux.fill(0);
-      stOD.fill(0);
-      const D = this.stationMatrix();
-      totals = { trips: 0, rail: 0, road: 0, transit: 0, air: 0, intl: 0, vhm: 0, kpkr: 0, krTrips: 0, krTransit: 0 };
-      airOD.fill(0);
-      latentOD.fill(0);
-      for (let i = 0; i < Z; i++) {
-        const o0 = this.zoneSub0[i], on = this.zoneSubN[i];
-        // 승용차 비용
-        const src = [], init = [];
-        for (let o = o0 * R; o < (o0 + on) * R; o++) {
-          if (this.subRoadNode[o] >= 0) { src.push(this.subRoadNode[o]); init.push(this.subRoadAcc[o]); }
-        }
-        this.road.shortestPaths(src, this.cost, init);
-        const rd = this.road.dist;
-        for (let j = 0; j < Z; j++) {
-          let c = 0, wsum = 0;
-          for (let d = this.zoneSub0[j]; d < this.zoneSub0[j] + this.zoneSubN[j]; d++) {
-            if (!(this.subW[d] > 0)) continue;   // 인구 없는 소구역 (0 × 무한대 방지)
-            wsum += this.subW[d];
-            let best = Infinity;
-            for (let k = d * R; k < d * R + R; k++) {
-              if (this.subRoadNode[k] < 0) break;
-              best = Math.min(best, rd[this.subRoadNode[k]] + this.subRoadAcc[k]);
-            }
-            c += this.subW[d] * best;
+    for (const i of zoneList) {
+      const o0 = this.zoneSub0[i], on = this.zoneSubN[i];
+      // 승용차 비용
+      const src = [], init = [];
+      for (let o = o0 * R; o < (o0 + on) * R; o++) {
+        if (this.subRoadNode[o] >= 0) { src.push(this.subRoadNode[o]); init.push(this.subRoadAcc[o]); }
+      }
+      this.road.shortestPaths(src, this.cost, init);
+      const rd = this.road.dist;
+      for (let j = 0; j < Z; j++) {
+        let c = 0, wsum = 0;
+        for (let d = this.zoneSub0[j]; d < this.zoneSub0[j] + this.zoneSubN[j]; d++) {
+          if (!(this.subW[d] > 0)) continue;   // 인구 없는 소구역 (0 × 무한대 방지)
+          wsum += this.subW[d];
+          let best = Infinity;
+          for (let k = d * R; k < d * R + R; k++) {
+            if (this.subRoadNode[k] < 0) break;
+            best = Math.min(best, rd[this.subRoadNode[k]] + this.subRoadAcc[k]);
           }
-          croad[j] = wsum > 0 ? c / wsum : Infinity;
+          c += this.subW[d] * best;
         }
-        // 대중교통 비용: 버스 정류장(도로 노드)이나 도시철도역에서 출발
-        const tsrc = [], tinit = [];
-        for (let o = o0; o < o0 + on; o++) {
-          for (let k = o * R; k < o * R + R; k++) {
-            if (this.subRoadNode[k] >= 0) { tsrc.push(this.subRoadNode[k]); tinit.push(this.subRoadAcc[k] * P.busAccessFactor + P.busWaitMin); }
-          }
-          for (let k = o * M; k < o * M + M; k++) {
-            if (this.subMetro[k] >= 0) { tsrc.push(this.subMetro[k]); tinit.push(this.subMetroAcc[k] + P.metroWaitMin); }
-          }
+        croad[j] = wsum > 0 ? c / wsum : Infinity;
+      }
+      // 대중교통 비용: 버스 정류장(도로 노드)이나 도시철도역에서 출발
+      const tsrc = [], tinit = [];
+      for (let o = o0; o < o0 + on; o++) {
+        for (let k = o * R; k < o * R + R; k++) {
+          if (this.subRoadNode[k] >= 0) { tsrc.push(this.subRoadNode[k]); tinit.push(this.subRoadAcc[k] * P.busAccessFactor + P.busWaitMin); }
         }
-        this.transit.shortestPaths(tsrc, this.costT, tinit);
-        const td = this.transit.dist;
-        for (let j = 0; j < Z; j++) {
-          let c = 0, wsum = 0;
-          for (let d = this.zoneSub0[j]; d < this.zoneSub0[j] + this.zoneSubN[j]; d++) {
-            egress[d] = -1;
-            if (!(this.subW[d] > 0)) continue;
-            wsum += this.subW[d];
-            let best = Infinity, node = -1;
-            for (let k = d * R; k < d * R + R; k++) {
-              if (this.subRoadNode[k] < 0) break;
-              const v = td[this.subRoadNode[k]] + this.subRoadAcc[k] * P.busAccessFactor;
-              if (v < best) { best = v; node = this.subRoadNode[k]; }
-            }
-            for (let k = d * M; k < d * M + M; k++) {
-              if (this.subMetro[k] < 0) break;
-              const v = td[this.subMetro[k]] + this.subMetroAcc[k];
-              if (v < best) { best = v; node = this.subMetro[k]; }
-            }
-            egress[d] = node;
-            c += this.subW[d] * best;
-          }
-          ctr[j] = wsum > 0 ? c / wsum : Infinity;
+        for (let k = o * M; k < o * M + M; k++) {
+          if (this.subMetro[k] >= 0) { tsrc.push(this.subMetro[k]); tinit.push(this.subMetroAcc[k] + P.metroWaitMin); }
         }
+      }
+      this.transit.shortestPaths(tsrc, this.costT, tinit);
+      const td = this.transit.dist;
+      for (let j = 0; j < Z; j++) {
+        let c = 0, wsum = 0;
+        for (let d = this.zoneSub0[j]; d < this.zoneSub0[j] + this.zoneSubN[j]; d++) {
+          egress[d] = -1;
+          if (!(this.subW[d] > 0)) continue;
+          wsum += this.subW[d];
+          let best = Infinity, node = -1;
+          for (let k = d * R; k < d * R + R; k++) {
+            if (this.subRoadNode[k] < 0) break;
+            const v = td[this.subRoadNode[k]] + this.subRoadAcc[k] * P.busAccessFactor;
+            if (v < best) { best = v; node = this.subRoadNode[k]; }
+          }
+          for (let k = d * M; k < d * M + M; k++) {
+            if (this.subMetro[k] < 0) break;
+            const v = td[this.subMetro[k]] + this.subMetroAcc[k];
+            if (v < best) { best = v; node = this.subMetro[k]; }
+          }
+          egress[d] = node;
+          c += this.subW[d] * best;
+        }
+        ctr[j] = wsum > 0 ? c / wsum : Infinity;
+      }
 
-        nodeDemand.fill(0);
-        const tDemand = this.transitDemand || (this.transitDemand = new Float64Array(nNodes));
-        tDemand.fill(0);
-        const carPen = P.carlessPenaltyMin * Math.max(0, 1 - this.income[i] / P.carOwnershipIncome);
-        for (let j = 0; j < Z; j++) {
-          const km = kmBetween(this.cx[i], this.cy[i], this.cx[j], this.cy[j]) * 1.25;
-          const bc = this.borderCost(i, j, integration);
-          const gr = croad[j] + (km * P.carCostPerKm) / P.vot + bc + carPen;
-          pick.length = 0;
-          const crail = i === j ? Infinity : this.railCost(i, j, D, pick);
-          let hsrShare = 0;
-          for (let k = 0; k < pick.length; k += 3) {
-            if (this.stationHsr[pick[k]] && this.stationHsr[pick[k + 1]]) hsrShare += pick[k + 2];
-          }
-          const fare = P.railFarePerKm.conv + (P.railFarePerKm.hsr - P.railFarePerKm.conv) * hsrShare;
-          const kpShare = (this.isKP[i] + this.isKP[j]) / 2;
-          const gt = crail + (km * fare) / P.vot + this.railASC * (1 - kpShare * (1 - P.kpRailASCFactor)) + bc;
-          const tfare = P.transitBaseFare + Math.max(0, km - 10) * P.transitFarePerKm;
-          const gu = ctr[j] + tfare / P.vot + this.transitASC + bc;
-          const air = this.airCost(i, j);
-          const afare = (P.airBaseFare + km * P.airFarePerKm) * (air.intl ? P.airIntlFareFactor : 1);
-          const ga = air.cost + afare / P.vot + P.airASC + bc;
-          const eR = Math.exp(-lam * gr), eT = isFinite(gt) ? Math.exp(-lam * gt) : 0, eU = isFinite(gu) ? Math.exp(-lam * gu) : 0;
-          const eA = isFinite(ga) ? Math.exp(-lam * ga) : 0;
-          const sum = eR + eT + eU + eA;
-          const comp = sum > 0 ? -Math.log(sum) / lam : gr;
-          this.ccomp[i * Z + j] = i === j ? 15 : comp;
-          if (i === j || !(sum > 0)) continue;
-          const gravity = this.K * mass[i] / (comp + P.gravityOffsetMin) ** P.gravityPower;
-          // 국외에서 오는 관광(입국)은 국외 존의 통행 발생 축소를 되돌려 따로 키운다
-          const inbound = this.isExt[i] && !this.isExt[j] ? P.inboundTourism : 1;
-          const T = gravity * (mass[j] + tmass[j] * inbound);
-          const tRail = T * eT / sum, tTr = T * eU / sum, tAir = T * eA / sum, tRoad = T - tRail - tTr - tAir;
-          if (tAir > 0) airOD[air.a * A + air.b] += tAir;
-          // 운항하지 않는 노선이 열렸다면 생겼을 수요 (자동 취항 판단용)
-          if (air.pa >= 0 && air.pot < air.cost - 5) {
-            const pfare = (P.airBaseFare + km * P.airFarePerKm) * (air.pIntl ? P.airIntlFareFactor : 1);
-            const eP = Math.exp(-lam * (air.pot + pfare / P.vot + P.airASC + bc));
-            latentOD[air.pa * A + air.pb] += T * eP / (sum - eA + eP);
-          }
-          if (it === iters) {
-            totals.trips += T; totals.rail += tRail; totals.road += tRoad; totals.transit += tTr; totals.air += tAir;
-            totals.tour = (totals.tour || 0) + gravity * tmass[j] * inbound;
-            if (inbound > 1) totals.tourIn = (totals.tourIn || 0) + gravity * tmass[j] * inbound;
-            if (this.isExt[j] && !this.isExt[i]) totals.tourOut = (totals.tourOut || 0) + gravity * tmass[j];
-            if (tmass[j] > 0) (totals.tourDest ||= {})[j] = (totals.tourDest[j] || 0) + gravity * tmass[j] * inbound;
-            if (this.isExt[i] || this.isExt[j]) totals.intl += T;
-            totals.vhm += tRoad * croad[j];
-            if (this.isKP[i] !== this.isKP[j]) totals.kpkr += T;
-            if (!this.isKP[i] && !this.isKP[j]) { totals.krTrips += T; totals.krTransit += tTr; }
-          }
-          const pcu = tRoad / P.personsPerCar * (1 + P.freightPCUShare);
-          for (let d = this.zoneSub0[j] * R; d < (this.zoneSub0[j] + this.zoneSubN[j]) * R; d++) {
-            if (this.subRoadNode[d] >= 0) nodeDemand[this.subRoadNode[d]] += pcu * this.subW[(d / R) | 0] * this.subRoadW[d];
-          }
-          if (tRail > 0) {
-            for (let k = 0; k < pick.length; k += 3) stOD[pick[k] * NS + pick[k + 1]] += tRail * pick[k + 2];
-          }
-          if (tTr > 0) {
-            for (let d = this.zoneSub0[j]; d < this.zoneSub0[j] + this.zoneSubN[j]; d++) {
-              if (egress[d] >= 0) tDemand[egress[d]] += tTr * this.subW[d];
-            }
+      nodeDemand.fill(0);
+      const tDemand = this.transitDemand && this.transitDemand.length === nNodes ? this.transitDemand : (this.transitDemand = new Float64Array(nNodes));
+      tDemand.fill(0);
+      const carPen = P.carlessPenaltyMin * Math.max(0, 1 - this.income[i] / P.carOwnershipIncome);
+      for (let j = 0; j < Z; j++) {
+        const km = kmBetween(this.cx[i], this.cy[i], this.cx[j], this.cy[j]) * 1.25;
+        const bc = this.borderCost(i, j, integration);
+        const gr = croad[j] + (km * P.carCostPerKm) / P.vot + bc + carPen;
+        pick.length = 0;
+        const crail = i === j ? Infinity : this.railCost(i, j, D, pick);
+        let hsrShare = 0;
+        for (let k = 0; k < pick.length; k += 3) {
+          if (this.stationHsr[pick[k]] && this.stationHsr[pick[k + 1]]) hsrShare += pick[k + 2];
+        }
+        const fare = P.railFarePerKm.conv + (P.railFarePerKm.hsr - P.railFarePerKm.conv) * hsrShare;
+        const kpShare = (this.isKP[i] + this.isKP[j]) / 2;
+        const gt = crail + (km * fare) / P.vot + this.railASC * (1 - kpShare * (1 - P.kpRailASCFactor)) + bc;
+        const tfare = P.transitBaseFare + Math.max(0, km - 10) * P.transitFarePerKm;
+        const gu = ctr[j] + tfare / P.vot + this.transitASC + bc;
+        const air = this.airCost(i, j);
+        const afare = (P.airBaseFare + km * P.airFarePerKm) * (air.intl ? P.airIntlFareFactor : 1);
+        const ga = air.cost + afare / P.vot + P.airASC + bc;
+        const eR = Math.exp(-lam * gr), eT = isFinite(gt) ? Math.exp(-lam * gt) : 0, eU = isFinite(gu) ? Math.exp(-lam * gu) : 0;
+        const eA = isFinite(ga) ? Math.exp(-lam * ga) : 0;
+        const sum = eR + eT + eU + eA;
+        const comp = sum > 0 ? -Math.log(sum) / lam : gr;
+        this.ccomp[i * Z + j] = i === j ? 15 : comp;
+        if (i === j || !(sum > 0)) continue;
+        const gravity = this.K * mass[i] / (comp + P.gravityOffsetMin) ** P.gravityPower;
+        // 국외에서 오는 관광(입국)은 국외 존의 통행 발생 축소를 되돌려 따로 키운다
+        const inbound = this.isExt[i] && !this.isExt[j] ? P.inboundTourism : 1;
+        const T = gravity * (mass[j] + tmass[j] * inbound);
+        const tRail = T * eT / sum, tTr = T * eU / sum, tAir = T * eA / sum, tRoad = T - tRail - tTr - tAir;
+        if (tAir > 0) airOD[air.a * A + air.b] += tAir;
+        // 운항하지 않는 노선이 열렸다면 생겼을 수요 (자동 취항 판단용)
+        if (air.pa >= 0 && air.pot < air.cost - 5) {
+          const pfare = (P.airBaseFare + km * P.airFarePerKm) * (air.pIntl ? P.airIntlFareFactor : 1);
+          const eP = Math.exp(-lam * (air.pot + pfare / P.vot + P.airASC + bc));
+          latentOD[air.pa * A + air.pb] += T * eP / (sum - eA + eP);
+        }
+        if (it === iters) {
+          totals.trips += T; totals.rail += tRail; totals.road += tRoad; totals.transit += tTr; totals.air += tAir;
+          totals.tour = (totals.tour || 0) + gravity * tmass[j] * inbound;
+          if (inbound > 1) totals.tourIn = (totals.tourIn || 0) + gravity * tmass[j] * inbound;
+          if (this.isExt[j] && !this.isExt[i]) totals.tourOut = (totals.tourOut || 0) + gravity * tmass[j];
+          if (tmass[j] > 0) (totals.tourDest ||= {})[j] = (totals.tourDest[j] || 0) + gravity * tmass[j] * inbound;
+          if (this.isExt[i] || this.isExt[j]) totals.intl += T;
+          totals.vhm += tRoad * croad[j];
+          if (this.isKP[i] !== this.isKP[j]) totals.kpkr += T;
+          if (!this.isKP[i] && !this.isKP[j]) { totals.krTrips += T; totals.krTransit += tTr; }
+        }
+        const pcu = tRoad / P.personsPerCar * (1 + P.freightPCUShare);
+        for (let d = this.zoneSub0[j] * R; d < (this.zoneSub0[j] + this.zoneSubN[j]) * R; d++) {
+          if (this.subRoadNode[d] >= 0) nodeDemand[this.subRoadNode[d]] += pcu * this.subW[(d / R) | 0] * this.subRoadW[d];
+        }
+        if (tRail > 0) {
+          for (let k = 0; k < pick.length; k += 3) stOD[pick[k] * NS + pick[k + 1]] += tRail * pick[k + 2];
+        }
+        if (tTr > 0) {
+          for (let d = this.zoneSub0[j]; d < this.zoneSub0[j] + this.zoneSubN[j]; d++) {
+            if (egress[d] >= 0) tDemand[egress[d]] += tTr * this.subW[d];
           }
         }
-        this.road.loadTree(nodeDemand, aux);
-        // 대중교통 그래프는 위에서 구한 최단경로 트리를 그대로 들고 있다
-        auxT.fill(0);
-        this.transit.loadTree(tDemand, auxT);
-        for (const l of this.metroLinks) aux[l] += auxT[l];
-        if (progress && i % 25 === 0) progress(((it - 1) + 0.9 * i / Z) / iters);
       }
-      // 철도: 출발역별 최단경로 트리에 역 간 수요를 싣는다
-      this.boardings.fill(0);
-      for (let s = 0; s < NS; s++) {
-        let row = 0;
-        nodeDemand.fill(0);
-        for (let t = 0; t < NS; t++) {
-          const v = stOD[s * NS + t];
-          if (v > 0) {
-            nodeDemand[this.stationNode[t]] += v; row += v;
-            this.boardings[t] += v;
-          }
-        }
-        if (row === 0) continue;
-        this.boardings[s] += row;
-        this.rail.shortestPaths(this.stationNode[s], this.cost);
-        this.rail.loadTree(nodeDemand, aux);
-      }
-      // 운행 계통 이용객은 밑의 실제 선로도 함께 쓴다 (선로 용량 공유)
-      for (const v of this.virtual) for (const l of L[v].via) aux[l] += aux[v];
-      for (let l = 0; l < L.length; l++) this.volume[l] += (aux[l] - this.volume[l]) / (it + (fresh?.[l] ? freshOffset : offset));
-      this.updateStationWaits(it + offset);
-      for (let k = 0; k < airOD.length; k++) this.airOD[k] += (airOD[k] - this.airOD[k]) / (it + offset);
-      this.latentOD.set(latentOD);
-      this.airPaxFromOD();
+      this.road.loadTree(nodeDemand, aux);
+      // 대중교통 그래프는 위에서 구한 최단경로 트리를 그대로 들고 있다
+      auxT.fill(0);
+      this.transit.loadTree(tDemand, auxT);
+      for (const l of this.metroLinks) aux[l] += auxT[l];
+      done++;
+      if (progress && done % 25 === 0) progress(((it - 1) + 0.9 * done / zoneList.length) / iters);
     }
-    this.updateCosts();
-    return totals;
+  }
+
+  /** 반복 끝: 역 간 수요를 철도망에 싣고, 교통량·역 대기·항공 수요를 MSA로 섞는다 */
+  endIteration(run, it) {
+    const L = this.net.links;
+    const NS = this.stationNode.length;
+    const { aux, stOD, airOD, latentOD, offset, fresh, freshOffset } = run;
+    const nodeDemand = this.nodeDemandBuf;
+    // 철도: 출발역별 최단경로 트리에 역 간 수요를 싣는다
+    this.boardings.fill(0);
+    for (let s = 0; s < NS; s++) {
+      let row = 0;
+      nodeDemand.fill(0);
+      for (let t = 0; t < NS; t++) {
+        const v = stOD[s * NS + t];
+        if (v > 0) {
+          nodeDemand[this.stationNode[t]] += v; row += v;
+          this.boardings[t] += v;
+        }
+      }
+      if (row === 0) continue;
+      this.boardings[s] += row;
+      this.rail.shortestPaths(this.stationNode[s], this.cost);
+      this.rail.loadTree(nodeDemand, aux);
+    }
+    // 운행 계통 이용객은 밑의 실제 선로도 함께 쓴다 (선로 용량 공유)
+    for (const v of this.virtual) for (const l of L[v].via) aux[l] += aux[v];
+    for (let l = 0; l < L.length; l++) this.volume[l] += (aux[l] - this.volume[l]) / (it + (fresh?.[l] ? freshOffset : offset));
+    this.updateStationWaits(it + offset);
+    for (let k = 0; k < airOD.length; k++) this.airOD[k] += (airOD[k] - this.airOD[k]) / (it + offset);
+    this.latentOD.set(latentOD);
+    this.airPaxFromOD();
   }
 
   tripMass() {

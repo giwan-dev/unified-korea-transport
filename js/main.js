@@ -17,6 +17,7 @@ import { subFold, initPanelUI, toast } from './ui/panel.js';
 import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.js';
 import { kmBetween, routeKey } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
+import { helperPorts } from './sim/pool.js';
 import { smoothSegments, polylineKm, splineLine } from './game/curve.js';
 import { extendWorld, urbanLanes } from './game/world.js';
 import { autoLineName, cityStem, makeForeignTest } from './game/lines.js';
@@ -120,10 +121,12 @@ async function init() {
       mapReady.then(() => onWorker(ev));
     } else onWorker(ev);
   };
+  // 해마다 도는 통행배정을 나눠 맡을 보조 워커 (계산 워커와 포트로 바로 이어진다)
+  const ports = new URLSearchParams(location.search).has('serial') ? [] : helperPorts();   // ?serial: 한 워커로만
   worker.postMessage({
     type: 'init', zones: zoneProps, grid: grid.buffer.slice(0), net: effectiveNetwork(base, state),
-    ctx: ctx(), snapshot: state.snapshot, baseline, saved: savedOk,
-  }, [...(baseline ? [baseline.bin] : []), ...(savedOk ? [savedOk.bin] : [])]);
+    ctx: ctx(), snapshot: state.snapshot, baseline, saved: savedOk, ports,
+  }, [...(baseline ? [baseline.bin] : []), ...(savedOk ? [savedOk.bin] : []), ...ports]);
   dataStamp = meta?.stamp;
 
   // 3) 지도
@@ -499,6 +502,7 @@ let nodeAdj = null;
 
 /** 노드 n에서 링크 i가 곧게 이어지는(120° 넘게 펴진) 같은 수단 링크의, 노드 바로 너머 점 */
 function beyondPoint(i, l, n, inward) {
+  const link = (k) => (k < base.links.length ? base.links[k] : state.newLinks[k - base.links.length]);
   if (!nodeAdj) {
     nodeAdj = new Map();
     allLinks().forEach((x, k) => {
@@ -514,8 +518,8 @@ function beyondPoint(i, l, n, inward) {
   let best = null, bc = -0.5;
   for (const k of nodeAdj.get(n) || []) {
     if (k === i) continue;
-    const x = allLinks()[k];
-    if (x.mode !== l.mode || x.cls === 'ferry') continue;
+    const x = link(k);   // allLinks()는 배열을 새로 만들어 여기서 부르면 너무 느리다
+    if (!x || x.mode !== l.mode || x.cls === 'ferry') continue;
     const q = nextVertex(x.geom, c);
     if (!q) continue;
     const w = dir(q), wl = Math.hypot(...w);

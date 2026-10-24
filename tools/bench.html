@@ -41,6 +41,31 @@
     wrap(Graph.prototype, 'shortestPaths', 'dijkstra');
     wrap(Graph.prototype, 'loadTree', 'loadTree');
 
+    // ?mode=worker: 게임과 같은 워커 경로(보조 워커 병렬)로 한 해 넘기기 시간과 총계를 잰다
+    if (new URLSearchParams(location.search).get('mode') === 'worker') {
+      const worker = new Worker(new URL('../js/sim/worker.js', import.meta.url), { type: 'module' });
+      const ctxW = { integration: state.integration, policy: state.policy };
+      const netW = effectiveNetwork(net, state);
+      const wait = () => new Promise((res) => { worker.onmessage = (ev) => {
+        if (ev.data.type === 'progress') document.title = `${ev.data.label} ${Math.round(ev.data.value * 100)}%`;
+        if (ev.data.type === 'result' || ev.data.type === 'error') res(ev.data);
+      }; });
+      let p = wait();
+      const { helperPorts } = await import('../js/sim/pool.js');
+      const ports = new URLSearchParams(location.search).get('serial') ? [] : helperPorts();
+      worker.postMessage({ type: 'init', zones, grid, net: netW, ctx: ctxW, baseline: { json: bjson, bin: bbin }, ports }, ports);
+      await p;
+      for (let k = 0; k < 2; k++) {
+        const t0 = performance.now();
+        p = wait();
+        worker.postMessage({ type: 'step', net: netW, ctx: ctxW });
+        const r = await p;
+        if (r.type === 'error') { log('오류 ' + r.message); break; }
+        log(`워커 ${k + 1}회: ${((performance.now() - t0) / 1000).toFixed(2)}초 · 통행 ${Math.round(r.totals.trips)} 철도 ${Math.round(r.totals.rail)} 도로 ${Math.round(r.totals.road)}`);
+      }
+      document.title = '완료';
+      throw new Error('done');
+    }
     const model = new Model(zones, new Float32Array(grid));
     model.setNetwork(effectiveNetwork(net, state));
     log(`baseline ${model.importBaseline(bjson, bbin) ? '읽음' : '못 읽음 (데이터 버전 다름)'}`);
@@ -50,7 +75,8 @@
       for (const key of Object.keys(T)) delete T[key];
       const t0 = performance.now();
       model.advanceYear(ctx.integration, ctx.policy);
-      model.assign(ctx.integration, null, true);
+      const tot = model.assign(ctx.integration, null, true);
+      log(`  통행 ${Math.round(tot.trips)} 철도 ${Math.round(tot.rail)} 도로 ${Math.round(tot.road)}`);
       const total = performance.now() - t0;
       log(`${k + 1}회: 전체 ${(total / 1000).toFixed(2)}초 · ` + Object.entries(T).sort((a, b) => b[1] - a[1]).map(([n, v]) => `${n} ${(v / 1000).toFixed(2)}초`).join(' · '));
     }
