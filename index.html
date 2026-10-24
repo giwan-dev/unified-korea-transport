@@ -7,6 +7,41 @@
   <meta name="description" content="통일 한반도의 고속도로·고속철도를 계획하고 수요와 인구 이동을 시뮬레이션하는 게임">
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
   <link rel="icon" href="assets/brand/mark.svg" type="image/svg+xml">
+  <!-- 로딩 시간 줄이기: JS 모듈은 import를 차례로 따라가지 않고 한꺼번에, 시작에 꼭 필요한 데이터는 JS를 기다리지 않고 바로 받는다 -->
+  <link rel="modulepreload" href="js/main.js">
+  <link rel="modulepreload" href="js/data/netpack.js">
+  <link rel="modulepreload" href="js/game/catalog.js">
+  <link rel="modulepreload" href="js/game/curve.js">
+  <link rel="modulepreload" href="js/game/lines.js">
+  <link rel="modulepreload" href="js/game/local.js">
+  <link rel="modulepreload" href="js/game/mega.js">
+  <link rel="modulepreload" href="js/game/naming.js">
+  <link rel="modulepreload" href="js/game/operators.js">
+  <link rel="modulepreload" href="js/game/ppp.js">
+  <link rel="modulepreload" href="js/game/services.js">
+  <link rel="modulepreload" href="js/game/simstore.js">
+  <link rel="modulepreload" href="js/game/state.js">
+  <link rel="modulepreload" href="js/game/world.js">
+  <link rel="modulepreload" href="js/sim/model.js">
+  <link rel="modulepreload" href="js/sim/graph.js">
+  <link rel="modulepreload" href="js/sim/params.js">
+  <link rel="modulepreload" href="js/sim/pool.js">
+  <link rel="modulepreload" href="js/ui/borders.js">
+  <link rel="modulepreload" href="js/ui/guide.js">
+  <link rel="modulepreload" href="js/ui/linediagram.js">
+  <link rel="modulepreload" href="js/ui/map.js">
+  <link rel="modulepreload" href="js/ui/palette.js">
+  <link rel="modulepreload" href="js/ui/panel.js">
+  <link rel="modulepreload" href="js/ui/traffic.js">
+  <link rel="preload" href="data/meta.json" as="fetch" crossorigin>
+  <link rel="preload" href="data/zones.json" as="fetch" crossorigin>
+  <link rel="preload" href="data/network.meta.json" as="fetch" crossorigin>
+  <link rel="preload" href="data/network.bin" as="fetch" crossorigin>
+  <link rel="preload" href="data/grid.bin" as="fetch" crossorigin>
+  <link rel="preload" href="data/air_sea.json" as="fetch" crossorigin>
+  <link rel="preload" href="data/admin/sgg.geojson" as="fetch" crossorigin>
+  <link rel="preload" href="data/baseline.json" as="fetch" crossorigin>
+  <link rel="preload" href="data/baseline.bin" as="fetch" crossorigin>
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>

@@ -263,6 +263,38 @@ export class Model {
     return num / den;
   }
 
+  /**
+   * 후보 노드 가운데 소구역 격자 평균 접근시간(accessMinutes)이 가장 작은 k개 [[노드, 분], …] (작은 순).
+   * 모든 후보를 다 재면 무거워서(도심 역 반경 25km 안에 수백 개), 소구역 중심 거리와 격자 반경으로 평균의 하한을 먼저 구해
+   * 하한이 작은 순으로 재고, 하한이 이미 고른 k번째보다 크면 멈춘다. 고르는 결과는 다 잴 때와 같다.
+   */
+  bestByAccess(s, cands, k) {
+    if (!cands.length) return [];
+    const nodes = this.net.nodes, cx = this.subX[s], cy = this.subY[s];
+    const a = this.cellOff[s], b = this.cellOff[s + 1];
+    let rad = 0;
+    for (let c = a; c < b; c++) rad = Math.max(rad, kmBetween(cx, cy, this.cellX[c], this.cellY[c]));
+    // accessMinutes는 걷기·연계 두 갈래에서 각각 늘어난다: 구간 [lo, hi]에서의 최솟값
+    const walk = (d) => d * P.accessDetour / P.walkSpeedKmh * 60;
+    const feed = (d) => P.feederPenaltyMin + d * P.accessDetour / P.feederSpeedKmh * 60;
+    const lower = (lo, hi) => (lo <= P.walkMaxKm ? Math.min(walk(lo), hi > P.walkMaxKm ? feed(Math.max(lo, P.walkMaxKm)) : Infinity) : feed(lo));
+    const order = cands.map((nd) => {
+      const dc = kmBetween(cx, cy, nodes[nd][0], nodes[nd][1]);
+      const r = rad * 1.01 + 0.01;   // 경위도 거리 근사의 오차 여유
+      return [nd, lower(Math.max(0, dc - r), dc + r)];
+    }).sort((p, q) => p[1] - q[1]);
+    const best = [];
+    for (const [nd, lb] of order) {
+      if (best.length >= k && lb > best[k - 1][1]) break;
+      const [nx, ny] = nodes[nd];
+      const acc = this.subMean(s, (x, y) => accessMinutes(kmBetween(x, y, nx, ny)));
+      best.push([nd, acc]);
+      best.sort((p, q) => p[1] - q[1]);
+      if (best.length > k) best.length = k;
+    }
+    return best;
+  }
+
   buildAccess() {
     const { net, S } = this;
     const nodes = net.nodes;
@@ -275,6 +307,18 @@ export class Model {
       set.add(l.a); set.add(l.b);
       if (l.cls === 'hsr') { hsrNodes.add(l.a); hsrNodes.add(l.b); }
     }
+    // 접속 노드·후보 역 고르기는 소구역 격자마다 거리를 재서 무겁다(수 초). 도로 접속 노드와 역 구성이 그대로면
+    // (대부분의 해, 효과 미리보기의 대조 계산) 지난번 결과를 그대로 쓴다
+    const metroNodes = new Set();
+    for (const l of net.links) if (l.active && l.mode === 2) { metroNodes.add(l.a); metroNodes.add(l.b); }
+    const sig = accessSignature(roadNodes, railNodes, hsrNodes, metroNodes, net.stations, nodes.length);
+    if (this.accessSig === sig) {
+      // 역 구성이 같으므로 역 배열·대기시간은 그대로, 해마다 새로 정하던 것만 다시 (승차 인원 0, 출발 묶음)
+      this.boardings = new Float64Array(this.stationNode.length);
+      this.buildOriginGroups();
+      return;
+    }
+    this.accessSig = sig;
     // 도로: 소구역마다 가까운 도로 노드 R개에 나눠 싣는다 (한 노드에 몰리는 접속부 정체 방지)
     const roadIdx = new SpatialIndex(nodes, roadNodes);
     const R = P.roadConnectors;
@@ -296,18 +340,13 @@ export class Model {
     }
     this.roadNodeSet = roadNodes;
     // 도시철도역과 소구역별 후보 (걸어가거나 버스로 갈 만한 곳)
-    const metroNodes = new Set();
-    for (const l of net.links) if (l.active && l.mode === 2) { metroNodes.add(l.a); metroNodes.add(l.b); }
     this.metroStationNodes = [...new Set(net.stations)].filter((st) => metroNodes.has(st));
     const mIdx = new SpatialIndex(nodes, new Set(this.metroStationNodes));
     const M = P.metroCandidates;
     this.subMetro = new Int32Array(S * M).fill(-1);
     this.subMetroAcc = new Float64Array(S * M);
     for (let s = 0; s < S; s++) {
-      const scored = mIdx.within(this.subX[s], this.subY[s], P.metroRadiusKm).map((nd) => {
-        const [nx, ny] = nodes[nd];
-        return [nd, this.subMean(s, (x, y) => accessMinutes(kmBetween(x, y, nx, ny)))];
-      }).sort((a, b) => a[1] - b[1]).slice(0, M);
+      const scored = this.bestByAccess(s, mIdx.within(this.subX[s], this.subY[s], P.metroRadiusKm), M);
       scored.forEach(([nd, acc], k) => { this.subMetro[s * M + k] = nd; this.subMetroAcc[s * M + k] = acc; });
     }
     // 철도: 운행 중인 역
@@ -333,12 +372,8 @@ export class Model {
     this.subSt = new Int32Array(S * K).fill(-1);
     this.subStAcc = new Float64Array(S * K);
     for (let s = 0; s < S; s++) {
-      const cand = stIdx.within(this.subX[s], this.subY[s], P.stationRadiusKm);
-      const scored = cand.map((nd) => {
-        const [nx, ny] = nodes[nd];
-        return [this.stationOf.get(nd), this.subMean(s, (x, y) => accessMinutes(kmBetween(x, y, nx, ny)))];
-      }).sort((a, b) => a[1] - b[1]).slice(0, K);
-      scored.forEach(([st, acc], k) => { this.subSt[s * K + k] = st; this.subStAcc[s * K + k] = acc; });
+      const scored = this.bestByAccess(s, stIdx.within(this.subX[s], this.subY[s], P.stationRadiusKm), K);
+      scored.forEach(([nd, acc], k) => { this.subSt[s * K + k] = this.stationOf.get(nd); this.subStAcc[s * K + k] = acc; });
     }
     this.boardings = new Float64Array(NS);
     this.buildOriginGroups();
@@ -1426,9 +1461,21 @@ export function routeKey(a, b) {
   return a < b ? `${a}-${b}` : `${b}-${a}`;
 }
 
+/** 도로 접속 노드·도시철도역·철도역·고속철도역 구성이 같은지 알아보는 지문 (순서와 무관한 집합은 섞어 더한다) */
+function accessSignature(road, rail, hsr, metro, stations, nNodes) {
+  const mix = (set) => {
+    let a = 0, b = 0;
+    for (const v of set) { const h = Math.imul(v + 0x9e3779b9, 0x85ebca6b) >>> 0; a = (a + h) >>> 0; b ^= Math.imul(h, 0xc2b2ae35) >>> 0; }
+    return `${set.size}:${a}:${b >>> 0}`;
+  };
+  let st = 0;
+  for (const v of stations) st = (Math.imul(st, 31) + v) >>> 0;
+  return [nNodes, mix(road), mix(rail), mix(hsr), mix(metro), stations.length, st].join('|');
+}
+
 export function kmBetween(x1, y1, x2, y2) {
-  const dx = (x2 - x1) * Math.cos(((y1 + y2) / 2) * Math.PI / 180);
-  return Math.hypot(dx, y2 - y1) * KM_PER_DEG;
+  const dx = (x2 - x1) * Math.cos(((y1 + y2) / 2) * Math.PI / 180), dy = y2 - y1;
+  return Math.sqrt(dx * dx + dy * dy) * KM_PER_DEG;   // Math.hypot보다 몇 배 빠르다 (시작·해마다 수백만 번 부른다)
 }
 
 export function incomeIndex(gni) {

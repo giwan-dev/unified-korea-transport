@@ -58,10 +58,22 @@ let wholeRoute = false;
 let lastDone = [];           // 지난번 해 넘김에 완공된 사업 (지자체 실적 계산용)    // 개량을 같은 이름 노선 전체에 적용
 
 
+/** 로딩 단계별 시각 (ms, 페이지 시작부터). 콘솔에서 ukt.perf로 본다 */
+const perf = [];
+const mark = (name) => perf.push([name, Math.round(performance.now())]);
+globalThis.__perf = perf;
+
 async function init() {
-  // 1) 데이터 내려받기 (큰 파일은 진행률을 보인다)
+  mark('init');
+  // 계산 워커(와 보조 워커)는 먼저 띄워 둔다: 모듈을 받고 읽는 동안 이쪽은 데이터를 받는다
+  worker = new Worker(new URL('./sim/worker.js', import.meta.url), { type: 'module' });
+  const ports = new URLSearchParams(location.search).has('serial') ? [] : helperPorts();   // ?serial: 한 워커로만
+  // 1) 데이터 내려받기 (큰 파일은 진행률을 보인다). 나중에 쓰는 것도 지금 함께 받기 시작한다
   loading.stage('data');
   const dl = new Progress((v) => loading.progress('data', v));
+  const sggP = dl.fetch('data/admin/sgg.geojson', 'json');
+  const tourismP = fetch('data/tourism.json').then((r) => r.json()).catch(() => null);
+  const baselineP = loadBaseline();
   const [z, nmeta, nbin, g, meta, world] = await Promise.all([
     dl.fetch('data/zones.json', 'json'),
     dl.fetch('data/network.meta.json', 'json'),
@@ -70,12 +82,16 @@ async function init() {
     fetch('data/meta.json').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     dl.fetch('data/air_sea.json', 'json'),
   ]);
+  mark('data fetched');
   zoneProps = z; base = decodeNetwork(nmeta, nbin); grid = new Float32Array(g);
+  mark('network decoded');
   // 국외 거점·국경 연결·여객선 항로·공항
   extendWorld(base, zoneProps, world);
   urbanLanes(base, grid);
   // 존 경계는 배경지도와 같은 시군구 도형을 쓴다
-  zonesFC = await dl.fetch('data/admin/sgg.geojson', 'json');
+  mark('world+lanes');
+  zonesFC = await sggP;
+  mark('sgg fetched');
   // 지명은 새 역·IC 이름을 지을 때만 필요하므로 첫 화면 뒤에 받는다
   const placesReady = fetch('data/places.json').then((r) => r.json()).then((p) => { places = p; });
   fetch('data/base/world.geojson').then((r) => r.json()).then((w) => { isForeign = makeForeignTest(w); }).catch(() => {});
@@ -104,8 +120,11 @@ async function init() {
     for (const z of zoneProps) { if (z.ext) continue; const d = (z.cx - x) ** 2 + (z.cy - y) ** 2; if (d < bd) { bd = d; best = z; } }
     return `${best ? best.name : ''} ${CLASS_LABEL[l.cls] || ''} 공사`.trim();
   });
-  assignTourism(await fetch('data/tourism.json').then((r) => r.json()).catch(() => null));
-  const baseline = await loadBaseline(meta);
+  mark('game state');
+  assignTourism(await tourismP);
+  const bl = await baselineP;
+  const baseline = bl && meta && bl.json.meta?.stamp === meta.stamp ? bl : null;   // 데이터 버전이 맞을 때만
+  mark('baseline fetched');
   // 저장된 게임의 그해 계산 상태 (같은 해·같은 데이터일 때만)
   const saved = state.snapshot ? await loadSim() : null;
   const savedOk = saved && saved.year === state.year && saved.stamp === meta?.stamp ? saved : null;
@@ -115,28 +134,32 @@ async function init() {
 
   // 2) 시뮬레이션: 지도가 뜨는 동안 먼저 시작한다
   loading.stage('sim');
-  worker = new Worker(new URL('./sim/worker.js', import.meta.url), { type: 'module' });
   worker.onmessage = (ev) => {
     if (ev.data.type === 'result') {
+      if (!result) { for (const [n, t] of ev.data.perf || []) perf.push([`worker: ${n}`, t]); mark('worker result'); }
       // 계산은 끝났고 지도만 기다리는 중이면 그렇게 보여 준다
       loading.done('sim');
       mapReady.then(() => onWorker(ev));
     } else onWorker(ev);
   };
-  // 해마다 도는 통행배정을 나눠 맡을 보조 워커 (계산 워커와 포트로 바로 이어진다)
-  const ports = new URLSearchParams(location.search).has('serial') ? [] : helperPorts();   // ?serial: 한 워커로만
+  // 해마다 도는 통행배정을 나눠 맡을 보조 워커(ports)는 계산 워커와 포트로 바로 이어진다
   worker.postMessage({
     type: 'init', zones: zoneProps, grid: grid.buffer.slice(0), net: effectiveNetwork(base, state),
     ctx: ctx(), snapshot: state.snapshot, baseline, saved: savedOk, ports,
   }, [...(baseline ? [baseline.bin] : []), ...(savedOk ? [savedOk.bin] : []), ...ports]);
   dataStamp = meta?.stamp;
+  mark('worker posted');
 
   // 3) 지도
   loading.stage('map');
   const mapReady = createMap('map').then((m) => {
     window.__map = m;
     map = m;
-    addLayers(map, zonesFC, linksFC(), { type: 'FeatureCollection', features: [] });
+    mark('map created');
+    const lfc = linksFC();
+    mark('linksFC');
+    addLayers(map, zonesFC, lfc, { type: 'FeatureCollection', features: [] });
+    mark('layers added');
     setNameResolver((level, id, original) => placeName(state, level, id, original));
     refreshNames(map);
     subsReady.then(() => map.getSource('subs').setData(subsFC));
@@ -145,11 +168,12 @@ async function init() {
     bindMap();
     bindUI();
     renderAll();
+    mark('first render');
     loading.done('map');
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { map, base, select, selectBox, renderAll, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { perf, map, base, select, selectBox, renderAll, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 /** 관광지를 가장 가까운 존(국외는 같은 이름의 거점)에 하루 방문객으로 붙인다 */
@@ -176,14 +200,14 @@ function assignTourism(t) {
   }
 }
 
-/** 미리 계산한 기준 연도 (데이터 버전이 맞을 때만) */
-async function loadBaseline(meta) {
-  if (!meta) return null;
+/** 미리 계산한 기준 연도 (두 파일을 함께 받는다. 데이터 버전 확인은 부르는 쪽에서) */
+async function loadBaseline() {
   try {
-    const json = await fetch('data/baseline.json').then((r) => (r.ok ? r.json() : null));
-    if (!json || json.meta?.stamp !== meta.stamp) return null;
-    const bin = await fetch('data/baseline.bin').then((r) => r.arrayBuffer());
-    return { json, bin };
+    const [json, bin] = await Promise.all([
+      fetch('data/baseline.json').then((r) => (r.ok ? r.json() : null)),
+      fetch('data/baseline.bin').then((r) => (r.ok ? r.arrayBuffer() : null)),
+    ]);
+    return json && bin ? { json, bin } : null;
   } catch { return null; }
 }
 

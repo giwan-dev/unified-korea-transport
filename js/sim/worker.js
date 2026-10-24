@@ -52,8 +52,13 @@ function post(type, payload, transfer = []) {
   self.postMessage({ type, ...payload }, transfer);
 }
 
+/** 준비 단계별 시간 (ms): 첫 결과에 실어 보낸다 */
+const wperf = [];
+const wmark = (name) => wperf.push([name, Math.round(performance.now())]);
+
 function results(totals, { withState = true } = {}) {
   lastTotals = totals;
+  wmark('results start');
   const links = model.linkResults();
   const zones = model.zoneResults();
   const stations = model.stationResults();
@@ -61,8 +66,9 @@ function results(totals, { withState = true } = {}) {
   const air = model.airResults();
   // 다시 열 때 바로 이어 시작할 수 있도록 계산 상태도 함께 넘긴다 (IndexedDB에 저장)
   const sim = withState ? model.exportBaseline(totals, null) : null;
+  wmark('results built');
   post('result', {
-    links, zones, stations, subs, air, totals, summary: model.summary(), snapshot: model.snapshot(),
+    perf: wperf.splice(0), links, zones, stations, subs, air, totals, summary: model.summary(), snapshot: model.snapshot(),
     sim: sim && { sizes: sim.json.sizes, bin: sim.bin },
   }, [links.vol.buffer, links.vc.buffer, links.speed.buffer, ...(sim ? [sim.bin] : [])]);
 }
@@ -86,15 +92,18 @@ self.onmessage = (ev) => { queue = queue.then(() => handle(ev.data)); };
 async function handle(msg) {
   try {
     if (msg.type === 'init') {
+      wmark('init received');
       post('progress', { label: '시뮬레이션 준비 중', value: 0 });
       model = new Model(msg.zones, new Float32Array(msg.grid));
+      wmark('model built');
       model.setNetwork(msg.net);
+      wmark('network set');
       lastNet = msg.net;
       inputs = { zones: msg.zones, grid: msg.grid, ports: msg.ports };
       const bl = msg.baseline;
       if (!msg.snapshot) {
         // 새 게임: 미리 계산한 기준 연도가 있으면 그대로 쓴다
-        if (bl && model.importBaseline(bl.json, bl.bin)) results(bl.json.totals);
+        if (bl && model.importBaseline(bl.json, bl.bin)) { wmark('baseline imported'); results(bl.json.totals); }
         else {
           // 미리 계산한 기준 연도가 없거나 망 크기가 다르면 처음부터 보정한다 (몇 분 걸린다)
           post('progress', { label: `기준 연도 처음부터 계산 중${bl ? ` (기준선 크기 다름: 링크 ${bl.json.sizes.L}/${model.volume.length}, 역 ${bl.json.sizes.NS}/${model.boardings.length}, 항공 ${bl.json.sizes.AA}/${model.airOD.length})` : ''}`, value: 0 });

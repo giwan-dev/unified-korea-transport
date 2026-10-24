@@ -125,7 +125,46 @@ export function lineStations({ links, nodes }, stationSet, name, mode = 1) {
 }
 
 /** 철도 최단경로 (주행시간 기준) — 정차역 사이 실제 선로 구간. 제 노선(line)을 따라가고, 다른 노선은 끊긴 곳을 이을 때만 쓴다 */
-export function railPath(links, from, to, line, mode = 1) {
+export function railPath(links, from, to, line, mode = 1, adj = railAdjacency(links, line, mode)) {
+  const dist = new Map([[from, 0]]), prevLink = new Map(), prevNode = new Map();
+  // 이진 힙 (예전에는 배열을 다 훑어 최소를 찾아 노선망이 커지자 계통 하나 짜는 데 수백 ms씩 걸렸다)
+  const heap = [[0, from]];
+  const push = (e) => {
+    heap.push(e);
+    for (let i = heap.length - 1; i > 0;) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; }
+  };
+  const pop = () => {
+    const top = heap[0], last = heap.pop();
+    if (heap.length) {
+      heap[0] = last;
+      for (let i = 0; ;) {
+        const l = 2 * i + 1, r = l + 1;
+        let m = i;
+        if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+        if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+        if (m === i) break;
+        [heap[m], heap[i]] = [heap[i], heap[m]]; i = m;
+      }
+    }
+    return top;
+  };
+  while (heap.length) {
+    const [d, u] = pop();
+    if (u === to) break;
+    if (d > dist.get(u)) continue;
+    for (const [v, t, i] of adj.get(u) || []) {
+      const nd = d + t;
+      if (nd < (dist.get(v) ?? Infinity)) { dist.set(v, nd); prevLink.set(v, i); prevNode.set(v, u); push([nd, v]); }
+    }
+  }
+  if (!dist.has(to)) return null;
+  const via = [];
+  for (let v = to; v !== from; v = prevNode.get(v)) via.push(prevLink.get(v));
+  return via.reverse();
+}
+
+/** railPath의 이웃 목록 (같은 망·노선으로 여러 번 찾을 때 한 번만 만들어 넘긴다) */
+export function railAdjacency(links, line, mode = 1) {
   const adj = new Map();
   links.forEach((l, i) => {
     if (l.mode !== mode || !l.active || l.via || l.ext) return;
@@ -138,23 +177,7 @@ export function railPath(links, from, to, line, mode = 1) {
       adj.get(u).push([v, t, i]);
     }
   });
-  const dist = new Map([[from, 0]]), prevLink = new Map(), prevNode = new Map();
-  const open = [[0, from]];
-  while (open.length) {
-    let k = 0;
-    for (let j = 1; j < open.length; j++) if (open[j][0] < open[k][0]) k = j;
-    const [d, u] = open.splice(k, 1)[0];
-    if (u === to) break;
-    if (d > dist.get(u)) continue;
-    for (const [v, t, i] of adj.get(u) || []) {
-      const nd = d + t;
-      if (nd < (dist.get(v) ?? Infinity)) { dist.set(v, nd); prevLink.set(v, i); prevNode.set(v, u); open.push([nd, v]); }
-    }
-  }
-  if (!dist.has(to)) return null;
-  const via = [];
-  for (let v = to; v !== from; v = prevNode.get(v)) via.push(prevLink.get(v));
-  return via.reverse();
+  return adj;
 }
 
 /**
@@ -165,8 +188,9 @@ export function planService(links, stationSet, stops, kind, line, typeId = 'inte
   const cap = TRAIN_TYPES[typeId]?.maxKmh ?? 999;
   const segs = [];
   let km = 0, min = 0;
+  const adj = railAdjacency(links, line);
   for (let k = 0; k + 1 < stops.length; k++) {
-    const via = railPath(links, stops[k], stops[k + 1], line);
+    const via = railPath(links, stops[k], stops[k + 1], line, 1, adj);
     if (!via) return null;
     let skip = 0, node = stops[k];
     for (const i of via) {

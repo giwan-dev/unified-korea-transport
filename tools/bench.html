@@ -41,6 +41,42 @@
     wrap(Graph.prototype, 'shortestPaths', 'dijkstra');
     wrap(Graph.prototype, 'loadTree', 'loadTree');
 
+    // ?mode=setup: 계산 워커 준비(모델 만들기·망 설정·기준선 읽기) 부분별 시간
+    if (new URLSearchParams(location.search).get('mode') === 'setup') {
+      for (const m of ['initSubzones', 'setNetwork', 'buildAccess', 'buildTransit', 'buildAir', 'buildOriginGroups', 'importBaseline', 'computeAccess', 'linkResults', 'zoneResults', 'subResults', 'exportBaseline']) wrap(Model.prototype, m);
+      const t0 = performance.now();
+      const m = new Model(zones, new Float32Array(grid));
+      const t1 = performance.now();
+      m.setNetwork(effectiveNetwork(net, state));
+      const t2 = performance.now();
+      m.importBaseline(bjson, bbin);
+      m.linkResults(); m.zoneResults(); m.subResults(); m.exportBaseline({}, null);
+      const t3 = performance.now();
+      log(`모델 ${Math.round(t1 - t0)} · 망 ${Math.round(t2 - t1)} · 기준선·결과 ${Math.round(t3 - t2)}ms`);
+      // 후보 역 검증: 가지치기 없이 모든 후보를 잰 결과와 같은지
+      if (new URLSearchParams(location.search).has('check')) {
+        const { kmBetween, accessMinutes } = await import('../js/sim/model.js');
+        const K = m.subSt.length / m.S;
+        let diff = 0;
+        for (let sI = 0; sI < m.S; sI++) {
+          const full = [];
+          for (let st = 0; st < m.stationNode.length; st++) {
+            const [nx, ny] = m.net.nodes[m.stationNode[st]];
+            if (kmBetween(m.subX[sI], m.subY[sI], nx, ny) > 25) continue;
+            full.push([st, m.subMean(sI, (x, y) => accessMinutes(kmBetween(x, y, nx, ny)))]);
+          }
+          full.sort((p, q) => p[1] - q[1]);
+          for (let k = 0; k < K; k++) {
+            const want = full[k] ? full[k][0] : -1;
+            if (m.subSt[sI * K + k] !== want && !(full[k] && Math.abs(m.subStAcc[sI * K + k] - full[k][1]) < 1e-9)) diff++;
+          }
+        }
+        log(`후보 역 검증: 소구역 ${m.S}개 중 다른 칸 ${diff}개`);
+      }
+      log(Object.entries(T).sort((a, b) => b[1] - a[1]).map(([n, v]) => `${n} ${Math.round(v)}ms`).join(' · '));
+      document.title = '완료';
+      throw new Error('done');
+    }
     // ?mode=worker: 게임과 같은 워커 경로(보조 워커 병렬)로 한 해 넘기기 시간과 총계를 잰다
     if (new URLSearchParams(location.search).get('mode') === 'worker') {
       const worker = new Worker(new URL('../js/sim/worker.js', import.meta.url), { type: 'module' });
