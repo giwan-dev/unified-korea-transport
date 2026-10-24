@@ -5,7 +5,9 @@ network.bin (little endian), 열 단위 배열을 차례로 이어 붙인다:
   링크      a Int32, b Int32, len Float32, speed Uint16, name Uint16, colour Uint16,
             mode Uint8, cls Uint8, lanes Uint8, tracks Uint8, paved Uint8, kp Uint8, power Uint8,
             open Uint16 (공사 중 노선의 개통 연도, 0 = 운영 중)
-  도형      링크별 꼭짓점 수 Uint32 × L, 꼭짓점 Int32 [경도×1e5, 위도×1e5] × V
+  도형      링크별 꼭짓점 수 Uint32 × L, 꼭짓점 바이트열 (verts: "delta"):
+            [경도×1e5, 위도×1e5] 정수를 앞 꼭짓점과의 차이로, 값마다 zigzag 가변 길이 정수(7비트씩).
+            값 v는 (zigzag(v) << 1)로 쓰고, 여러 선 사이 구분자는 1 (Int32 그대로 쓸 때의 절반 이하 크기)
 network.meta.json: 개수, 이름·색 표, 등급·전력 표, 역·IC 목록
 """
 
@@ -47,7 +49,8 @@ def write(net, bin_path, meta_path):
     counts = np.array([len(l["geom"]) // 2 for l in links], "<u4")
     # 여러 선으로 이뤄진 도형은 NaN 구분자를 INT32_MAX로 저장한다
     raw = np.concatenate([np.array(l["geom"], dtype=np.float64) for l in links]) * SCALE
-    verts = np.where(np.isnan(raw), 2147483647, np.round(raw)).astype("<i4")
+    nverts = len(raw) // 2
+    verts = encode_verts(raw)
 
     parts = [nodes, a, b, length, speed, name, colour, mode, cls, lanes, tracks, paved, kp, power, opening, counts, verts]
     with open(bin_path, "wb") as f:
@@ -56,9 +59,33 @@ def write(net, bin_path, meta_path):
             pad = (-f.tell()) % 4   # 다음 배열이 4바이트 경계에서 시작하도록
             f.write(b"\0" * pad)
     meta = {
-        "nodes": len(net["nodes"]), "links": L, "verts": int(len(verts) // 2), "scale": SCALE, "hasOpen": True,
+        "nodes": len(net["nodes"]), "links": L, "verts": int(nverts), "vertBytes": int(len(verts)), "vertEncoding": "delta",
+        "scale": SCALE, "hasOpen": True,
         "names": list(names), "colours": list(colours), "classes": CLASSES, "powers": POWERS,
         "stations": net["stations"], "metro_stations": net.get("metro_stations", []), "junctions": net["junctions"],
     }
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, separators=(",", ":"))
+
+
+def encode_verts(raw):
+    """꼭짓점 좌표(×SCALE, NaN = 구분자)를 앞 값과의 차이로 zigzag 가변 길이 정수 바이트열로"""
+    out = bytearray()
+    prev = [0, 0]
+    for k, v in enumerate(raw.tolist()):
+        if v != v:
+            out.append(1)   # 구분자 (경도·위도 자리 모두)
+            continue
+        q = int(round(v))
+        d = q - prev[k % 2]
+        prev[k % 2] = q
+        z = ((d << 1) ^ (d >> 63)) << 1
+        while True:
+            b = z & 0x7F
+            z >>= 7
+            if z:
+                out.append(b | 0x80)
+            else:
+                out.append(b)
+                break
+    return np.frombuffer(bytes(out), dtype="u1")

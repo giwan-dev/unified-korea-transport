@@ -18,7 +18,7 @@ export function decodeNetwork(meta, buf) {
   const paved = take(Uint8Array, L), kp = take(Uint8Array, L), power = take(Uint8Array, L);
   const open = meta.hasOpen ? take(Uint16Array, L) : null;
   const counts = take(Uint32Array, L);
-  const verts = take(Int32Array, meta.verts * 2);
+  const verts = meta.vertEncoding === 'delta' ? decodeVerts(take(Uint8Array, meta.vertBytes), meta.verts * 2) : take(Int32Array, meta.verts * 2);
 
   const nodes = new Array(N);
   for (let i = 0; i < N; i++) nodes[i] = [nodeXY[2 * i] / s, nodeXY[2 * i + 1] / s];
@@ -42,6 +42,23 @@ export function decodeNetwork(meta, buf) {
     links[i] = l;
   }
   return { nodes, links, stations: meta.stations, metro_stations: meta.metro_stations, junctions: meta.junctions };
+}
+
+/** pipeline/netpack.py encode_verts의 반대: 차이 zigzag 가변 길이 정수 → Int32 (구분자는 INT32_MAX) */
+function decodeVerts(bytes, n) {
+  const out = new Int32Array(n);
+  const prev = [0, 0];
+  let p = 0;
+  for (let k = 0; k < n; k++) {
+    let z = 0, shift = 0, b;
+    do { b = bytes[p++]; z += (b & 0x7f) * 2 ** shift; shift += 7; } while (b & 0x80);
+    if (z === 1) { out[k] = 2147483647; continue; }
+    z /= 2;
+    const d = z % 2 ? -(z + 1) / 2 : z / 2;
+    prev[k % 2] += d;
+    out[k] = prev[k % 2];
+  }
+  return out;
 }
 
 /** 메타와 이진 파일을 받아 네트워크를 만든다 */
