@@ -444,13 +444,6 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     paint: { 'text-color': '#1d232b', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 },
   });
 
-  // 국외 거점 도시 위에 나라 국기
-  addFlagImages(map);
-  map.addLayer({
-    id: 'point-flags', type: 'symbol', source: 'points', filter: ['has', 'country'],
-    layout: { 'icon-image': ['concat', 'flag-', ['get', 'country']], 'icon-anchor': 'bottom', 'icon-offset': [0, -7], 'icon-allow-overlap': true },
-  });
-
   // 항공: 운항하는 모든 노선(호, 굵기 = 하루 여객)과 공항(원 크기 = 하루 여객). 이용이 많은 노선을 위에
   map.addSource('airroutes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({
@@ -489,30 +482,6 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     paint: { 'line-color': '#1f5fbf', 'line-width': 3, 'line-dasharray': [1.5, 1] } });
   map.addLayer({ id: 'draft-pts', type: 'circle', source: 'draft', filter: ['==', ['geometry-type'], 'Point'],
     paint: { 'circle-radius': 5, 'circle-color': '#1f5fbf', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
-}
-
-/** 국기 그림(24×16)을 지도 이미지로 넣는다: 중국·러시아·일본·대만(중화민국) */
-function addFlagImages(map) {
-  const W = 24, H = 16;
-  const draw = {
-    JP: (g) => { g.fillStyle = '#fff'; g.fillRect(0, 0, W, H); g.fillStyle = '#bc002d'; g.beginPath(); g.arc(W / 2, H / 2, 4.8, 0, 7); g.fill(); },
-    CN: (g) => { g.fillStyle = '#de2910'; g.fillRect(0, 0, W, H); star(g, 5, 5, 3.2, '#ffde00'); for (const [x, y] of [[10, 2], [12, 4], [12, 7], [10, 9]]) star(g, x, y, 1, '#ffde00'); },
-    RU: (g) => { [['#fff', 0], ['#0039a6', 1], ['#d52b1e', 2]].forEach(([c, i]) => { g.fillStyle = c; g.fillRect(0, (i * H) / 3, W, H / 3 + 0.5); }); },
-    TW: (g) => { g.fillStyle = '#fe0000'; g.fillRect(0, 0, W, H); g.fillStyle = '#000095'; g.fillRect(0, 0, W / 2, H / 2); g.fillStyle = '#fff'; g.beginPath(); g.arc(W / 4, H / 4, 2.2, 0, 7); g.fill(); },
-  };
-  function star(g, cx, cy, r, color) {
-    g.fillStyle = color; g.beginPath();
-    for (let k = 0; k < 10; k++) { const a = -Math.PI / 2 + (k * Math.PI) / 5, rr = k % 2 ? r * 0.45 : r; g.lineTo(cx + rr * Math.cos(a), cy + rr * Math.sin(a)); }
-    g.fill();
-  }
-  for (const [code, fn] of Object.entries(draw)) {
-    if (map.hasImage(`flag-${code}`)) continue;
-    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
-    const g = cv.getContext('2d');
-    fn(g);
-    g.strokeStyle = 'rgba(0,0,0,0.35)'; g.lineWidth = 1; g.strokeRect(0.5, 0.5, W - 1, H - 1);
-    map.addImage(`flag-${code}`, g.getImageData(0, 0, W, H));
-  }
 }
 
 export function colorFor(metric, v) {

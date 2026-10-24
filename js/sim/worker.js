@@ -4,6 +4,7 @@ import { P } from './params.js';
 
 let model = null;
 let lastNet = null, lastTotals = null;   // 미리보기 뒤 되돌릴 지금 상태
+let beforeCache = null;                  // 미리보기 대조군(지금 그대로)은 같은 해·같은 기간이면 다시 쓴다
 
 function post(type, payload, transfer = []) {
   self.postMessage({ type, ...payload }, transfer);
@@ -75,18 +76,31 @@ self.onmessage = (ev) => {
     } else if (msg.type === 'preview') {
       // 착공 전 효과 미리보기: 지금 상태를 저장해 두고, 지금 네트워크(대조)와 다 지은 네트워크로 같은 방식의 통행배정을 각각 해 본 뒤 되돌린다.
       // 새 노선이 제 몫을 받도록 지난해 교통량과 반씩 섞는다. 두 결과의 차이가 사업 효과다
+      // years > 0이면 그만큼 읍면동 인구가 접근이 좋은 곳으로 옮겨 간 뒤를 견준다 (양쪽 모두, 새 역 주변 인구 증가 반영)
+      const years = msg.years || 0;
       const saved = model.exportBaseline(lastTotals, null);
-      const run = (net, label) => {
+      const run = (net, label, extraIt = 0) => {
         model.setNetwork(net);
-        const totals = model.assign(msg.ctx.integration, progress(label), true, 1);
+        const keep = P.msaIterationsWarm;
+        P.msaIterationsWarm = keep + extraIt;   // 완공 뒤는 새 노선 이용이 자리 잡도록 반복을 더 돈다
+        let totals;
+        try {
+          totals = model.assign(msg.ctx.integration, progress(label), true, 1);
+          if (years) {
+            for (let y = 0; y < years; y++) model.relocateWithinZones();
+            totals = model.assign(msg.ctx.integration, progress(`${label} · ${years}년 뒤`), true);
+          }
+        } finally { P.msaIterationsWarm = keep; }
         const r = model.linkResults();
         const out = { totals, vol: r.vol, vc: r.vc, speed: r.speed, svcVol: r.svcVol, odT: model.odT.slice(), odTime: model.odTime.slice(), airIds: model.airports.map((a) => a.id), airPax: Float64Array.from(model.airPax) };
         model.setNetwork(lastNet);
         model.importBaseline(saved.json, saved.bin);
         return out;
       };
-      const before = run(lastNet, '효과 미리보기 (지금)');
-      const after = run(msg.net, '효과 미리보기 (완공 뒤)');
+      const cached = beforeCache && beforeCache.net === lastNet && beforeCache.years === years;
+      const before = cached ? beforeCache.out : run(lastNet, '효과 미리보기 (지금)', 1);
+      beforeCache = { net: lastNet, years, out: before };
+      const after = run(msg.net, '효과 미리보기 (완공 뒤)', 1);
       // 이용자 편익 (소비자 잉여의 반분법): OD마다 (전 통행 + 후 통행) / 2 × 시간 비용 감소 (분/일)
       let timeMin = 0;
       for (let k = 0; k < before.odT.length; k++) {
@@ -95,8 +109,8 @@ self.onmessage = (ev) => {
         timeMin += 0.5 * (before.odT[k] + after.odT[k]) * (tb - ta);
       }
       const benefit = { timeMin, dVkt: (after.totals.vkt || 0) - (before.totals.vkt || 0) };
-      delete before.odT; delete before.odTime; delete after.odT; delete after.odTime;
-      post('preview', { id: msg.id, before, after, benefit });
+      const strip = ({ odT, odTime, ...rest }) => rest;
+      post('preview', { id: msg.id, before: strip(before), after: strip(after), benefit, years });
     } else if (msg.type === 'route') {
       post('route', { route: model.routeQuery(msg.from, msg.to) });
     } else if (msg.type === 'baseline') {

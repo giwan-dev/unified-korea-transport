@@ -1422,6 +1422,8 @@ function renderBuild() {
     <div class="name-row" style="margin-bottom:4px"><input type="text" id="rec-text" placeholder="예: 평양에 도시철도 3호선을 짓고 싶어, 노선을 추천해줘" style="flex:1">
       <button class="small primary" id="rec-go">노선 추천</button></div>
     <p class="hint" id="rec-msg">${esc(recMsg)}</p>
+    <div class="name-row"><span class="kind">미리보기</span><select id="prev-years">
+      <option value="0" ${previewYears ? '' : 'selected'}>첫해 (빠름)</option><option value="5" ${previewYears ? 'selected' : ''}>5년 뒤 (읍면동 인구 이동 반영, 느림)</option></select></div>
     <p class="hint">기존 도로·철도를 개량하려면 지도에서 구간을 누르세요. <b>Shift를 누른 채 끌면</b> 여러 구간을 한꺼번에 골라 개량할 수 있습니다. 새 노선을 놓으려면 아래에서 종류를 고른 뒤 지도를 차례로 누르세요.</p>`;
   if (draft) {
     if (draft.type === 'airport') {
@@ -1478,6 +1480,8 @@ function renderBuild() {
   el.querySelectorAll('[data-plan]').forEach((b) => { b.onclick = () => openPlan(b.dataset.plan); });
   el.querySelectorAll('.svc-pick-b').forEach((b) => { b.onclick = startServicePick; });
   el.querySelectorAll('[data-padd]').forEach((b) => { b.onclick = () => startPointAdd(b.dataset.padd); });
+  const py = el.querySelector('#prev-years');
+  if (py) py.onchange = () => { previewYears = +py.value; };
   const recGo = () => recommendRoute(el.querySelector('#rec-text').value);
   el.querySelector('#rec-go')?.addEventListener('click', recGo);
   el.querySelector('#rec-text')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.stopPropagation(); recGo(); } });
@@ -2457,7 +2461,7 @@ function railStatsHTML() {
     const e = econ[op] || { rev: 0, cost: 0, km: 0 }, o = r.ops[op];
     const ratio = e.rev > 0 ? (e.cost / e.rev) * 100 : Infinity;
     const logo = OPERATORS[op].logo && !(op === 'merged' && r.name && r.name !== OPERATORS.merged.name)
-      ? `<img src="${OPERATORS[op].logo}" alt="${esc(opInfo(state, op).name)}" height="30" style="display:block">` : opBadge(state, op);
+      ? `<img src="${OPERATORS[op].logo}" alt="${esc(opInfo(state, op).name)}" height="18" style="display:block">` : opBadge(state, op);
     return `<tr><td>${logo}<span class="m">${Math.round(e.km).toLocaleString()}km</span></td><td>${formatWon(e.rev / 1e8)}</td><td>${formatWon(e.cost / 1e8)}</td>
       <td class="${e.rev < e.cost ? 'neg' : ''}">${formatWon((e.rev - e.cost) / 1e8)}</td><td class="${ratio > 100 ? 'neg' : ''}">${fmtRatio(ratio)}</td><td>${formatWon(o.cash)}</td></tr>`;
   }).join('');
@@ -2497,7 +2501,7 @@ function intlTrainsHTML() {
     const homeOp = operatorOf(state, { mode: 1, kp: isKP(nodeCoord(home)[1], nodeCoord(home)[0]) ? 1 : 0 });
     rows.push(`<tr><td>${esc(nn.get(home)?.name || (l.name || '').split('–')[0])} – ${esc(nn.get(away)?.name || '')}<div class="m">${esc(l.name || '')}</div></td>
       <td>${esc(brand)}<div class="m">하루 약 ${trains}회</div></td><td>${Math.round(pax).toLocaleString()}명</td>
-      <td>${opBadge(state, homeOp)} ${FOREIGN_OPERATORS[country] ? `<img src="${FOREIGN_OPERATORS[country].logo}" alt="${FOREIGN_OPERATORS[country].name}" height="22" style="vertical-align:middle">` : foreignOpBadge(country)}</td></tr>`);
+      <td>${opBadge(state, homeOp)} ${FOREIGN_OPERATORS[country] ? `<img src="${FOREIGN_OPERATORS[country].logo}" alt="${FOREIGN_OPERATORS[country].name}" height="14" style="vertical-align:middle">` : foreignOpBadge(country)}</td></tr>`);
   });
   if (!rows.length) return '';
   return `<h3 style="margin-top:16px">국제 열차 운행 현황</h3>
@@ -3493,6 +3497,7 @@ function previewPointAdd() {
 // ------------------------------------------------------------ 착공 전 효과 미리보기
 
 let previewSeq = 0, previewWait = null;
+let previewYears = 0;   // 0: 첫해, 5: 5년 뒤 (읍면동 인구 이동까지, 느림)
 
 /**
  * 사업을 다 지었다고 치고 한 해 통행배정을 돌려 본다. mutate(복사한 상태)는 사업을 반영하고 바뀐 구간 id 목록을 돌려준다.
@@ -3507,9 +3512,9 @@ function runPreview(title, mutate, extra = {}) {
   const net = effectiveNetwork(base, clone);
   const id = ++previewSeq;
   previewWait = { id, title, touched, extra, clone };
-  showPreviewBox(`<b>${esc(title)}</b><p class="hint">효과를 계산하는 중입니다 (지금 그대로와 다 지은 뒤를 견주느라 약 40초)…</p>`);
+  showPreviewBox(`<b>${esc(title)}</b><p class="hint">효과를 계산하는 중입니다 (지금 그대로와 다 지은 뒤를 견주느라 ${previewYears ? '1~3분' : '약 30~60초'}, 같은 해 두 번째부터는 더 빠릅니다)…</p>`);
   setBusy(true, '효과 미리보기', 0);
-  worker.postMessage({ type: 'preview', id, net, ctx: ctx() });
+  worker.postMessage({ type: 'preview', id, net, ctx: ctx(), years: previewYears });
 }
 
 /** 다 지은 상태로 바꾼다: 신설 사업이면 새 구간을 개통으로, 개량이면 속성을 바로 적용 */
@@ -3558,7 +3563,7 @@ function onPreview(m) {
   const vhm = vht(A, clone, nA) - vht(B, state, nB);
   const res = { newUse, dRail: d('rail'), dTrips: d('trips'), dVhm: vhm, congB: congKm(B.vc, state, nB), congA: congKm(A.vc, clone, nA) };
   lastPreview = { title, ...res, touched, extra };
-  showPreviewBox(`<b>${esc(title)}</b> <span class="m">다 지었을 때 (한 해 통행배정 기준)</span>
+  showPreviewBox(`<b>${esc(title)}</b> <span class="m">다 지었을 때 (${m.years ? `${m.years}년 뒤: 읍면동 인구 이동 반영` : '첫해 통행배정 기준'})</span>
     <table class="kv">
       ${row('새·개량 구간 최대 이용', `${Math.round(newUse).toLocaleString()} ${touched.some((i) => linkAt(base, clone, i).mode === 0) ? 'PCU' : '명'}/일`)}
       ${row('하루 도로 차량 통행 시간', `${sign(vhm, (v) => `${Math.round(v).toLocaleString()}대·시간`)}`)}

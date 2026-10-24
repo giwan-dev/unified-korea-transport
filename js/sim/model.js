@@ -19,6 +19,8 @@ export class Model {
     this.isKP = Uint8Array.from(zones, (z) => (z.country === 'KP' ? 1 : 0));
     // 국외 거점(중국·러시아·일본): 인구·소득은 고정, 인구 이동·HDI 계산에서 뺀다
     this.isExt = Uint8Array.from(zones, (z) => (z.ext ? 1 : 0));
+    // 국외 거점의 한민족 인구 (조선족·고려인·재일동포): 말과 생활권이 같아 국외 도시 축소(extMassFactor)를 덜 받는다
+    this.korean = Float64Array.from(zones, (z) => (z.ext ? Math.min(z.korean || 0, z.pop) : 0));
     this.extCountry = zones.map((z) => (z.ext ? z.country : ''));
     this.extIncome = Float64Array.from(zones, (z) => z.income || 0);
     // 관광 목적지: 하루 방문객(명). 북측 관광지는 통합도만큼 열린다
@@ -368,10 +370,14 @@ export class Model {
     const prevWait = new Map();
     if (this.stationWait && this.stationNodeOld) this.stationNodeOld.forEach((nd, i) => prevWait.set(nd, this.stationWait[i]));
     this.stationWait = new Float64Array(NS);
+    // 새로 문을 연 역: 첫해에는 아직 이용객이 적어도 개통에 맞춰 시간표를 짠다고 보고 기다림을 기본값 밑으로 둔다
+    // (그러지 않으면 이용객이 적다 → 기다림이 90분으로 → 이용객이 더 준다는 고리 탓에 새 역 수요가 크게 낮게 잡힌다)
+    this.stationFreshCap = new Float64Array(NS);
     stationNodes.forEach((nd, i) => {
       const kp = this.isKPPoint(nodes[nd][0], nodes[nd][1]);
       const base = hsrNodes.has(nd) ? P.railWaitMin.hsr : kp ? P.railWaitMin.kpConv : P.railWaitMin.conv;
       this.stationWait[i] = prevWait.get(nd) ?? base;
+      if (prevWait.size && !prevWait.has(nd)) this.stationFreshCap[i] = base;
     });
     this.stationNodeOld = Int32Array.from(stationNodes);
     this.stationHsr = Uint8Array.from(stationNodes, (nd) => (hsrNodes.has(nd) ? 1 : 0));
@@ -454,6 +460,7 @@ export class Model {
       const cap = this.stationKP[s] ? P.kpWaitMaxMin : P.waitMaxMin;
       let target = Math.min(Math.max(P.waitScale / Math.sqrt(this.boardings[s] + 1), P.waitMinMin), cap);
       if (this.svcTrains?.[s] > 0) target = Math.min(target, Math.max(3, P.serviceDayMin / (2 * this.svcTrains[s])));
+      if (this.stationFreshCap?.[s] > 0) target = Math.min(target, this.stationFreshCap[s]);
       this.stationWait[s] += (target - this.stationWait[s]) / (it + 1);
     }
   }
@@ -727,7 +734,8 @@ export class Model {
     const m = new Float64Array(this.Z);
     for (let i = 0; i < this.Z; i++) {
       const rel = this.income[i] > 0 ? this.income[i] / this.frontier : 1;
-      m[i] = this.pop[i] / 1e4 * rel ** P.propensityIncomeElasticity * (this.isExt[i] ? P.extMassFactor : 1);
+      const eff = this.isExt[i] ? (this.pop[i] - this.korean[i]) * P.extMassFactor + this.korean[i] * P.koreanDiasporaFactor : this.pop[i];
+      m[i] = eff / 1e4 * rel ** P.propensityIncomeElasticity;
     }
     return m;
   }

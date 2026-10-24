@@ -31,7 +31,7 @@ export function extendWorld(base, zoneProps, world) {
     const id = zoneProps.length;
     zoneProps.push({
       id, name: f.name, province: FOREIGN_PROVINCE[f.country], country: f.country, ext: 1,
-      pop: f.pop * 1e6, income: f.income, area: 1000, cx: f.lon, cy: f.lat, subs: [[f.lon, f.lat, 1, 1000]], sub0,
+      pop: f.pop * 1e6, korean: (f.korean || 0) * 1e6, income: f.income, area: 1000, cx: f.lon, cy: f.lat, subs: [[f.lon, f.lat, 1, 1000]], sub0,
     });
     sub0 += 1;
     cityNode[f.id] = base.nodes.length;
@@ -48,12 +48,22 @@ export function extendWorld(base, zoneProps, world) {
   };
   const link = (a, b, attrs, name, via) => {
     const p = path(a, b, via);
-    base.links.push({ a, b, len: Math.round(p.km * (via?.length ? 1.1 : 1.25) * 100) / 100, kp: 1, ext: 1, name, geom: p.geom, ...attrs });
+    // 경유점이 촘촘하면(OSM 경로를 따른 railVia·roadVia) 그 길이 그대로, 성기면 굽이만큼 늘린다
+    const f = !via?.length ? 1.25 : via.length > 5 ? 1.02 : 1.1;
+    base.links.push({ a, b, len: Math.round(p.km * f * 100) / 100, kp: 1, ext: 1, name, geom: p.geom, ...attrs });
   };
   for (const g of world.gateways) {
     const city = cityNode[g.to];
-    if (g.road) link(nearest(roadNodes, g.lon, g.lat), city, { mode: 0, cls: 'trunk', lanes: 4, speed: 80, paved: 1 }, `${g.name} 국경 도로`, g.via);
-    if (g.rail) link(nearest(railNodes, g.lon, g.lat), city, { mode: 1, cls: 'conv', tracks: 2, speed: 100, power: 'AC' }, `${g.name} 국경 철도`, g.via);
+    // 철도와 도로는 실제 노선을 따라 경유점이 다르다 (railVia·roadVia, 없으면 via)
+    if (g.road) link(nearest(roadNodes, g.lon, g.lat), city, { mode: 0, cls: 'trunk', lanes: 4, speed: 80, paved: 1 }, `${g.name} 국경 도로`, g.roadVia || g.via);
+    if (g.rail) link(nearest(railNodes, g.lon, g.lat), city, { mode: 1, cls: 'conv', tracks: 2, speed: 100, power: 'AC' }, `${g.name} 국경 철도`, g.railVia || g.via);
+  }
+  // 국외 도시끼리 잇는 철도·도로 (단둥–선양, 옌지–창춘 등): 국경을 넘은 통행이 국경 도시에서 끊기지 않고 더 먼 도시까지 간다
+  for (const c of world.corridors || []) {
+    const a = cityNode[c.from], b = cityNode[c.to];
+    if (a == null || b == null) continue;
+    if (c.road) link(a, b, { mode: 0, cls: 'motorway', lanes: 4, speed: c.roadSpeed || 100, paved: 1, kp: 0 }, `${c.name} 도로`, c.roadVia);
+    if (c.rail) link(a, b, { mode: 1, cls: c.hsr ? 'hsr' : 'conv', tracks: 2, speed: c.railSpeed || (c.hsr ? 250 : 100), power: 'AC', kp: 0 }, `${c.name} 철도`, c.railVia);
   }
   // 계산망에 도로가 없는 섬(울릉도·독도: 항로에 node 이름이 적힌 곳)은 항구 노드를 새로 둔다 (같은 이름이면 같은 노드)
   const ports = new Map();
@@ -76,7 +86,7 @@ export function extendWorld(base, zoneProps, world) {
     base.links.push({ a, b, len: Math.round(km * 100) / 100, mode: 0, cls: 'ferry', lanes: 2, speed, paved: 1, kp: 0, ext: typeof f.to === 'string' ? 1 : 0, name: `${f.name} 여객선`, geom: p.geom });
   }
   base.airports = world.airports.map((a) => ({ ...a, country: a.kp ? 'KP' : 'KR' }))
-    .concat(world.foreign.map((f) => ({ id: f.id, name: `${f.name} 공항`, lon: f.lon, lat: f.lat, cap: 60, intl: true, ext: 1, country: f.country })));
+    .concat(world.foreign.filter((f) => f.airport !== false).map((f) => ({ id: f.id, name: `${f.name} 공항`, lon: f.lon, lat: f.lat, cap: 60, intl: true, ext: 1, country: f.country })));
   return base;
 }
 
