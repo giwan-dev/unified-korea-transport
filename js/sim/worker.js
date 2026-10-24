@@ -97,10 +97,13 @@ self.onmessage = (ev) => {
         model.importBaseline(saved.json, saved.bin);
         return out;
       };
-      const cached = beforeCache && beforeCache.net === lastNet && beforeCache.years === years;
-      const before = cached ? beforeCache.out : run(lastNet, '효과 미리보기 (지금)', 1);
-      beforeCache = { net: lastNet, years, out: before };
-      const after = run(msg.net, '효과 미리보기 (완공 뒤)', 1);
+      // 반복을 더 돌린다: 새 노선은 첫 반복에 한꺼번에 몰렸다가 차츰 줄어드는데, 반복이 적으면 효과가 몇 배로 부풀려진다
+      // (조치원–청주 시험: 반복 +1회 철도 +4.3만, +3회 +2.7만, +6회 +1.0만 명/일)
+      const extra = msg.extraIt ?? 5;
+      const cached = beforeCache && beforeCache.net === lastNet && beforeCache.years === years && beforeCache.extra === extra;
+      const before = cached ? beforeCache.out : run(lastNet, '효과 미리보기 (지금)', extra);
+      beforeCache = { net: lastNet, years, extra, out: before };
+      const after = run(msg.net, '효과 미리보기 (완공 뒤)', extra);
       // 이용자 편익 (소비자 잉여의 반분법): OD마다 (전 통행 + 후 통행) / 2 × 시간 비용 감소 (분/일)
       let timeMin = 0;
       for (let k = 0; k < before.odT.length; k++) {

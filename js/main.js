@@ -188,6 +188,10 @@ function assignTourism(t) {
     const daily = (s.visitors * 1e6) / 365;
     const z = zoneProps[best];
     if (s.kp) z.tourKP = (z.tourKP || 0) + daily; else z.tour = (z.tour || 0) + daily;
+    // 관광지가 있는 읍면동 (관광 통행이 그 읍면동으로 간다)
+    let k = 0, bd = Infinity;
+    z.subs.forEach(([x, y], n) => { const d = (x - s.lon) ** 2 + (y - s.lat) ** 2; if (d < bd) { bd = d; k = n; } });
+    (z[s.kp ? 'tourSubsKP' : 'tourSubs'] ||= []).push([k, daily]);
     (z.sites ||= []).push(s.name);
   }
   for (const [name, v] of Object.entries(t.foreign || {})) {
@@ -2498,10 +2502,12 @@ function intlTrainsHTML() {
     const pax = vol[i] || 0;
     const brand = autoBrand(l.cls, null, country);
     const trains = Math.max(2, 2 * Math.round(pax / (2 * OPERATING.paxPerTrain[l.cls === 'hsr' ? 'hsr' : 'conv'] * OPERATING.loadFactor)));
-    const homeOp = operatorOf(state, { mode: 1, kp: isKP(nodeCoord(home)[1], nodeCoord(home)[0]) ? 1 : 0 });
+    // 국외 도시끼리 잇는 선(신칸센·CRH 등)은 상대국 운영사만
+    const both = fa && fb;
+    const homeOp = both ? null : operatorOf(state, { mode: 1, kp: isKP(nodeCoord(home)[1], nodeCoord(home)[0]) ? 1 : 0 });
     rows.push(`<tr><td>${esc(nn.get(home)?.name || (l.name || '').split('–')[0])} – ${esc(nn.get(away)?.name || '')}<div class="m">${esc(l.name || '')}</div></td>
       <td>${esc(brand)}<div class="m">하루 약 ${trains}회</div></td><td>${Math.round(pax).toLocaleString()}명</td>
-      <td>${opBadge(state, homeOp)} ${FOREIGN_OPERATORS[country] ? `<img src="${FOREIGN_OPERATORS[country].logo}" alt="${FOREIGN_OPERATORS[country].name}" height="14" style="vertical-align:middle">` : foreignOpBadge(country)}</td></tr>`);
+      <td>${homeOp ? opBadge(state, homeOp) : ''} ${FOREIGN_OPERATORS[country] ? `<img src="${FOREIGN_OPERATORS[country].logo}" alt="${FOREIGN_OPERATORS[country].name}" height="14" style="vertical-align:middle">` : foreignOpBadge(country)}</td></tr>`);
   });
   if (!rows.length) return '';
   return `<h3 style="margin-top:16px">국제 열차 운행 현황</h3>
@@ -3512,7 +3518,7 @@ function runPreview(title, mutate, extra = {}) {
   const net = effectiveNetwork(base, clone);
   const id = ++previewSeq;
   previewWait = { id, title, touched, extra, clone };
-  showPreviewBox(`<b>${esc(title)}</b><p class="hint">효과를 계산하는 중입니다 (지금 그대로와 다 지은 뒤를 견주느라 ${previewYears ? '1~3분' : '약 30~60초'}, 같은 해 두 번째부터는 더 빠릅니다)…</p>`);
+  showPreviewBox(`<b>${esc(title)}</b><p class="hint">효과를 계산하는 중입니다 (지금 그대로와 다 지은 뒤를 견주느라 ${previewYears ? '약 3~5분' : '약 2~3분'}, 같은 해 두 번째부터는 지금 그대로를 다시 써서 절반쯤)…</p>`);
   setBusy(true, '효과 미리보기', 0);
   worker.postMessage({ type: 'preview', id, net, ctx: ctx(), years: previewYears });
 }
@@ -3536,6 +3542,7 @@ function buildNow(clone, p) {
 
 function onPreview(m) {
   setBusy(false);
+  window.__lastPreview = { before: m.before?.totals, after: m.after?.totals, benefit: m.benefit, years: m.years };   // 콘솔 디버깅용
   if (!previewWait || m.id !== previewWait.id) return;
   const { title, touched, extra, clone } = previewWait;
   previewWait = null;

@@ -37,6 +37,9 @@
       zones.forEach((z, i) => { if (!z.ext) for (const [x, y] of z.subs) { const d = (x - s.lon) ** 2 + (y - s.lat) ** 2; if (d < bd) { bd = d; best = i; } } });
       const daily = (s.visitors * 1e6) / 365;
       if (s.kp) zones[best].tourKP = (zones[best].tourKP || 0) + daily; else zones[best].tour = (zones[best].tour || 0) + daily;
+      let k = 0, bd2 = Infinity;
+      zones[best].subs.forEach(([x, y], n) => { const d = (x - s.lon) ** 2 + (y - s.lat) ** 2; if (d < bd2) { bd2 = d; k = n; } });
+      (zones[best][s.kp ? 'tourSubsKP' : 'tourSubs'] ||= []).push([k, daily]);
     }
     for (const [name, v] of Object.entries(tour.foreign || {})) {
       const z = zones.find((x) => x.ext && x.name === name);

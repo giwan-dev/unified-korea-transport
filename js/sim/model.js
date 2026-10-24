@@ -31,6 +31,12 @@ export class Model {
     this.area = Float64Array.from(zones, (z) => Math.max(z.area, 1));
     this.pop = Float64Array.from(zones, (z) => z.pop);
     this.initSubzones(zones, grid);
+    // 관광지가 있는 읍면동 (하루 방문객): 관광 통행은 시군구 전체가 아니라 관광지 읍면동으로 간다
+    this.tourSub = new Float64Array(this.S); this.tourSubKP = new Float64Array(this.S);
+    zones.forEach((z, i) => {
+      for (const [k, v] of z.tourSubs || []) this.tourSub[this.zoneSub0[i] + k] += v;
+      for (const [k, v] of z.tourSubsKP || []) this.tourSubKP[this.zoneSub0[i] + k] += v;
+    });
     this.income = new Float64Array(Z);
     this.le = new Float64Array(Z);
     this.mys = new Float64Array(Z);
@@ -132,7 +138,9 @@ export class Model {
         // 열차 종류의 최고 속도가 선로 속도보다 낮으면 그만큼 느리다
         let t = 0;
         for (const v of l.via) t += this.freeTime[v] * Math.max(1, L[v].speed / (l.speedCap || 999));
-        this.freeTime[i] = Math.max(1, t - l.skip * P.railDwellMin);
+        // 모든 역에 서는 계통(광역 전철 등)은 밑 선로의 기본 열차와 시간이 똑같아 배정이 기본 열차로만 가므로,
+        // 시간표가 정해진 계통을 아주 조금 낫게 친다 (계통 이용객이 0으로 잡히지 않게)
+        this.freeTime[i] = Math.max(1, t - l.skip * P.railDwellMin) * 0.995;
         this.capacity[i] = l.trains * (l.seatCap || P.railPaxPerTrain[l.cls]);
         this.virtual.push(i);
         continue;
@@ -485,11 +493,12 @@ export class Model {
   railCost(i, j, D, pick) {
     const K = P.stationCandidates, NS = this.stationNode.length;
     const o0 = this.zoneSub0[i], on = this.zoneSubN[i], d0 = this.zoneSub0[j], dn = this.zoneSubN[j];
-    let total = 0;
+    let total = 0, wsum = 0;
+    const DW = this.destW || this.subW, p0 = pick.length;
     for (let o = o0; o < o0 + on; o++) {
       if (!(this.subW[o] > 0)) continue;
       for (let d = d0; d < d0 + dn; d++) {
-        if (!(this.subW[d] > 0)) continue;
+        if (!(DW[d] > 0)) continue;
         let best = Infinity, bs = -1, bt = -1;
         for (let a = 0; a < K; a++) {
           const s = this.subSt[o * K + a];
@@ -503,12 +512,17 @@ export class Model {
             if (c < best) { best = c; bs = s; bt = t; }
           }
         }
-        if (!isFinite(best)) return Infinity;
-        const w = this.subW[o] * this.subW[d];
-        total += w * best;
+        if (!isFinite(best)) {
+          if (this.subW[d] > 0) return Infinity;
+          continue;   // 사람이 살지 않는 관광지 읍면동에 역이 없으면 그 몫은 철도로 못 간다
+        }
+        const w = this.subW[o] * DW[d];
+        total += w * best; wsum += w;
         pick.push(bs, bt, w);
       }
     }
+    if (!(wsum > 0)) return Infinity;
+    if (wsum < 0.999) { for (let k = p0 + 2; k < pick.length; k += 3) pick[k] /= wsum; return total / wsum; }
     return total;
   }
 
@@ -538,6 +552,20 @@ export class Model {
     // 관광 통행: 목적지 쪽 질량에 관광 매력도를 더한다 (방문객 1명 ≈ 인구 tourismMass명)
     const tmass = new Float64Array(Z);
     for (let j = 0; j < Z; j++) tmass[j] = ((this.tour[j] + this.tourKP[j] * integration) * P.tourismMass) / 1e4;
+    // 도착 읍면동 비중: 인구 비중에 관광 몫만큼 관광지 읍면동을 섞는다 (관광지 옆에 역을 놓으면 관광 철도 수요가 생긴다)
+    const destW = this.destW = Float64Array.from(this.subW);
+    for (let j = 0; j < Z; j++) {
+      if (!(tmass[j] > 0)) continue;
+      const d0 = this.zoneSub0[j], dn = this.zoneSubN[j];
+      let site = 0;
+      for (let d = d0; d < d0 + dn; d++) site += this.tourSub[d] + (this.tourKP[j] > 0 ? this.tourSubKP[d] * integration : 0);
+      if (!(site > 0)) continue;
+      const tau = tmass[j] / (mass[j] + tmass[j]);
+      for (let d = d0; d < d0 + dn; d++) {
+        const sw = (this.tourSub[d] + (this.tourKP[j] > 0 ? this.tourSubKP[d] * integration : 0)) / site;
+        destW[d] = (1 - tau) * this.subW[d] + tau * sw;
+      }
+    }
     const iters = warm ? P.msaIterationsWarm : P.msaIterations;
     // 지난해 교통량을 앞선 반복 몇 번 분으로 친다 (한 번의 전량배정이 혼잡을 다시 한곳에 몰지 않도록 1/4씩 섞는다)
     // 새 노선이 열린 해(offsetOverride)에도 나머지 망은 평소대로 천천히 섞고, 지난해 이용이 없던 링크(새로 열린 구간)만
@@ -573,14 +601,14 @@ export class Model {
         for (let j = 0; j < Z; j++) {
           let c = 0, wsum = 0;
           for (let d = this.zoneSub0[j]; d < this.zoneSub0[j] + this.zoneSubN[j]; d++) {
-            if (!(this.subW[d] > 0)) continue;   // 인구 없는 소구역 (0 × 무한대 방지)
-            wsum += this.subW[d];
+            if (!(destW[d] > 0)) continue;   // 인구 없는 소구역 (0 × 무한대 방지)
+            wsum += destW[d];
             let best = Infinity;
             for (let k = d * R; k < d * R + R; k++) {
               if (this.subRoadNode[k] < 0) break;
               best = Math.min(best, rd[this.subRoadNode[k]] + this.subRoadAcc[k]);
             }
-            c += this.subW[d] * best;
+            c += destW[d] * best;
           }
           croad[j] = wsum > 0 ? c / wsum : Infinity;
         }
@@ -600,8 +628,8 @@ export class Model {
           let c = 0, wsum = 0;
           for (let d = this.zoneSub0[j]; d < this.zoneSub0[j] + this.zoneSubN[j]; d++) {
             egress[d] = -1;
-            if (!(this.subW[d] > 0)) continue;
-            wsum += this.subW[d];
+            if (!(destW[d] > 0)) continue;
+            wsum += destW[d];
             let best = Infinity, node = -1;
             for (let k = d * R; k < d * R + R; k++) {
               if (this.subRoadNode[k] < 0) break;
@@ -614,7 +642,7 @@ export class Model {
               if (v < best) { best = v; node = this.subMetro[k]; }
             }
             egress[d] = node;
-            c += this.subW[d] * best;
+            c += destW[d] * best;
           }
           ctr[j] = wsum > 0 ? c / wsum : Infinity;
         }
@@ -683,14 +711,14 @@ export class Model {
           }
           const pcu = tRoad / P.personsPerCar * (1 + P.freightPCUShare);
           for (let d = this.zoneSub0[j] * R; d < (this.zoneSub0[j] + this.zoneSubN[j]) * R; d++) {
-            if (this.subRoadNode[d] >= 0) nodeDemand[this.subRoadNode[d]] += pcu * this.subW[(d / R) | 0] * this.subRoadW[d];
+            if (this.subRoadNode[d] >= 0) nodeDemand[this.subRoadNode[d]] += pcu * destW[(d / R) | 0] * this.subRoadW[d];
           }
           if (tRail > 0) {
             for (let k = 0; k < pick.length; k += 3) stOD[pick[k] * NS + pick[k + 1]] += tRail * pick[k + 2];
           }
           if (tTr > 0) {
             for (let d = this.zoneSub0[j]; d < this.zoneSub0[j] + this.zoneSubN[j]; d++) {
-              if (egress[d] >= 0) tDemand[egress[d]] += tTr * this.subW[d];
+              if (egress[d] >= 0) tDemand[egress[d]] += tTr * destW[d];
             }
           }
         }
