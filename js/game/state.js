@@ -372,7 +372,7 @@ export function updateAirRoutes(state, air, name) {
     if (!r) continue;
     if (state.air.auto) r.freq = Math.max(1, Math.round(r.freq + 0.5 * (targetFreq(pax, air.seats) - r.freq)));
     r.low = pax < AIR.closePax ? (r.low || 0) + 1 : 0;
-    if (state.air.auto && r.origin !== 'manual' && r.low >= 2) {
+    if (state.air.auto && r.origin !== 'manual' && !r.keep && r.low >= 2) {
       delete routes[key];
       state.log.unshift(`${state.year}년 단항: ${name(r.a)}–${name(r.b)} (하루 ${Math.round(pax)}명)`);
     }
@@ -772,12 +772,14 @@ export function advanceBudgetYear(base, state) {
 }
 
 function completeProject(base, state, p) {
+  // 완공 때 붙는 이름 (역 신설·IC 신설)
+  for (const [n, nm] of Object.entries(p.newNames || {})) state.names[n] = nm;
   if (p.kind === 'service') {
     const s = (state.services || []).find((x) => x.id === p.service);
     if (s) s.built = true;
     return;
   }
-  if (p.kind === 'vehicles') return;
+  if (p.kind === 'vehicles' || p.kind === 'devel') return;   // 역세권 개발은 해 넘길 때 main이 정산한다 (settleDevels)
   if (p.kind === 'mega') { applyMega(base, state, p.mega); return; }
   if (p.kind === 'osm') { for (const i of p.links) state.osm.opened[i] = true; return; }   // 계통 차량 추가 구입 (편성 수는 고칠 때 이미 바뀌었다)
   if (p.kind === 'airRoute') {
@@ -876,7 +878,7 @@ export function defaultFix(link) {
  * - 오래 방치한 민원 (정체가 3년 넘게 이어진 노선)
  * - 최근 2년 완공한 사업 (이어받은 공사 제외), 예산 불용, 부채, 남북 HDI 개선
  */
-export function updateApproval(state, requests, summary, prevSummary, congestedKm) {
+export function updateApproval(state, requests, summary, prevSummary, congestedKm, extra = []) {
   const d = DIFFICULTY[state.difficulty];
   const why = [['기본', 55]];
   const cong0 = state.history[0]?.congestedKm || congestedKm || 1;
@@ -890,6 +892,8 @@ export function updateApproval(state, requests, summary, prevSummary, congestedK
   if (closedRecent) why.push([`최근 2년 폐선 ${closedRecent}개 노선`, -Math.min(8, closedRecent * CLOSE_APPROVAL)]);
   if (state.debt > 0) why.push(['부채', -(state.debt / d.borrowLimit) * 8]);
   if (prevSummary) why.push(['남북 HDI 개선', Math.max(-5, Math.min(8, (summary.KP.hdi - prevSummary.KP.hdi) * 300 + (summary.KR.hdi - prevSummary.KR.hdi) * 300))]);
+  // 그 밖의 요인 (읍면동 체감 교통 개선 등, main이 넘긴다)
+  for (const e of extra) if (e && Math.abs(e[1]) >= 0.05) why.push(e);
   const target = why.reduce((s0, [, v]) => s0 + v, 0);
   state.approvalWhy = why.map(([k, v]) => [k, Math.round(v * 10) / 10]);
   state.approvalTarget = target;

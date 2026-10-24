@@ -1,8 +1,10 @@
 // 시뮬레이션은 메인 스레드를 막지 않도록 워커에서 돈다.
 import { Model } from './model.js';
+import { P } from './params.js';
 
 let model = null;
 let lastNet = null, lastTotals = null;   // 미리보기 뒤 되돌릴 지금 상태
+let beforeCache = null;                  // 미리보기 대조군(지금 그대로)은 같은 해·같은 기간이면 다시 쓴다
 let inputs = null;                       // 보조 워커를 만들 때 넘길 존·격자
 let pool;                                // 보조 워커 묶음 (undefined: 아직 안 만듦, null: 쓸 수 없음)
 
@@ -125,26 +127,126 @@ async function handle(msg) {
     } else if (msg.type === 'step') {
       model.setNetwork(msg.net);
       lastNet = msg.net;
-      // 지난 1년의 교통 조건으로 경제·인구를 갱신한 뒤 새 해의 통행을 배정한다
+      // 지난 1년의 교통 조건으로 경제·인구를 갱신한 뒤 새 해의 통행을 배정한다 (완공된 역세권 개발 인구를 먼저 옮긴다)
+      if (msg.ctx.dev?.length) model.applyDevelopments(msg.ctx.dev);
+      // 열린 북측 관광지만 관광 수요를 끈다 (해금)
+      if (msg.ctx.tourKP?.length === model.tourKP.length) model.tourKP.set(msg.ctx.tourKP);
       model.advanceYear(msg.ctx.integration, msg.ctx.policy);
       // 새 노선이 개통한 해에는 지난해 교통량과 반씩 섞어 이용이 빨리 자리 잡게 한다
       results(await assign(lastNet, msg.ctx.integration, progress('통행배정'), true, msg.opened ? 1 : null));
     } else if (msg.type === 'preview') {
-      // 착공 전 효과 미리보기: 지금 상태를 저장해 두고, 지금 네트워크(대조)와 다 지은 네트워크로 같은 방식의 통행배정을 각각 해 본 뒤 되돌린다.
-      // 새 노선이 제 몫을 받도록 지난해 교통량과 반씩 섞는다. 두 결과의 차이가 사업 효과다
+      // 착공 전 효과 미리보기: 지금 교통량을 고정한 채 지금 망(대조)과 다 지은 망(처리)으로 수단분담·경로를 다시 구해 견준다.
+      // 처리 쪽은 새로 놓거나 바꾼 구간(과 운행 계통)만 몇 번 섞어 새 노선 이용이 자리 잡게 한다.
+      // 망 전체를 다시 배정해 두 결과를 빼면 배정 잡음이 사업 효과보다 커서, 고정한 상태에서 견준다.
+      // years > 0이면 그만큼 읍면동 인구가 접근이 좋은 곳으로 옮겨 간 뒤를 견준다 (양쪽 모두)
+      const years = msg.years || 0;
+      // 미리보기 뒤에는 저장해 둔 상태로 되돌리는데, 저장할 때 교통량·대기시간·읍면동 비중이 반올림된다.
+      // 처음부터 한 번 저장·되돌림을 거쳐, 그해 첫 미리보기와 다음 미리보기가 같은 상태에서 시작하게 한다
       const saved = model.exportBaseline(lastTotals, null);
-      const run = async (net, label) => {
+      model.importBaseline(saved.json, saved.bin);
+      const tm = [];   // 단계별 시간 (ms)
+      const tick = (name, t0) => tm.push([name, Math.round(performance.now() - t0)]);
+      if (pool === undefined) pool = await makePool();
+      // 처리 쪽에서 교통량을 다시 정할 구간: 새 구간, 속성이 바뀐 구간, 운행 계통 가상 구간
+      // 운행 계통 가상 구간은 실제 구간 뒤에 붙어, 새 구간이 생기면 번호가 밀린다: (계통, 구간)으로 짝지어 지금 교통량을 옮긴다
+      const svcKey = (l) => `${l.service}|${l.seg}`;
+      const oldSvc = new Map();
+      lastNet.links.forEach((l, k) => { if (l.via) oldSvc.set(svcKey(l), k); });
+      // 처리 쪽에서 교통량을 다시 정할 구간: 2 = 새 구간·새 계통(바로 섞음), 1 = 속성이 바뀐 구간·도로 사업 주변 도로(천천히 섞음)
+      const changed = (net) => {
+        const f = new Uint8Array(net.links.length);
+        const L0 = lastNet.links, n0 = lastNet.physCount ?? L0.length, n1 = net.physCount ?? net.links.length;
+        for (let k = 0; k < net.links.length; k++) {
+          const b = net.links[k];
+          if (k >= n1) { if (!oldSvc.has(svcKey(b))) f[k] = 2; continue; }   // 운행 계통: 새 계통만
+          if (k >= n0) { f[k] = 2; continue; }                               // 새로 놓은 구간
+          const a = L0[k];
+          if (a.active !== b.active || a.speed !== b.speed || a.lanes !== b.lanes || a.tracks !== b.tracks || a.power !== b.power || a.cls !== b.cls || a.mode !== b.mode) f[k] = 1;
+        }
+        return f;
+      };
+      // 도로 사업이면 주변 도로(바뀐 도로에서 약 15km 안)도 다시 정한다: 나란한 도로가 덜 막히는 효과까지 보이게.
+      // 대조 쪽도 같은 구간을 같은 횟수로 다시 정해, 섞는 과정에서 생기는 차이가 사업 효과에 끼지 않게 한다
+      const roadArea = (net, f) => {
+        const N = net.nodes, area = new Uint8Array(lastNet.physCount ?? lastNet.links.length);
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        net.links.forEach((l, k) => {
+          if (!f[k] || l.mode !== 0) return;
+          for (const nd of [l.a, l.b]) { x0 = Math.min(x0, N[nd][0]); x1 = Math.max(x1, N[nd][0]); y0 = Math.min(y0, N[nd][1]); y1 = Math.max(y1, N[nd][1]); }
+        });
+        if (!(x0 <= x1)) return null;
+        const dx = 0.17, dy = 0.135, M = lastNet.nodes;
+        const inBox = (nd) => M[nd] && M[nd][0] >= x0 - dx && M[nd][0] <= x1 + dx && M[nd][1] >= y0 - dy && M[nd][1] <= y1 + dy;
+        let any = false;
+        for (let k = 0; k < area.length; k++) { const l = lastNet.links[k]; if (l.mode === 0 && l.active && inBox(l.a) && inBox(l.b)) { area[k] = 1; any = true; } }
+        return any ? area : null;
+      };
+      const run = async (net, label, passes, free) => {
+        let t0 = performance.now();
+        const vol0 = Float64Array.from(model.volume);
         model.setNetwork(net);
-        const totals = await assign(net, msg.ctx.integration, progress(label), true, 1);
+        if (net !== lastNet) {
+          // 실제 구간은 번호가 그대로, 계통 가상 구간은 짝을 찾아 지금 교통량을 옮긴다 (새 구간은 0에서)
+          const n0 = lastNet.physCount ?? lastNet.links.length, n1 = net.physCount ?? net.links.length;
+          for (let k = n0; k < model.volume.length; k++) model.volume[k] = 0;
+          for (let k = n1; k < net.links.length; k++) { const o = oldSvc.get(svcKey(net.links[k])); if (o != null) model.volume[k] = vol0[o]; }
+          model.updateCosts();
+        }
+        if (years) for (let y = 0; y < years; y++) model.relocateWithinZones();
+        tick(`${label} 망`, t0); t0 = performance.now();
+        let totals;
+        try {
+          if (pool) await pool.sync(net, model.snapshot(), model.originGroups());
+          totals = await model.evaluate(pool, msg.ctx.integration, passes, free, progress(label));
+        } catch (err) {
+          if (!pool) throw err;
+          console.warn('보조 워커 평가 실패, 한 워커로 계산합니다', err);
+          pool.close(); pool = null;
+          totals = await model.evaluate(null, msg.ctx.integration, passes, free, progress(label));
+        }
+        tick(`${label} 평가`, t0); t0 = performance.now();
         const r = model.linkResults();
-        const out = { totals, vol: r.vol, vc: r.vc, speed: r.speed, svcVol: r.svcVol };
+        // 구간 교통량은 대조·처리 모두 마지막 번 전량 배정으로 (같은 방식이라 차이가 사업 효과)
+        const ev = model.evalAux, n = r.vol.length;
+        const vol = new Float32Array(n), vc = new Float32Array(n);
+        for (let k = 0; k < n; k++) { vol[k] = ev[k] + (model.metroLocal?.[k] || 0); vc[k] = model.capacity[k] > 0 ? vol[k] / model.capacity[k] : 0; }
+        const out = { totals, vol, vc, speed: r.speed, svcVol: r.svcVol, odT: model.odT.slice(), odTime: model.odTime.slice(), airIds: model.airports.map((a) => a.id), airPax: Float64Array.from(model.airPax) };
         model.setNetwork(lastNet);
         model.importBaseline(saved.json, saved.bin);
+        tick(`${label} 되돌림`, t0);
         return out;
       };
-      const before = await run(lastNet, '효과 미리보기 (지금)');
-      const after = await run(msg.net, '효과 미리보기 (완공 뒤)');
-      post('preview', { id: msg.id, before, after });
+      // 처리 쪽 반복: 도로는 막힘(BPR)이 교통량에 따라 바로 바뀌어 몇 번 섞고, 철도·도시철도만 바뀌면 한 번으로 충분하다
+      // (철도는 정원을 넘을 때만 혼잡 비용이 붙는다: 조치원–청주 시험에서 1·2·3·5·8번 결과가 같았다)
+      const freeAfter = changed(msg.net);
+      const area = roadArea(msg.net, freeAfter);
+      let before, passes = msg.passes ?? 1;
+      if (area) {
+        // 도로 사업: 주변 도로를 양쪽 모두 같은 방식으로 다시 정한다 (대조도 이 사업에 맞춰 새로 구한다)
+        passes = msg.passes ?? 3;
+        for (let k = 0; k < area.length; k++) if (area[k] && !freeAfter[k]) freeAfter[k] = 1;
+        before = await run(lastNet, '효과 미리보기 (지금)', passes, area);
+      } else {
+        const cached = beforeCache && beforeCache.net === lastNet && beforeCache.years === years;
+        before = cached ? beforeCache.out : await run(lastNet, '효과 미리보기 (지금)', 1, new Uint8Array(lastNet.links.length));
+        beforeCache = { net: lastNet, years, out: before };
+      }
+      const after = await run(msg.net, '효과 미리보기 (완공 뒤)', passes, freeAfter);
+      // 이용자 편익 (소비자 잉여의 반분법): OD마다 (전 통행 + 후 통행) / 2 × 시간 비용 감소 (분/일)
+      let timeMin = 0;
+      for (let k = 0; k < before.odT.length; k++) {
+        const tb = before.odTime[k], ta = after.odTime[k];
+        if (!isFinite(tb) || !isFinite(ta) || !(before.odT[k] + after.odT[k] > 0)) continue;
+        timeMin += 0.5 * (before.odT[k] + after.odT[k]) * (tb - ta);
+      }
+      const benefit = { timeMin, dVkt: (after.totals.vkt || 0) - (before.totals.vkt || 0) };
+      const strip = ({ odT, odTime, ...rest }) => rest;
+      post('preview', { id: msg.id, before: strip(before), after: strip(after), benefit, years, timing: tm });
+    } else if (msg.type === 'probe') {
+      // 개발용: 모형 상태 요약 (미리보기 뒤 상태가 그대로 돌아오는지 본다)
+      const h = (arr) => { let x = 0; for (let k = 0; k < arr.length; k++) x += (arr[k] || 0) * ((k % 97) + 1); return Math.round(x * 1000) / 1000; };
+      const m = model;
+      post('probe', { id: msg.id, v: { volume: h(m.volume), wait: h(m.stationWait), subW: h(m.subW), airOD: h(m.airOD), pop: h(m.pop), ccomp: h(m.ccomp), cost: h(m.cost), boardings: h(m.boardings), subRoadAcc: h(m.subRoadAcc), subStAcc: h(m.subStAcc), subSt: h(m.subSt), latent: h(m.latentOD), airPen: h(m.airPenalty), routePen: h(m.routePenalty), grp: h(m.grpSub), metroLocal: h(m.metroLocal || []), freshCap: h(m.stationFreshCap || []), svc: h(m.svcTrains) } });
     } else if (msg.type === 'route') {
       post('route', { route: model.routeQuery(msg.from, msg.to) });
     } else if (msg.type === 'baseline') {
@@ -152,7 +254,8 @@ async function handle(msg) {
       model = new Model(msg.zones, new Float32Array(msg.grid));
       model.setNetwork(msg.net);
       const totals = calibrateFresh(msg.ctx);
-      const out = model.exportBaseline(totals, msg.meta);
+      // 보정 방식 판(calibVersion)을 함께 적어, 보정이 바뀌면 예전 기준 연도를 쓰지 않게 한다
+      const out = model.exportBaseline(totals, { ...msg.meta, calib: P.calibVersion });
       post('baseline', out, [out.bin]);
     }
   } catch (err) {

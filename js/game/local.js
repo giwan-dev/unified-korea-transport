@@ -28,8 +28,8 @@ const HISTORIC_KR = { 강원특별자치도: '강원남도', 강원도: '강원�
 
 /** 복원 뒤 다시 독립시킬 수 있는 북측 도시 (원래 직할시) */
 export const HISTORIC_CITIES = ['평양시', '남포시'];
-/** 현행 체제에서 광역시로 승격시킬 수 있는 인구 기준 */
-export const PROMOTE_MIN_POP = 1_000_000;
+/** 광역시로 승격시킬 수 있는 인구 기준 (모든 도의 시, 북측은 지방자치 도입 뒤) */
+export const PROMOTE_MIN_POP = 500_000;
 
 export const ELECTION = { firstYear: 2030, every: 4 };
 export const EVENT_COST = { historic: 5000, autonomy: 2000, independence: 1000, admin: 3000 };   // 억원 (표지판·행정 전산·청사)

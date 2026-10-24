@@ -14,6 +14,12 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 
 let timer = null;
 
+/** 열차에 마우스를 올리면: "부산발 서울행 KTX" (하행은 노선도 왼쪽 → 오른쪽) */
+function trainLabel(r, down) {
+  const from = down ? r.from : r.to, to = down ? r.to : r.from;
+  return from && to ? `${from}발 ${to}행 ${r.brand || r.name}` : r.name;
+}
+
 /**
  * @param {HTMLElement} el 그릴 곳
  * @param {object} d {title, stations:[{name, km}], segs:[{vc, vol}], rows:[{name, kind, label, first, last,
@@ -112,7 +118,31 @@ export function showLineDiagram(el, d, onClose) {
     }
     return d.stations[r.last].km;
   };
+  // 열차 위치 (마우스를 올리면 열차 이름·출발·도착을 띄운다). 그릴 때마다 새로 채운다
+  let spots = [];
+  const svgEl = el.querySelector('[data-ld=line] svg');
+  const tip = document.createElement('div');
+  tip.className = 'ld-tip';
+  Object.assign(tip.style, { position: 'fixed', pointerEvents: 'none', background: 'rgba(20,24,32,.92)', color: '#fff', padding: '3px 7px', borderRadius: '4px', fontSize: '12px', display: 'none', zIndex: 50, whiteSpace: 'nowrap' });
+  el.appendChild(tip);
+  let mouse = null;
+  const updateTip = () => {
+    if (!mouse) { tip.style.display = 'none'; return; }
+    const rc = svgEl.getBoundingClientRect();
+    const sx = rc.width / (svgEl.viewBox.baseVal.width || rc.width), sy = rc.height / (svgEl.viewBox.baseVal.height || rc.height);
+    const px = (mouse[0] - rc.left) / sx, py = (mouse[1] - rc.top) / sy;
+    let best = null, bd = 12;
+    for (const sp of spots) { const dd = Math.hypot(sp[0] - px, sp[1] - py); if (dd < bd) { bd = dd; best = sp; } }
+    if (!best) { tip.style.display = 'none'; svgEl.style.cursor = ''; return; }
+    tip.textContent = best[2];
+    tip.style.display = 'block';
+    tip.style.left = `${mouse[0] + 12}px`; tip.style.top = `${mouse[1] - 26}px`;
+    svgEl.style.cursor = 'pointer';
+  };
+  svgEl.addEventListener('mousemove', (e) => { mouse = [e.clientX, e.clientY]; updateTip(); });
+  svgEl.addEventListener('mouseleave', () => { mouse = null; updateTip(); });
   const draw = () => {
+    spots = [];
     const hh = String(Math.floor(clock / 60)).padStart(2, '0'), mm = String(Math.floor(clock % 60)).padStart(2, '0');
     el.querySelector('#ld-clock').textContent = `${hh}:${mm}`;
     const now = el.querySelector('#dia-now');
@@ -132,17 +162,20 @@ export function showLineDiagram(el, d, onClose) {
         if (e > run) continue;
         // 하행: 첫 역 → 끝 역 (선 위쪽), 상행: 반대 (선 아래쪽, 반 간격 어긋나게)
         const xd = xAtKm(kmAtTime(r, r.times[r.first] + e));
-        html += `<path d="M${xd - 5},${y - 12} L${xd + 5},${y - 8} L${xd - 5},${y - 4} Z" fill="${col}"/>`;
+        html += `<path class="ld-train" d="M${xd - 6},${y - 13} L${xd + 6},${y - 8} L${xd - 6},${y - 3} Z" fill="${col}"/>`;
+        spots.push([xd, y - 8, trainLabel(r, true)]);
       }
       for (let n = 0; n < perDir; n++) {
         const e = since((n + 0.5) * headway);
         if (e > run) continue;
         const km = d.stations[r.last].km - (kmAtTime(r, r.times[r.first] + e) - d.stations[r.first].km);
         const xu = xAtKm(km);
-        html += `<path d="M${xu + 5},${y + 4} L${xu - 5},${y + 8} L${xu + 5},${y + 12} Z" fill="${col}"/>`;
+        html += `<path class="ld-train" d="M${xu + 6},${y + 3} L${xu - 6},${y + 8} L${xu + 6},${y + 13} Z" fill="${col}"/>`;
+        spots.push([xu, y + 8, trainLabel(r, false)]);
       }
       groups[k].innerHTML = html;
     });
+    updateTip();
   };
   draw();
   timer = setInterval(() => {
@@ -201,7 +234,7 @@ function diaSVG(d) {
         if (dep + run > DAY) dd += path(pts, dep - DAY);   // 자정을 넘기는 열차는 0시 쪽에 이어 그린다
       }
     }
-    g += `<path d="${dd}" fill="none" stroke="${col}" stroke-width="${r.kind === 'base' ? 0.6 : 1.3}" stroke-opacity="${r.kind === 'base' ? 0.55 : 0.9}"><title>${esc(r.name)}</title></path>`;
+    g += `<path d="${dd}" fill="none" stroke="${col}" stroke-width="${r.kind === 'base' ? 0.6 : 1.3}" stroke-opacity="${r.kind === 'base' ? 0.55 : 0.9}"><title>${esc(r.name)}${r.from ? ` (${esc(r.from)}–${esc(r.to)})` : ''}</title></path>`;
   }
   g += `<line id="dia-now" x1="${xOf(420)}" y1="${DIA.top - 6}" x2="${xOf(420)}" y2="${H - 10}" stroke="#e02424" stroke-width="1.5"/>`;
   const legend = d.rows.filter((r) => r.trains).map((r, k) => `<g transform="translate(${DIA.left + k * 170},${H - 2})"><line x1="0" y1="-4" x2="18" y2="-4" stroke="${KIND_COLOR[r.kind] || KIND_COLOR.base}" stroke-width="2"/>
