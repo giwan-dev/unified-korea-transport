@@ -2689,6 +2689,7 @@ def write_outputs(zones, net, places):
             "properties": {
                 "id": i, "name": z["name"], "province": z["province"], "country": z["country"],
                 **({"also": list(z["also"])} if z.get("also") else {}),
+                **{k: z[k] for k in ("hist", "piece") if k in z},
                 "pop": round(z["pop"]), "area": round(_area_km2(z["geom"]), 1),
                 "cx": round(z["cx"], 4), "cy": round(z["cy"], 4), "road_node": z["road_node"],
             },
@@ -2721,6 +2722,7 @@ def master_zones():
     import pickle
     m = pickle.load(path.open("rb"))
     zones = [{"name": z["name"], "province": z["province"], "country": z["country"], "also": z.get("also", ()),
+              **{k: z[k] for k in ("hist", "piece") if k in z},
               "geom": wkb.loads(z["geom"]), "geom_simple": wkb.loads(z["geom_simple"])} for z in m["zones"]]
     log("zones from admin_master", len(zones))
     return zones

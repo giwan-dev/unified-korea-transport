@@ -457,3 +457,11 @@ details > summary.flash { animation: flash 1.4s ease-out; }
 }
 #guide .gd-never { all: unset; display: block; margin-top: 10px; font-size: 11px; color: var(--muted); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 #guide .gd-never:hover, #guide .gd-never:focus-visible { color: var(--accent); }
+/* 지도 출처 표기: 작게 */
+.maplibregl-ctrl-attrib { font-size: 10px; }
+.maplibregl-ctrl-attrib.maplibregl-compact-show { max-width: 60%; }
+/* 국외 도시·섬 소개 (노드 패널) */
+.place-intro { margin: 6px 0 10px; }
+.place-intro p { margin: 6px 0 0; line-height: 1.55; }
+.place-country { display: flex; align-items: center; gap: 8px; }
+.place-country .flag { flex: none; border: 1px solid var(--line, #ccc); border-radius: 2px; }

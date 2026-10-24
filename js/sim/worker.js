@@ -98,6 +98,7 @@ async function handle(msg) {
       post('progress', { label: '시뮬레이션 준비 중', value: 0 });
       model = new Model(msg.zones, new Float32Array(msg.grid));
       wmark('model built');
+      if (msg.baseline?.json.access) model.preloadAccess(msg.baseline.json, msg.baseline.bin);
       model.setNetwork(msg.net);
       wmark('network set');
       lastNet = msg.net;

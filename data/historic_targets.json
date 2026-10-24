@@ -1,8 +1,8 @@
 [
  {
   "level": "zone",
-  "id": 260,
-  "zone": 260,
+  "id": 271,
+  "zone": 271,
   "current": "김정숙군",
   "historic": "신파군",
   "year": 1981,
@@ -10,8 +10,8 @@
  },
  {
   "level": "zone",
-  "id": 262,
-  "zone": 262,
+  "id": 273,
+  "zone": 273,
   "current": "김형직군",
   "historic": "후창군",
   "year": 1988,
@@ -19,8 +19,8 @@
  },
  {
   "level": "zone",
-  "id": 261,
-  "zone": 261,
+  "id": 272,
+  "zone": 272,
   "current": "김형권군",
   "historic": "풍산군",
   "year": 1990,
@@ -28,8 +28,8 @@
  },
  {
   "level": "zone",
-  "id": 374,
-  "zone": 374,
+  "id": 385,
+  "zone": 385,
   "current": "김책시",
   "historic": "성진시",
   "year": 1951,
@@ -37,8 +37,8 @@
  },
  {
   "level": "zone",
-  "id": 352,
-  "zone": 352,
+  "id": 363,
+  "zone": 363,
   "current": "금야군",
   "historic": "영흥군",
   "year": 1977,
@@ -47,7 +47,7 @@
  {
   "level": "unit",
   "id": 3808,
-  "zone": 261,
+  "zone": 272,
   "current": "김형권읍",
   "historic": "풍산읍",
   "year": 1990,

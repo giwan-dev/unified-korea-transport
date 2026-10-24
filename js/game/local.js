@@ -44,7 +44,6 @@ export const ADMIN_OPTIONS = [
   { key: 'workers', label: '노동자구', choices: [['keep', '그대로 둔다'], ['abolish', '폐지 (리로 바꾼다)']] },
   { key: 'ongjin', label: '옹진군 (인천·황해남도)', choices: [['separate', '남북 따로 둔다'], ['hwanghae', '하나로 합쳐 황해(남)도에'], ['incheon', '하나로 합쳐 인천광역시에']] },
   { key: 'goseong', label: '고성군 (강원 남·북)', choices: [['separate', '남북 따로 둔다'], ['ganseong', '남측 고성군을 간성군으로'], ['south', '하나로 합쳐 남측 강원에'], ['north', '하나로 합쳐 북측 강원에']] },
-  { key: 'cheorwon', label: '철원군 (강원 남·북)', choices: [['separate', '남북 따로 둔다'], ['south', '하나로 합쳐 남측 강원에'], ['north', '하나로 합쳐 북측 강원에']] },
   { key: 'jagang', label: '자강도·량강도 (1945년 이전 도 복원 때)', choices: [['merge', '평안북도·함경남도로 합친다'], ['keep', '도로 남겨 둔다']] },
   { key: 'dueum', label: '북측 지명 두음법칙', choices: [['keep', '북측 표기 그대로 (량강도·룡천)'], ['apply', '남측 표기로 (양강도·용천)']] },
 ];
@@ -62,6 +61,40 @@ export function dueum(name) {
   if (nl === L) return name;
   return String.fromCharCode(0xac00 + nl * 588 + V * 28 + T) + name.slice(1);
 }
+/**
+ * 분단으로 갈라지거나 없어진 군 되살리기. 존의 hist는 1945년 소속 군, piece는 지금 시군 안에서 떼어 낸 옛 군 땅
+ * (pipeline/build_admin.py tag_historic, 조사 자료 pipeline/historic_counties.json). '지금대로'면 조각은 원래 시군 이름으로 보이고,
+ * 되살리면 같은 옛 군의 존들이 그 군 이름으로 한 도에 묶인다 (계산 존은 그대로, 이름·소속만 바뀐다).
+ * prov: 고른 값 → [도, 도 이름 규칙을 따를 쪽]
+ */
+const KR_GW = ['강원특별자치도', 'KR'], KP_GW = ['강원도', 'KP'];
+export const HISTORIC_COUNTIES = [
+  { key: 'jangdan', name: '장단군', label: '장단군 (1972년 파주·연천에 편입, 북측은 장풍·판문)',
+    choices: [['keep', '지금대로 둔다'], ['south', '장단군을 되살려 경기도에'], ['north', '장단군을 되살려 개성시에']], prov: { south: ['경기도', 'KR'], north: ['개성시', 'KP'] } },
+  { key: 'gimhwa', name: '김화군', label: '김화군 (1963년 남측은 철원군에 편입)',
+    choices: [['keep', '지금대로 둔다'], ['south', '김화군을 되살려 남측 강원에'], ['north', '김화군을 되살려 북측 강원에']], prov: { south: KR_GW, north: KP_GW } },
+  { key: 'cheorwon', name: '철원군', label: '철원군 (강원 남·북, 연천 신서면은 옛 철원)',
+    choices: [['keep', '남북 따로 둔다'], ['south', '분단 전 경계로 합쳐 남측 강원에'], ['north', '분단 전 경계로 합쳐 북측 강원에']], prov: { south: KR_GW, north: KP_GW } },
+  { key: 'yeoncheon', name: '연천군', label: '연천군 (북측 철원·장풍에 옛 연천 땅)',
+    choices: [['keep', '지금대로 둔다'], ['restore', '분단 전 경계로 되찾는다']], prov: { restore: ['경기도', 'KR'] } },
+  { key: 'yeonbaek', name: '연백군', label: '연백군 (북측 연안군·배천군으로 나뉨)',
+    choices: [['keep', '연안군·배천군으로 둔다'], ['restore', '연백군으로 합친다']], prov: { restore: ['황해남도', 'KP'] } },
+  { key: 'yanggu', name: '양구군', label: '양구군 (옛 수입면 땅이 북측 금강군에)',
+    choices: [['keep', '지금대로 둔다'], ['restore', '분단 전 경계로 되찾는다']], prov: { restore: KR_GW } },
+  { key: 'inje', name: '인제군', label: '인제군 (옛 서화면 북쪽이 북측 금강군에)',
+    choices: [['keep', '지금대로 둔다'], ['restore', '분단 전 경계로 되찾는다']], prov: { restore: KR_GW } },
+];
+const HIST_BY_NAME = Object.fromEntries(HISTORIC_COUNTIES.map((h) => [h.name, h]));
+ADMIN_OPTIONS.push(...HISTORIC_COUNTIES.map(({ key, label, choices }) => ({ key, label, choices })));
+
+/** 이 존을 되살린 옛 군: {name, province, side} 또는 null. 예전 저장의 철원 'separate'는 '지금대로' */
+export function restoredCounty(state, z) {
+  const h = z.hist && HIST_BY_NAME[z.hist];
+  const v = h && state.local?.admin?.[h.key];
+  const pr = v && h.prov[v];
+  return pr ? { name: h.name, province: pr[0], side: pr[1] } : null;
+}
+
 export const ADMIN_DEFAULT = Object.fromEntries(ADMIN_OPTIONS.map((o) => [o.key, o.choices[0][0]]));
 
 const KR_GANGWON = ['강원특별자치도', '강원도'];
@@ -71,16 +104,15 @@ const isZone = (z, name, country, provs) => z.name === name && z.country === cou
 export function adminOverride(state, z) {
   const A = state.local?.admin;
   if (!A || z.ext) return null;
+  const h = restoredCounty(state, z);
+  if (h) return { province: h.province, side: h.side };
   if (A.kaesong === 'gyeonggi' && z.country === 'KP' && z.province === '개성시') return { province: '경기도', side: 'KR' };
   if (z.name === '옹진군') {
     if (A.ongjin === 'hwanghae' && z.country === 'KR') return { province: '황해남도', side: 'KP' };
     if (A.ongjin === 'incheon' && z.country === 'KP') return { province: '인천광역시', side: 'KR' };
   }
-  for (const key of ['goseong', 'cheorwon']) {
-    const name = key === 'goseong' ? '고성군' : '철원군';
-    if (A[key] === 'south' && isZone(z, name, 'KP', ['강원도'])) return { province: '강원특별자치도', side: 'KR' };
-    if (A[key] === 'north' && isZone(z, name, 'KR', KR_GANGWON)) return { province: '강원도', side: 'KP' };
-  }
+  if (A.goseong === 'south' && isZone(z, '고성군', 'KP', ['강원도'])) return { province: '강원특별자치도', side: 'KR' };
+  if (A.goseong === 'north' && isZone(z, '고성군', 'KR', KR_GANGWON)) return { province: '강원도', side: 'KP' };
   return null;
 }
 
@@ -90,11 +122,14 @@ export function adminNames(admin, zones, targets = []) {
   if (admin.dueum === 'apply') zones.forEach((z, i) => { if (z.country === 'KP' && !z.ext && dueum(z.name) !== z.name) out[`z:${i}`] = dueum(z.name); });
   if (admin.goseong === 'ganseong') zones.forEach((z, i) => { if (isZone(z, '고성군', 'KR', KR_GANGWON)) out[`z:${i}`] = '간성군'; });
   if (admin.propaganda === 'restore') for (const t of targets) out[`${t.level === 'zone' ? 'z' : 'u'}:${t.id}`] = t.historic;
+  // 되살린 옛 군: 그 군에 속했던 존(떼어 낸 조각 포함)을 모두 그 군 이름으로
+  zones.forEach((z, i) => { const h = z.hist && HIST_BY_NAME[z.hist]; if (h && admin[h.key] && h.prov[admin[h.key]]) out[`z:${i}`] = h.name; });
   return out;
 }
 
 export function initLocal(state) {
   state.local ||= { autonomyKP: false, historic: false, independent: [], offices: {}, proposals: [], elections: [] };
+  if (state.local.admin?.cheorwon === 'separate') state.local.admin.cheorwon = 'keep';   // 예전 저장 (철원 '남북 따로')
   return state.local;
 }
 

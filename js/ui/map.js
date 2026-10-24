@@ -52,6 +52,9 @@ function baseStyle() {
       { id: 'bg-coast', type: 'line', source: 'edges', filter: ['==', ['get', 'b'], -1], paint: { 'line-color': c.sido, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.5, 10, 1] } },
       { id: 'bg-sido', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1],
         layout: { 'line-join': 'round' }, paint: { 'line-color': c.sido, 'line-opacity': 0.85, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.6, 10, 3.2] } },
+      // 바다·강 위 도 경계: 점선 (해안에서 약 12km 안, 가장 가까운 시군을 따라 나눈 선)
+      { id: 'bg-sido-water', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1],
+        paint: { 'line-color': c.sido, 'line-opacity': 0.7, 'line-dasharray': [3, 2], 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1, 10, 2] } },
       // 군사분계선은 그리지 않는다: 통일 뒤 남북 경계는 맞닿은 시군의 도 경계로 그린다 (bg-sido)
       { id: 'lb-unit', type: 'symbol', source: 'unitLabels', minzoom: 11,
         layout: { 'symbol-placement': 'point', 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 10 },
@@ -83,18 +86,24 @@ let regionKey = '';
  * @param {string[]} countryOfZone 존 id → 'KR' | 'KP' (지금은 쓰지 않는다: 남북 사이 경계도 도 경계로 그린다)
  * @param {(name:string)=>string} short 라벨용 짧은 이름
  */
-export function setRegions(map, regionOfZone, countryOfZone, zoneCenter, short = (n) => n) {
-  const key = regionOfZone.join('|');
+export function setRegions(map, regionOfZone, countryOfZone, zoneCenter, short = (n) => n, countyOfZone = null) {
+  const key = regionOfZone.join('|') + (countyOfZone ? countyOfZone.join('|') : '');
   if (key === regionKey || !map.getLayer('bg-sido') || !map.getLayer('zones-line')) return;
   regionKey = key;
   fetchEdges().then((edges) => {
-    const ids = [], inner = [];
+    const ids = [], inner = [], water = [];
     for (const f of edges) {
-      const { i, a, b } = f.properties;
+      const { i, a, b, w } = f.properties;
       if (b < 0) continue;
-      (regionOfZone[a] === regionOfZone[b] ? inner : ids).push(i);
+      const same = regionOfZone[a] === regionOfZone[b];
+      // 물 위 경계는 도가 다를 때만 (같은 도 안 시군 사이 물 위 선은 그리지 않는다)
+      if (w) { if (!same) water.push(i); continue; }
+      // 한 시군으로 보이는 존 사이(옛 군 땅을 떼어 낸 계산용 조각, 하나로 합친 남북 고성 등)는 선을 긋지 않는다
+      if (same && countyOfZone && countyOfZone[a] === countyOfZone[b]) continue;
+      (same ? inner : ids).push(i);
     }
     map.setFilter('bg-sido', ['in', ['get', 'i'], ['literal', ids]]);
+    map.setFilter('bg-sido-water', ['in', ['get', 'i'], ['literal', water]]);
     if (map.getLayer('zones-line')) map.setFilter('zones-line', ['in', ['get', 'i'], ['literal', inner]]);
   });
   // 이름 자리: 단체에 속한 존 중심들의 가운데에 가장 가까운 존 중심 (바다·다른 도 위에 뜨지 않게)
@@ -125,10 +134,25 @@ function renamed(features, level, idKey) {
   });
 }
 
+let labelGroup = null;
+/** 시군 라벨 묶기: 존 번호 → {key, weight}. 같은 key(한 시군으로 보이는 존들)는 weight가 가장 큰 존에만 이름을 단다 */
+export function setLabelGroup(fn) { labelGroup = fn; }
+
 /** 시군구 라벨과 읍면동 경계 라벨을 다시 그린다 */
 export async function refreshNames(map) {
   if (!labelData) labelData = await fetch('data/base/labels.geojson').then((r) => r.json());
-  map.getSource('labels').setData({ type: 'FeatureCollection', features: renamed(labelData.features, 'zone', 'zone') });
+  let feats = renamed(labelData.features, 'zone', 'zone');
+  if (labelGroup) {
+    const best = new Map();
+    for (const f of feats) {
+      const z = f.properties.zone;
+      if (z == null) continue;
+      const g = labelGroup(z);
+      if (!best.has(g.key) || g.weight > best.get(g.key).weight) best.set(g.key, { zone: z, weight: g.weight });
+    }
+    feats = feats.filter((f) => f.properties.zone == null || best.get(labelGroup(f.properties.zone).key).zone === f.properties.zone);
+  }
+  map.getSource('labels').setData({ type: 'FeatureCollection', features: feats });
   setUnits(map);
 }
 
@@ -237,6 +261,8 @@ export async function createMap(container) {
       customAttribution: '행정동 경계 © 통계청 SGIS(공공누리 1유형)·vuski/admdongkor (CC BY 4.0) · 도로·철도·북측 경계 © OpenStreetMap 기여자 (ODbL) · WorldPop (CC BY 4.0) · Natural Earth',
     },
   });
+  // 출처 표기는 접어 둔 채(ⓘ) 시작한다: 넓은 화면에서 펼쳐진 채로 뜨면 지도 아래를 한 줄 가린다. 누르면 펼쳐진다
+  map.once('load', () => container && document.querySelector('.maplibregl-ctrl-attrib.maplibregl-compact-show')?.classList.remove('maplibregl-compact-show'));
   // 나침반 단추: 지도를 돌리거나 기울였을 때 누르면 북쪽이 위로 돌아온다 (바늘이 지금 방위를 보여 준다)
   map.addControl(new maplibregl.NavigationControl({ showCompass: true, visualizePitch: true }), 'top-left');
   // 좁은 화면에서는 출처 상자를 ⓘ 단추로 접어 둔다 (눌러서 펼침)
@@ -247,7 +273,8 @@ export async function createMap(container) {
       a?.removeAttribute('open');
     });
   }
-  await new Promise((res) => map.on('load', res));
+  // 레이어를 더하는 데는 스타일만 읽히면 된다 ('load'는 모든 배경 도형을 다 나누고 그릴 때까지 기다려 몇 초 늦다)
+  await new Promise((res) => (map.isStyleLoaded() ? res() : map.once('style.load', res)));
   enableUnits(map);
   enableRoads(map);
   return map;
@@ -348,6 +375,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   if (map.getLayer('bg-roads')) map.moveLayer('bg-roads');
   // 시도 경계(해안선 포함)도 인구 색칠 위로: 밑에 있으면 바다와 땅 사이에 선이 없어 해안이 흐릿하다
   if (map.getLayer('bg-sido')) map.moveLayer('bg-sido');
+  if (map.getLayer('bg-sido-water')) map.moveLayer('bg-sido-water');
   const roadBase = ['all', ['==', ['get', 'mode'], 0], ['==', ['get', 'building'], 0], ['!=', ['get', 'cls'], 'ferry'], ['!=', ['get', 'ext'], 1]];
   // 대도시 안의 촘촘한 2차 도로: 확대했을 때만 그린다
   map.addLayer({

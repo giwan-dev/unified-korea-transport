@@ -270,6 +270,91 @@ def to_fc(rows, props):
     return {"type": "FeatureCollection", "attribution": ATTRIBUTION, "features": feats}
 
 
+# 분단으로 갈라지거나 없어진 군 가운데 게임에서 되살릴 수 있는 군 (pipeline/historic_counties.json: 읍면동·북측 권역별 1945년 소속 조사)
+RESTORABLE = {"장단군", "김화군", "철원군", "연천군", "연백군", "양구군", "인제군"}
+
+
+def tag_historic(units):
+    """읍면동마다 1945년 소속 군(hist)을 달고, 지금 시군 안에 되살릴 수 있는 다른 옛 군 땅이 섞여 있으면 그 땅을 따로 떼어
+    (piece) 계산 존으로 나눈다. 평소에는 원래 시군 이름으로 보이고, 행정구역 정리에서 옛 군을 되살리면 그 군으로 묶인다.
+      예) 남측 철원군 = 옛 철원군(철원·갈말·동송) + 옛 김화군(김화·근남·근북·서면) → 김화 쪽을 piece '김화군'으로
+    확신이 낮은 조사 결과(low)는 쓰지 않는다"""
+    path = Path(__file__).parent / "historic_counties.json"
+    if not path.exists():
+        return
+    rows = json.loads(path.read_text(encoding="utf-8"))["units"]
+    side = {"KR": "남", "KP": "북"}
+    look = defaultdict(list)
+    for r in rows:
+        x, y = map(float, r["point"].split(","))
+        look[(r["zone"], r["unit"])].append((x, y, r))
+    by_zone = defaultdict(list)
+    for u in units:
+        cands = look.get((f"{u['zone']}({side[u['country']]})", u["name"]))
+        if not cands:
+            continue
+        c = u["geom"].representative_point()
+        x, y, r = min(cands, key=lambda t: (t[0] - c.x) ** 2 + (t[1] - c.y) ** 2)
+        if r["confidence"] != "low":
+            u["hist"] = r["historic_county"]
+        by_zone[(u["country"], u["province"], u["zone"])].append(u)
+    n = 0
+    for key, us in by_zone.items():
+        area = defaultdict(float)
+        for u in us:
+            area[u.get("hist")] += u["geom"].area
+        # 지금 시군과 같은 이름의 옛 군, 없으면 가장 넓은 옛 군이 이 존의 몸통 (나머지 되살릴 수 없는 옛 군 땅도 몸통에 둔다)
+        main = key[2] if key[2] in area else max(area, key=area.get)
+        for u in us:
+            h = u.get("hist")
+            if h and h != main and h in RESTORABLE:
+                u["piece"] = h
+                n += 1
+        for u in us:
+            if not u.get("piece"):
+                u["hist_main"] = main if main in RESTORABLE else None
+    log("historic pieces (units split off)", n)
+
+
+def resolve_overlaps(units):
+    """겹치는 읍면동을 정리한다. 남측 경계(통계청)는 군사분계선까지인데 북측 경계(OSM)는 분계선 너머 남쪽까지 그려져 있어
+    남북 시군이 비무장지대에서 140km² 남짓 겹친다 (화천×김화 36, 철원×김화 34, 파주×판문 15). 지도에서는 두 색이 포개진
+    딴 행정구역처럼 보이고, 눌러도 한쪽만 골라진다. 남북이 겹친 곳은 군사분계선에서 잘라 남쪽은 남측, 북쪽은 북측에 두고,
+    같은 쪽끼리 조금씩 겹친 곳(OSM 경계 오차)은 먼저 온 읍면동에 둔다"""
+    from shapely.ops import linemerge
+    mdl = [shape(f["geometry"]) for f in json.loads((ROOT / "data" / "base" / "lines.geojson").read_text(encoding="utf-8"))["features"]
+           if f["properties"].get("kind") == "mdl"]
+    if mdl:
+        parts = sorted((g for g in getattr(linemerge(unary_union(mdl)), "geoms", []) if g.length > 0.001), key=lambda g: g.coords[0][0])
+        pts = [c for g in parts for c in g.coords]
+        # 분계선 서쪽 끝(한강 하구)·동쪽 끝(동해안)에서 같은 위도로 바다까지 늘여 남쪽 반을 닫는다
+        south = shapely.make_valid(shapely.Polygon([(124.0, pts[0][1]), *pts, (132.0, pts[-1][1]), (132.0, 33.0), (124.0, 33.0)]))
+        north = shapely.box(124.0, 33.0, 132.0, 43.5).difference(south)
+        kr = unary_union([u["geom"] for u in units if u["country"] == "KR"])
+        kp = unary_union([u["geom"] for u in units if u["country"] == "KP"])
+        both = kr.intersection(kp)
+        cut = 0.0
+        for u in units:
+            other = both.intersection(north if u["country"] == "KR" else south)
+            if u["geom"].intersects(other):
+                before = u["geom"].area
+                u["geom"] = polygonal(shapely.make_valid(u["geom"].difference(other)))
+                cut += before - u["geom"].area
+        log("north-south overlap cut at MDL", round(both.area * 111 * 88, 1), "km2")
+    tree = shapely.STRtree([u["geom"] for u in units])
+    n = 0
+    for i, u in enumerate(units):
+        for j in tree.query(u["geom"]):
+            j = int(j)
+            if j <= i or units[j]["geom"].is_empty:
+                continue
+            ov = u["geom"].intersection(units[j]["geom"])
+            if ov.area > 1e-8:
+                units[j]["geom"] = polygonal(shapely.make_valid(units[j]["geom"].difference(ov)))
+                n += 1
+    log("overlapping unit pairs trimmed", n)
+
+
 def absorb_dmz(units, reach=0.03, claim=0.006):
     """비무장지대처럼 어느 시군에도 속하지 않는 남북 사이 땅을 맞닿은 읍면동(따라서 그 시군)에 붙인다.
     남측과 북측 영역 모두에서 reach(약 3km) 안인 육지 가운데 비어 있는 곳을, 가까운 읍면동부터 claim(약 600m) 반경씩 나눠 갖는다.
@@ -309,18 +394,22 @@ def main():
         if key in MERGE_ZONES:
             u["country"], u["province"], u["zone"] = MERGE_ZONES[key]
             u["from_country"] = key[0]
+    resolve_overlaps(units)
     absorb_dmz(units)
-    # 존(시군구) 묶기: 순서는 남 → 북, 이름순
+    tag_historic(units)
+    # 존(시군구) 묶기: 순서는 남 → 북, 이름순. 옛 군 땅을 떼어 낸 조각(piece)은 몸통 바로 뒤에
     groups = defaultdict(list)
     for u in units:
-        groups[(u["country"], u["province"], u["zone"])].append(u)
-    keys = sorted(groups, key=lambda k: (k[0] != "KR", k[1], k[2]))
+        groups[(u["country"], u["province"], u["zone"], u.get("piece") or "")].append(u)
+    keys = sorted(groups, key=lambda k: (k[0] != "KR", k[1], k[2], k[3]))
     zones = []
     for zi, key in enumerate(keys):
         for u in groups[key]:
             u["zone_id"] = zi
         also = sorted({u["from_country"] for u in groups[key] if u.get("from_country")} - {key[0]})
+        hist = key[3] or next((u["hist_main"] for u in groups[key] if u.get("hist_main")), None)
         zones.append({"country": key[0], "province": key[1], "name": key[2], "also": also,
+                      **({"hist": hist} if hist else {}), **({"piece": 1} if key[3] else {}),
                       "geom": polygonal(unary_union([u["geom"] for u in groups[key]]))})
     units.sort(key=lambda u: (u["zone_id"], u["name"]))
     for i, u in enumerate(units):
@@ -358,7 +447,8 @@ def main():
     write(OUT / "units.geojson", to_fc([(u, simple[u["id"]]) for u in units],
           lambda i, u: {"id": u["id"], "name": u["name"], "zone": u["zone_id"], "country": u["country"]}))
     write(OUT / "sgg.geojson", to_fc(list(zip(zones, sgg_simple)),
-          lambda i, z: {"id": i, "name": z["name"], "province": z["province"], "country": z["country"]}))
+          lambda i, z: {"id": i, "name": z["name"], "province": z["province"], "country": z["country"],
+                        **{k: z[k] for k in ("hist", "piece") if k in z}}))
     write(OUT / "sido.geojson", to_fc([(k, g) for (k, _), g in zip(sido_rows, sido_geoms)],
           lambda i, k: {"name": k[1], "country": k[0]}))
     log("zones", len(zones), "KR", sum(z["country"] == "KR" for z in zones), "KP", sum(z["country"] == "KP" for z in zones))

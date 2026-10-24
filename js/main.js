@@ -11,7 +11,7 @@ import {
 } from './game/state.js';
 import { MEGA, TSR_FREIGHT, megaGeometry, applyMega } from './game/mega.js';
 import { AIRPORT } from './game/catalog.js';
-import { setNameResolver, refreshNames, setRegions, setLinks, paintHotspots } from './ui/map.js';
+import { setNameResolver, setLabelGroup, refreshNames, setRegions, setLinks, paintHotspots } from './ui/map.js';
 import { isNarrow, twinPrimary, mergeTwins, ROAD_RANK, motorwayMainline, bridgeMainlineGaps, flattenMainline, connectJunctions, smoothMainlineEnds, mainlineBubbles, roundMainlineCorners } from './ui/traffic.js';
 import { subFold, initPanelUI, toast } from './ui/panel.js';
 import { initPalette, openPalette, goSection } from './ui/palette.js';
@@ -35,6 +35,7 @@ import { seedInterKoreaAir, airlinesHTML } from './game/airlines.js';
 import { develPlan, startDevel, settleDevels } from './game/devel.js';
 import { newlyUnlocked, unlockedTourKP, unlockAt } from './game/tourism.js';
 import { showNotice } from './ui/notice.js';
+import { placeIntroHTML } from './game/cities.js';
 import { parseRequest, metroPlan, cityCenter } from './game/recommend.js';
 import { addTrainsLayer, setTrainsProvider, invalidateTrains, setTrains, trainsLegend } from './ui/trainsmap.js';
 import { registerSentimentMetrics, initSubBase, subGains, zoneGains, nationalFactor, updateMayorApproval, pShare, subValue } from './game/sentiment.js';
@@ -83,6 +84,8 @@ async function init() {
   // 계산 워커(와 보조 워커)는 먼저 띄워 둔다: 모듈을 받고 읽는 동안 이쪽은 데이터를 받는다
   worker = new Worker(new URL('./sim/worker.js', import.meta.url), { type: 'module' });
   const ports = new URLSearchParams(location.search).has('serial') ? [] : helperPorts();   // ?serial: 한 워커로만
+  // 배경지도(글꼴·시군구 도형·경계선)는 우리 자료와 상관없으니 처음부터 함께 받고 그리기 시작한다
+  const mapCreated = createMap('map');
   // 1) 데이터 내려받기 (큰 파일은 진행률을 보인다). 나중에 쓰는 것도 지금 함께 받기 시작한다
   loading.stage('data');
   const dl = new Progress((v) => loading.progress('data', v));
@@ -169,7 +172,7 @@ async function init() {
 
   // 3) 지도
   loading.stage('map');
-  const mapReady = createMap('map').then((m) => {
+  const mapReady = mapCreated.then((m) => {
     window.__map = m;
     map = m;
     mark('map created');
@@ -182,6 +185,7 @@ async function init() {
     addTrainsLayer(map);
     setTrainsProvider(trainsData);
     setNameResolver((level, id, original) => placeName(state, level, id, original));
+    setLabelGroup((z) => ({ key: countyKey(z), weight: zoneProps[z]?.area || 0 }));
     refreshNames(map);
     subsReady.then(() => map.getSource('subs').setData(subsFC));
     refreshPoints();
@@ -478,6 +482,8 @@ function avgHappiness() {
 }
 
 function zoneName(i) { return placeName(state, 'zone', i, zoneProps[i].name); }
+/** 지도에서 한 시군으로 보이는 존끼리 같은 값: 보이는 이름 + 광역 단체 (옛 군 땅을 떼어 낸 계산용 조각은 몸통과 같다) */
+function countyKey(i) { const z = zoneProps[i]; return z.ext ? `ext:${i}` : `${zoneName(i)}|${regionOf(state, z)}`; }
 
 /** 공항(원 크기 = 여객)과 주요 항공 노선 */
 function paintAir(air) {
@@ -1502,6 +1508,7 @@ function paletteCommands() {
   add('운행', '역 골라 특급·급행 짜기', () => { switchTab('build'); startServicePick(); }, { keywords: '운행 계통 열차 노선 운행', order: 3 });
   add('예산', '예산·사업 투입 속도', () => switchTab('projects'), { hint: `가용 ${formatWon(state.budget)}`, keywords: '돈 부채 공사 진행', order: 3 });
   add('도움말', '처음 안내 다시 보기', showGuide, { keywords: '튜토리얼 도움말 사용법', order: 9 });
+  add('도움말', '오류 제보·의견 보내기', () => { location.href = 'mailto:evrgrn0528@gmail.com'; }, { hint: 'evrgrn0528@gmail.com', keywords: '버그 오류 신고 제보 문의 메일 error report', order: 9 });
   // 묶음 안 깊숙한 항목으로 바로 가기 (정책·이벤트는 민원·정책 탭, 운영 성격은 운영 탭)
   const deep = [
     ['정책', '광역시 독립·승격', 'requests', '지방자치', '광역시', '광역시 승격 독립 시 도'],
@@ -1656,7 +1663,7 @@ function renderAll() {
 function renderRegions() {
   if (!state || !map) return;
   const short = (n) => { for (const a of ['특별자치시', '특별자치도', '통합특별시', '특별시', '광역시', '직할시']) if (n.endsWith(a) && n.length > a.length + 1) return n.slice(0, -a.length); return n; };
-  setRegions(map, zoneProps.map((z) => (z.ext ? '' : regionOf(state, z))), zoneProps.map((z) => z.country), (i) => [zoneProps[i].cx, zoneProps[i].cy], short);
+  setRegions(map, zoneProps.map((z) => (z.ext ? '' : regionOf(state, z))), zoneProps.map((z) => z.country), (i) => [zoneProps[i].cx, zoneProps[i].cy], short, zoneProps.map((z, i) => countyKey(i)));
 }
 
 function renderTop() {
@@ -2151,6 +2158,7 @@ function renderSettings() {
     <div class="actions"><button class="small" id="help-guide">처음 안내 다시 보기</button><button class="small" id="help-find">메뉴 찾기 (Ctrl+K)</button></div>
     <div class="name-row"><span style="flex:1">게임을 열 때 처음 안내</span>
       <select id="guide-mode">${Object.entries(GUIDE_MODES).map(([k, v]) => `<option value="${k}" ${getGuideMode() === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+    <p class="hint">오류 제보·의견: <a href="mailto:evrgrn0528@gmail.com">evrgrn0528@gmail.com</a></p>
     <p class="hint">정책·지방자치·행정구역·국가 대형 사업은 <a href="#" data-goto-tab="requests">민원·정책 탭</a>, 항공 자동 운영·철도 회사·노선 정리는 <a href="#" data-goto-tab="ops">운영 탭</a>에 있습니다.</p>
     <h3 style="margin-top:16px">저장 슬롯</h3>
     <p class="hint">진행은 자동 저장되고, 여기에 따로 세 개까지 남겨 두었다가 되돌릴 수 있습니다.</p>
@@ -4653,6 +4661,7 @@ function zonePanel(id) {
   return `${header(name)}
     <table class="kv">
       <tr><td>소속</td><td>${esc(regionOf(state, z))} (${z.country === 'KP' ? '북' : '남'})${name !== z.name ? ` · 원래 이름 ${esc(z.name)}` : ''}</td></tr>
+      ${z.hist && z.hist !== name ? `<tr><td>분단 전</td><td>옛 ${esc(z.hist)}${z.piece ? ' 땅 (지금 시군 안의 한 부분)' : ''} <br><span class="hint">민원·정책 탭 › 행정구역 정리에서 되살릴 수 있습니다</span></td></tr>` : ''}
       ${happiness ? `<tr><td>주민 행복도</td><td>${happiness[id].toFixed(1)}</td></tr>` : ''}
       <tr><td>인구</td><td>${fmtPop(r.pop[id])} <span class="${change >= 0 ? 'pos' : 'neg'}">(${change >= 0 ? '+' : ''}${pct(change)})</span></td></tr>
       <tr><td>지난해 순이동</td><td>${Math.round(r.netMig[id]).toLocaleString()}명</td></tr>
@@ -4773,9 +4782,14 @@ function routePanel(id, k) {
 function nodePanel(id) {
   const n = nodeNames().get(id);
   if (!n) return header('노드');
-  const kindLabel = { station: '역', IC: 'IC', JCT: 'JCT' }[n.kind];
+  // 국외 거점 도시는 '해외 도시', 도로 없는 섬의 항구(독도)는 대한민국의 섬
+  const abroad = n.kind === 'city' ? foreignCountry(id) : null;
+  const island = n.kind === 'city' && !abroad;
+  const kindLabel = { station: '역', IC: 'IC', JCT: 'JCT', rest: '휴게소' }[n.kind] || (abroad ? '해외 도시' : island ? '섬' : '');
+  const origin = n.isNew ? (state.names[id]?.auto ? ' · 자동 이름' : ' · 직접 지은 이름') : n.kind === 'city' ? '' : ' · 기존 시설 (OSM)';
   return `${header(n.name)}
-    <p class="hint">${kindLabel}${n.isNew ? (state.names[id]?.auto ? ' · 자동 이름' : ' · 직접 지은 이름') : ' · 기존 시설 (OSM)'}</p>
+    <p class="hint">${kindLabel}${origin}</p>
+    ${n.kind === 'city' ? placeIntroHTML(n.name, abroad || 'KR') : ''}
     ${n.kind === 'station' ? stationPanel(id, n) : ''}
     <h4>이름</h4>
     <div class="name-row"><input type="text" id="node-name" value="${esc(n.name)}">

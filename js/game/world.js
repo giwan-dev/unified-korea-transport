@@ -7,7 +7,7 @@ import { kmBetween } from '../sim/model.js';
  * - 중국·러시아 거점은 국경 통과점을 거쳐 북측 도로·철도와 가상 링크로 이어진다.
  * - 여객선 항로는 도로 수단의 항로 링크(cls 'ferry')로 넣는다.
  */
-export const FOREIGN_PROVINCE = { CN: '중국', RU: '러시아', JP: '일본', TW: '대만(중화민국)' };
+export const FOREIGN_PROVINCE = { CN: '중화인민공화국', RU: '러시아', JP: '일본', TW: '중화민국' };
 
 export function extendWorld(base, zoneProps, world) {
   const roadNodes = new Set(), railNodes = new Set();

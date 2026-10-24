@@ -60,25 +60,36 @@ export function clearSave() {
   try { localStorage.removeItem(SAVE_KEY); } catch { /* 저장소 없음 */ }
 }
 
+// 도형(geom)을 뺀 기본 링크: 한 번만 만들어 둔다. 해마다·화면마다 3만 개를 펼친 뒤 delete로 지우면 느리고,
+// delete한 객체는 느린 사전 모드가 되어 워커로 보낼 때도 느리다
+const liteLinks = new WeakMap();
+function baseLite(base) {
+  let lite = liteLinks.get(base.links);
+  if (!lite) {
+    lite = base.links.map(({ geom, ...rest }) => rest);
+    liteLinks.set(base.links, lite);
+  }
+  return lite;
+}
+
 /** 기본 네트워크 + 개량 + 신설을 합친, 시뮬레이션에 넘길 네트워크 */
 export function effectiveNetwork(base, state) {
   const nodes = base.nodes.concat(state.newNodes);
   const building = new Set();
   for (const p of state.projects) if (p.status === 'building' && p.kind === 'upgrade') p.links.forEach((id) => building.add(id));
-  const links = base.links.map((l, i) => {
+  const links = baseLite(base).map((l, i) => {
     const o = state.overrides[i];
     const m = o ? { ...l, ...o } : { ...l };
+    if (o && 'geom' in o) delete m.geom;
     // OSM에 공사 중으로 올라온 노선은 개통 연도부터 쓴다
     m.active = !linkPending(base, state, i) && !state.replaced?.[i];
     if (building.has(i) && m.mode === 0) m.speed = Math.round(m.speed * 0.85); // 공사 중 감속
-    delete m.geom;
     return m;
   });
   for (const nl of state.newLinks) {
     const o = state.overrides[nl.id];
-    const m = o ? { ...nl, ...o } : { ...nl };
+    const { geom, ...m } = o ? { ...nl, ...o } : nl;
     m.active = nl.built && !nl.replaced;
-    delete m.geom;
     links.push(m);
   }
   applyLinePolicy(links, state);

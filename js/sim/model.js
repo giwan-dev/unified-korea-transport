@@ -84,7 +84,32 @@ export class Model {
     bin.set(this.ccomp, L);
     bin.set(this.boardings, L + ZZ);
     bin.set(this.airOD, L + ZZ + NS);
-    return { json: { meta, sizes: { L, ZZ, NS, AA }, totals, snapshot: this.snapshot() }, bin: bin.buffer };
+    // 역세권 계산 결과도 함께 둔다: 게임을 열 때마다 하던 6초 남짓한 계산을 건너뛴다 (망 서명이 같을 때만 쓴다)
+    const parts = ACCESS_ARRAYS.map(([k]) => this[k]);
+    const extra = new Float32Array(parts.reduce((s, a) => s + a.length, 0));
+    let o = 0;
+    for (const a of parts) { extra.set(a, o); o += a.length; }
+    const all = new Float32Array(bin.length + extra.length);
+    all.set(bin); all.set(extra, bin.length);
+    const access = { sig: this.accessSig, S: this.S, R: P.roadConnectors, M: P.metroCandidates, K: P.stationCandidates, stations: Array.from(this.stationNode) };
+    return { json: { meta, sizes: { L, ZZ, NS, AA }, totals, snapshot: this.snapshot(), access }, bin: all.buffer };
+  }
+
+  /** exportBaseline에 담긴 역세권 계산 결과를 다음 setNetwork 때 쓰도록 받아 둔다 (buildAccess가 서명을 맞춰 본다) */
+  preloadAccess(json, buf) {
+    const a = json.access;
+    if (!a || a.S !== this.S || a.R !== P.roadConnectors || a.M !== P.metroCandidates || a.K !== P.stationCandidates) return;
+    const { L, ZZ, NS, AA = 0 } = json.sizes;
+    const bin = new Float32Array(buf);
+    let o = L + ZZ + NS + AA;
+    const arrays = {};
+    for (const [k, T, per] of ACCESS_ARRAYS) {
+      const n = per === 1 ? a.S : a.S * a[per];
+      if (o + n > bin.length) return;
+      arrays[k] = T.from(bin.subarray(o, o + n));
+      o += n;
+    }
+    this.accessPreload = { sig: a.sig, arrays, stations: Int32Array.from(a.stations) };
   }
 
   /** exportBaseline 결과로 상태를 되살린다. 크기가 맞지 않으면 false */
@@ -400,6 +425,14 @@ export class Model {
     const R = P.roadConnectors, M = P.metroCandidates, K = P.stationCandidates;
     const metroSt = [...new Set(net.stations)].filter((st) => metroNodes.has(st));
     const stationNodes = [...new Set(net.stations)].filter((st) => railNodes.has(st));
+    // 기준선에 담겨 온 결과(preloadAccess)가 이 망 것이면, 바뀐 노드가 없는 셈으로 쳐서 소구역 계산을 모두 건너뛴다
+    const pre = this.accessPreload;
+    this.accessPreload = null;
+    if (pre && pre.sig === sig) {
+      Object.assign(this, pre.arrays);
+      this.stationNodePrev = pre.stations;
+      this.accessPrev = { n: nodes.length, road: roadNodes, metro: new Set(metroSt), st: new Set(stationNodes), hsr: hsrNodes };
+    }
     // 해마다 공사 중이던 노선 몇 개가 개통하며 노드가 조금씩 바뀐다. 바뀐 노드가 닿을 수 있는 소구역만 다시 구한다
     // (전부 다시 하면 7초 남짓). 처음이거나 많이 바뀌었으면 전부
     const prev = this.accessPrev;
@@ -1862,6 +1895,12 @@ export function routeKey(a, b) {
 }
 
 /** 도로 접속 노드·도시철도역·철도역·고속철도역 구성이 같은지 알아보는 지문 (순서와 무관한 집합은 섞어 더한다) */
+// 기준선에 함께 담는 역세권 배열: [이름, 형, 소구역당 개수(1 또는 R·M·K)]
+const ACCESS_ARRAYS = [
+  ['subRoadNode', Int32Array, 'R'], ['subRoadAcc', Float64Array, 'R'], ['subRoadW', Float64Array, 'R'], ['subRoadFar', Float64Array, 1],
+  ['subMetro', Int32Array, 'M'], ['subMetroAcc', Float64Array, 'M'], ['subSt', Int32Array, 'K'], ['subStAcc', Float64Array, 'K'],
+];
+
 function accessSignature(road, rail, hsr, metro, stations, nNodes) {
   const mix = (set) => {
     let a = 0, b = 0;

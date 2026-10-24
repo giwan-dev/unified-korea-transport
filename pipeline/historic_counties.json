@@ -1,0 +1,2454 @@
+{
+ "units": [
+  {
+   "zone": "강령군(북)",
+   "unit": "강령읍",
+   "point": "125.510, 37.891",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 옹진군 부민면 강령리 일대(1952 강령군 복설)"
+  },
+  {
+   "zone": "강령군(북)",
+   "unit": "금정리",
+   "point": "125.496, 37.944",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "medium",
+   "note": "옛 옹진군 부민·룡연면 일대로 추정(현 금수리 등)"
+  },
+  {
+   "zone": "강령군(북)",
+   "unit": "동포리",
+   "point": "125.671, 37.942",
+   "historic_county": "벽성군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 벽성군 동강면(금산·덕현·석교리). 1945.11 옹진군 편입 전 벽성군"
+  },
+  {
+   "zone": "강령군(북)",
+   "unit": "부포로동자구",
+   "point": "125.573, 37.825",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 옹진군 봉구면 부포리"
+  },
+  {
+   "zone": "강령군(북)",
+   "unit": "송현리",
+   "point": "125.601, 37.922",
+   "historic_county": "벽성군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 벽성군 송림면 송현·가평리"
+  },
+  {
+   "zone": "강령군(북)",
+   "unit": "식여리",
+   "point": "125.442, 37.791",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 옹진군 흥미면 식여리"
+  },
+  {
+   "zone": "강령군(북)",
+   "unit": "안터",
+   "point": "125.362, 37.725",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "medium",
+   "note": "강령반도 남서단: 옛 옹진군 봉구·흥미면 일대로 추정"
+  },
+  {
+   "zone": "강화군(남)",
+   "unit": "강화읍",
+   "point": "126.498, 37.761",
+   "historic_county": "강화군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "강화군(남)",
+   "unit": "교동면",
+   "point": "126.271, 37.785",
+   "historic_county": "강화군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "1914 교동군 병합"
+  },
+  {
+   "zone": "강화군(남)",
+   "unit": "길상면",
+   "point": "126.504, 37.626",
+   "historic_county": "강화군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "강화군(남)",
+   "unit": "내가면",
+   "point": "126.391, 37.719",
+   "historic_county": "강화군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "강화군(남)",
+   "unit": "불은면",
+   "point": "126.485, 37.682",
+   "historic_county": "강화군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "강화군(남)",
+   "unit": "삼산면",
+   "point": "126.319, 37.698",
+   "historic_county": "강화군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "강화군(남)",
+   "unit": "서도면",
+   "point": "126.183, 37.671",
+   "historic_county": "강화군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "강화군(남)",
+   "unit": "선원면",
+   "point": "126.491, 37.713",
+   "historic_county": "강화군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "강화군(남)",
+   "unit": "송해면",
+   "point": "126.464, 37.779",
+   "historic_county": "강화군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "강화군(남)",
+   "unit": "양도면",
+   "point": "126.434, 37.675",
+   "historic_county": "강화군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "강화군(남)",
+   "unit": "양사면",
+   "point": "126.404, 37.803",
+   "historic_county": "강화군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "강화군(남)",
+   "unit": "하점면",
+   "point": "126.400, 37.766",
+   "historic_county": "강화군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "강화군(남)",
+   "unit": "화도면",
+   "point": "126.422, 37.620",
+   "historic_county": "강화군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "개성시(북)",
+   "unit": "개성시",
+   "point": "126.542, 38.054",
+   "historic_county": "개풍군",
+   "historic_province": "경기도",
+   "confidence": "medium",
+   "note": "개성 북서 외곽(126.54,38.05): 옛 개풍군 영남·영북면(38선 이북→1945 장풍군→1961 개성시)으로 추정"
+  },
+  {
+   "zone": "개성시(북)",
+   "unit": "개성시",
+   "point": "126.551, 37.966",
+   "historic_county": "개성부",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "개성 시가지(1945 경기도 개성부)"
+  },
+  {
+   "zone": "개성시(북)",
+   "unit": "개성시",
+   "point": "126.561, 37.962",
+   "historic_county": "개성부",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "개성 시가지(1945 경기도 개성부)"
+  },
+  {
+   "zone": "개성시(북)",
+   "unit": "개성시",
+   "point": "126.594, 38.004",
+   "historic_county": "개풍군",
+   "historic_province": "경기도",
+   "confidence": "low",
+   "note": "개성 북동 외곽(126.59,38.00): 옛 개풍군 영남면 동부로 추정. 장단군 대남·소남면 또는 개성부 외곽 일부 포함 가능"
+  },
+  {
+   "zone": "개성시(북)",
+   "unit": "고남리",
+   "point": "126.531, 37.960",
+   "historic_county": "개풍군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 개풍군 청교면 고남·양릉리"
+  },
+  {
+   "zone": "개성시(북)",
+   "unit": "룡흥동",
+   "point": "126.560, 38.000",
+   "historic_county": "개풍군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 개풍군 영남면 룡흥리(1945 장풍군→1961 개성시)"
+  },
+  {
+   "zone": "개성시(북)",
+   "unit": "박연리",
+   "point": "126.575, 38.087",
+   "historic_county": "장단군",
+   "historic_province": "경기도",
+   "confidence": "medium",
+   "note": "옛 장단군 소남면 박연리 + 개풍군 영북면 길수·고덕리 일부 혼재(현 양합리 일대)"
+  },
+  {
+   "zone": "개성시(북)",
+   "unit": "삼거리",
+   "point": "126.509, 38.031",
+   "historic_county": "개풍군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 개풍군 영남면 심천·반정리"
+  },
+  {
+   "zone": "개성시(북)",
+   "unit": "성남동",
+   "point": "126.573, 37.959",
+   "historic_county": "개성부",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "개성 시가지"
+  },
+  {
+   "zone": "개성시(북)",
+   "unit": "연릉리",
+   "point": "126.499, 37.958",
+   "historic_county": "개풍군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 개풍군 토성면 연하·려릉리 일부"
+  },
+  {
+   "zone": "개성시(북)",
+   "unit": "은덕동",
+   "point": "126.587, 37.970",
+   "historic_county": "개성부",
+   "historic_province": "경기도",
+   "confidence": "medium",
+   "note": "개성 시가지 외곽(개성부로 추정)"
+  },
+  {
+   "zone": "개성시(북)",
+   "unit": "해선리",
+   "point": "126.534, 37.994",
+   "historic_county": "개풍군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 개풍군 토성면 곡령·려릉리"
+  },
+  {
+   "zone": "개풍구역(북)",
+   "unit": "묵산리",
+   "point": "126.443, 37.974",
+   "historic_county": "개풍군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 개풍군 토성면 토성·려현리(일부 북면)"
+  },
+  {
+   "zone": "개풍구역(북)",
+   "unit": "의포리",
+   "point": "126.471, 37.872",
+   "historic_county": "개풍군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 개풍군 광덕면 황강·사분·고척리"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "간성읍",
+   "point": "128.378, 38.329",
+   "historic_county": "고성군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "강원도 고성군(1919 간성군 통합). 1945 38선 이북→1954 수복"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "개천면",
+   "point": "128.279, 35.091",
+   "historic_county": "고성군",
+   "historic_province": "경상남도",
+   "confidence": "high",
+   "note": "경상남도 고성군(분단 무관, 같은 이름의 다른 군)"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "거류면",
+   "point": "128.377, 34.984",
+   "historic_county": "고성군",
+   "historic_province": "경상남도",
+   "confidence": "high",
+   "note": "경상남도 고성군(분단 무관, 같은 이름의 다른 군)"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "거진읍",
+   "point": "128.365, 38.431",
+   "historic_county": "고성군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "강원도 고성군(1919 간성군 통합). 1945 38선 이북→1954 수복"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "고성읍",
+   "point": "128.297, 34.976",
+   "historic_county": "고성군",
+   "historic_province": "경상남도",
+   "confidence": "high",
+   "note": "경상남도 고성군(분단 무관, 같은 이름의 다른 군)"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "구만면",
+   "point": "128.335, 35.093",
+   "historic_county": "고성군",
+   "historic_province": "경상남도",
+   "confidence": "high",
+   "note": "경상남도 고성군(분단 무관, 같은 이름의 다른 군)"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "대가면",
+   "point": "128.284, 35.026",
+   "historic_county": "고성군",
+   "historic_province": "경상남도",
+   "confidence": "high",
+   "note": "경상남도 고성군(분단 무관, 같은 이름의 다른 군)"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "동해면",
+   "point": "128.436, 35.032",
+   "historic_county": "고성군",
+   "historic_province": "경상남도",
+   "confidence": "high",
+   "note": "경상남도 고성군(분단 무관, 같은 이름의 다른 군)"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "마암면",
+   "point": "128.346, 35.043",
+   "historic_county": "고성군",
+   "historic_province": "경상남도",
+   "confidence": "high",
+   "note": "경상남도 고성군(분단 무관, 같은 이름의 다른 군)"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "삼산면",
+   "point": "128.285, 34.936",
+   "historic_county": "고성군",
+   "historic_province": "경상남도",
+   "confidence": "high",
+   "note": "경상남도 고성군(분단 무관, 같은 이름의 다른 군)"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "상리면",
+   "point": "128.191, 35.005",
+   "historic_county": "고성군",
+   "historic_province": "경상남도",
+   "confidence": "high",
+   "note": "경상남도 고성군(분단 무관, 같은 이름의 다른 군)"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "영오면",
+   "point": "128.219, 35.104",
+   "historic_county": "고성군",
+   "historic_province": "경상남도",
+   "confidence": "high",
+   "note": "경상남도 고성군(분단 무관, 같은 이름의 다른 군)"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "영현면",
+   "point": "128.215, 35.044",
+   "historic_county": "고성군",
+   "historic_province": "경상남도",
+   "confidence": "high",
+   "note": "경상남도 고성군(분단 무관, 같은 이름의 다른 군)"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "죽왕면",
+   "point": "128.509, 38.335",
+   "historic_county": "고성군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "강원도 고성군(1919 간성군 통합). 1945 38선 이북→1954 수복"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "토성면",
+   "point": "128.510, 38.246",
+   "historic_county": "고성군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "강원도 고성군(1919 간성군 통합). 1945 38선 이북→1954 수복"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "하이면",
+   "point": "128.143, 34.941",
+   "historic_county": "고성군",
+   "historic_province": "경상남도",
+   "confidence": "high",
+   "note": "경상남도 고성군(분단 무관, 같은 이름의 다른 군)"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "하일면",
+   "point": "128.179, 34.935",
+   "historic_county": "고성군",
+   "historic_province": "경상남도",
+   "confidence": "high",
+   "note": "경상남도 고성군(분단 무관, 같은 이름의 다른 군)"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "현내면",
+   "point": "128.359, 38.541",
+   "historic_county": "고성군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "강원도 고성군(1919 간성군 통합). 1945 38선 이북→1954 수복"
+  },
+  {
+   "zone": "고성군(남)",
+   "unit": "회화면",
+   "point": "128.391, 35.077",
+   "historic_county": "고성군",
+   "historic_province": "경상남도",
+   "confidence": "high",
+   "note": "경상남도 고성군(분단 무관, 같은 이름의 다른 군)"
+  },
+  {
+   "zone": "고성군(북)",
+   "unit": "고성군",
+   "point": "128.213, 38.490",
+   "historic_county": "고성군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "군사분계선 북측 옛 고성군 수동면·서면 일대"
+  },
+  {
+   "zone": "고성군(북)",
+   "unit": "고성읍",
+   "point": "128.150, 38.727",
+   "historic_county": "고성군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 고성군 장전면·외금강면 일대"
+  },
+  {
+   "zone": "고성군(북)",
+   "unit": "남애리",
+   "point": "128.109, 38.761",
+   "historic_county": "고성군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 고성군 장전면 남사리"
+  },
+  {
+   "zone": "고성군(북)",
+   "unit": "릉동리",
+   "point": "127.965, 38.802",
+   "historic_county": "통천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 통천군 임남면 릉월·류동·다동리(1952 고성군 편입)"
+  },
+  {
+   "zone": "고성군(북)",
+   "unit": "온정리",
+   "point": "128.181, 38.668",
+   "historic_county": "고성군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 고성군 외금강면"
+  },
+  {
+   "zone": "고성군(북)",
+   "unit": "운전리",
+   "point": "128.049, 38.795",
+   "historic_county": "통천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 통천군 임남면 상다전·운암·예륜·두암리(1952 고성군 편입)"
+  },
+  {
+   "zone": "고성군(북)",
+   "unit": "하정월",
+   "point": "128.301, 38.630",
+   "historic_county": "고성군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 고성군 수동면 정월리 일대"
+  },
+  {
+   "zone": "금강군(북)",
+   "unit": "내강리",
+   "point": "128.024, 38.621",
+   "historic_county": "회양군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 회양군 내금강면 삼억동·정양동·장연리"
+  },
+  {
+   "zone": "금강군(북)",
+   "unit": "단풍리",
+   "point": "128.019, 38.701",
+   "historic_county": "회양군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 회양군 내금강면 신풍리(1977 단풍리로 개칭)"
+  },
+  {
+   "zone": "금강군(북)",
+   "unit": "북점리",
+   "point": "127.987, 38.557",
+   "historic_county": "회양군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 회양군 내금강면 상·하북점리"
+  },
+  {
+   "zone": "금강군(북)",
+   "unit": "소곤리",
+   "point": "127.953, 38.477",
+   "historic_county": "회양군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 회양군 내금강면 상소곤리"
+  },
+  {
+   "zone": "금강군(북)",
+   "unit": "속사리",
+   "point": "128.034, 38.472",
+   "historic_county": "회양군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 회양군 내금강면 속사동리"
+  },
+  {
+   "zone": "금강군(북)",
+   "unit": "오천리",
+   "point": "127.871, 38.419",
+   "historic_county": "양구군",
+   "historic_province": "강원도",
+   "confidence": "medium",
+   "note": "옛 양구군 수입면 오천·인패·대정리 일대(+김화군 임남면 면천리). 1952 창도군→2000 금강군"
+  },
+  {
+   "zone": "금강군(북)",
+   "unit": "이포리",
+   "point": "128.108, 38.414",
+   "historic_county": "인제군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 인제군 서화면 이포리(인제군의 미수복 지역)"
+  },
+  {
+   "zone": "금강군(북)",
+   "unit": "잣고개리",
+   "point": "127.988, 38.376",
+   "historic_county": "양구군",
+   "historic_province": "강원도",
+   "confidence": "low",
+   "note": "위치상 옛 양구군 수입면 북부(문등·송거리 일대)로 추정. 회양군 사동면 일부 가능"
+  },
+  {
+   "zone": "금강군(북)",
+   "unit": "풍미리",
+   "point": "127.847, 38.705",
+   "historic_county": "회양군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 회양군 안풍면 풍미리"
+  },
+  {
+   "zone": "금천군(북)",
+   "unit": "계정리",
+   "point": "126.450, 38.116",
+   "historic_county": "금천군",
+   "historic_province": "황해도",
+   "confidence": "medium",
+   "note": "옛 금천군 고동면 일대. 남부에 옛 개풍군 북면(1947 금천 편입) 일부 포함 가능"
+  },
+  {
+   "zone": "금천군(북)",
+   "unit": "룡성리",
+   "point": "126.495, 38.278",
+   "historic_county": "금천군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 금천군 우봉면(일부 평산군)"
+  },
+  {
+   "zone": "금천군(북)",
+   "unit": "백양리",
+   "point": "126.550, 38.322",
+   "historic_county": "금천군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 금천군 웅덕면"
+  },
+  {
+   "zone": "금천군(북)",
+   "unit": "원명리",
+   "point": "126.542, 38.193",
+   "historic_county": "금천군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 금천군 우봉·금천면"
+  },
+  {
+   "zone": "금천군(북)",
+   "unit": "현내리",
+   "point": "126.598, 38.259",
+   "historic_county": "금천군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 금천군 우봉면 우봉리 일대"
+  },
+  {
+   "zone": "김포시(남)",
+   "unit": "고촌읍",
+   "point": "126.769, 37.611",
+   "historic_county": "김포군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "김포시(남)",
+   "unit": "구래동",
+   "point": "126.626, 37.647",
+   "historic_county": "김포군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "김포시(남)",
+   "unit": "김포본동",
+   "point": "126.710, 37.633",
+   "historic_county": "김포군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "김포시(남)",
+   "unit": "대곶면",
+   "point": "126.571, 37.639",
+   "historic_county": "김포군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "김포시(남)",
+   "unit": "마산동",
+   "point": "126.641, 37.639",
+   "historic_county": "김포군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "김포시(남)",
+   "unit": "사우동",
+   "point": "126.729, 37.621",
+   "historic_county": "김포군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "김포시(남)",
+   "unit": "양촌읍",
+   "point": "126.613, 37.639",
+   "historic_county": "김포군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "김포시(남)",
+   "unit": "운양동",
+   "point": "126.690, 37.653",
+   "historic_county": "김포군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "김포시(남)",
+   "unit": "월곶면",
+   "point": "126.560, 37.728",
+   "historic_county": "김포군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "김포시(남)",
+   "unit": "장기동",
+   "point": "126.676, 37.638",
+   "historic_county": "김포군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "김포시(남)",
+   "unit": "장기본동",
+   "point": "126.666, 37.651",
+   "historic_county": "김포군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "김포시(남)",
+   "unit": "통진읍",
+   "point": "126.597, 37.699",
+   "historic_county": "김포군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "김포시(남)",
+   "unit": "풍무동",
+   "point": "126.721, 37.605",
+   "historic_county": "김포군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "김포시(남)",
+   "unit": "하성면",
+   "point": "126.645, 37.732",
+   "historic_county": "김포군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "김화군(북)",
+   "unit": "가학리",
+   "point": "127.623, 38.386",
+   "historic_county": "김화군",
+   "historic_province": "강원도",
+   "confidence": "medium",
+   "note": "옛 김화군 원남·원동·근동면 북부로 추정"
+  },
+  {
+   "zone": "김화군(북)",
+   "unit": "근동리",
+   "point": "127.541, 38.366",
+   "historic_county": "김화군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 김화군 근동면"
+  },
+  {
+   "zone": "김화군(북)",
+   "unit": "금곡리",
+   "point": "127.434, 38.347",
+   "historic_county": "김화군",
+   "historic_province": "강원도",
+   "confidence": "medium",
+   "note": "옛 김화군 근북면 북부(남측 근북면에도 금곡리 존재)"
+  },
+  {
+   "zone": "김화군(북)",
+   "unit": "법수리",
+   "point": "127.515, 38.518",
+   "historic_county": "김화군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 김화군 원북면 법수현리"
+  },
+  {
+   "zone": "김화군(북)",
+   "unit": "어호리",
+   "point": "127.742, 38.383",
+   "historic_county": "김화군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 김화군 임남면 과호·어운·수동리"
+  },
+  {
+   "zone": "김화군(북)",
+   "unit": "원북리",
+   "point": "127.633, 38.494",
+   "historic_county": "김화군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 김화군 원북면"
+  },
+  {
+   "zone": "김화군(북)",
+   "unit": "탑거리",
+   "point": "127.474, 38.452",
+   "historic_county": "김화군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 김화군 금성면 매회·탑거리"
+  },
+  {
+   "zone": "김화군(북)",
+   "unit": "학방로동자구",
+   "point": "127.732, 38.473",
+   "historic_county": "김화군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 김화군 창도면 학방리"
+  },
+  {
+   "zone": "배천군(북)",
+   "unit": "계화동",
+   "point": "126.361, 37.961",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 류곡면 계화리"
+  },
+  {
+   "zone": "배천군(북)",
+   "unit": "룡동리",
+   "point": "126.259, 37.985",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 석산면 룡동리"
+  },
+  {
+   "zone": "배천군(북)",
+   "unit": "문산리",
+   "point": "126.370, 37.899",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 해월면 문산리(벽란도)"
+  },
+  {
+   "zone": "배천군(북)",
+   "unit": "배천읍",
+   "point": "126.294, 38.002",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 은천면(배천읍내)"
+  },
+  {
+   "zone": "배천군(북)",
+   "unit": "봉량로동자구",
+   "point": "126.321, 38.040",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 은천면 비봉·량청리"
+  },
+  {
+   "zone": "배천군(북)",
+   "unit": "봉화리",
+   "point": "126.297, 37.881",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 호동면 봉화리"
+  },
+  {
+   "zone": "배천군(북)",
+   "unit": "수복리",
+   "point": "126.208, 37.970",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 석산면 수복리"
+  },
+  {
+   "zone": "배천군(북)",
+   "unit": "원산리",
+   "point": "126.360, 38.072",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 운산·온정·해월면 일대"
+  },
+  {
+   "zone": "배천군(북)",
+   "unit": "주성동",
+   "point": "126.306, 37.921",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 은천·온정면 일대"
+  },
+  {
+   "zone": "배천군(북)",
+   "unit": "추정리",
+   "point": "126.236, 37.894",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 호동면 추정리"
+  },
+  {
+   "zone": "배천군(북)",
+   "unit": "화산리",
+   "point": "126.189, 38.036",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 화성면 화산리"
+  },
+  {
+   "zone": "세포군(북)",
+   "unit": "대곡리",
+   "point": "127.366, 38.670",
+   "historic_county": "평강군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 평강군 세포면"
+  },
+  {
+   "zone": "세포군(북)",
+   "unit": "대문리",
+   "point": "127.143, 38.663",
+   "historic_county": "평강군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 평강군 유진면 대문리"
+  },
+  {
+   "zone": "세포군(북)",
+   "unit": "백산리",
+   "point": "127.315, 38.617",
+   "historic_county": "평강군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 평강군 세포면 근남리"
+  },
+  {
+   "zone": "세포군(북)",
+   "unit": "서하리",
+   "point": "127.247, 38.617",
+   "historic_county": "평강군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 평강군 세포면 서하리"
+  },
+  {
+   "zone": "세포군(북)",
+   "unit": "성평리",
+   "point": "127.278, 38.788",
+   "historic_county": "평강군",
+   "historic_province": "강원도",
+   "confidence": "medium",
+   "note": "옛 평강군 세포면 북평리 일대. 북동부에 안변군 신고산면(삼방) 일부 가능"
+  },
+  {
+   "zone": "세포군(북)",
+   "unit": "원남리",
+   "point": "127.298, 38.538",
+   "historic_county": "평강군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 평강군 세포면 원남리"
+  },
+  {
+   "zone": "세포군(북)",
+   "unit": "현리",
+   "point": "127.500, 38.644",
+   "historic_county": "회양군",
+   "historic_province": "강원도",
+   "confidence": "medium",
+   "note": "옛 회양군 란곡면 현리·직포리 일대"
+  },
+  {
+   "zone": "양구군(남)",
+   "unit": "국토정중앙면",
+   "point": "128.049, 38.095",
+   "historic_county": "양구군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1945 38선 이북→1954 수복. 옛 남면"
+  },
+  {
+   "zone": "양구군(남)",
+   "unit": "동면",
+   "point": "128.057, 38.239",
+   "historic_county": "양구군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1945 38선 이북→1954 수복"
+  },
+  {
+   "zone": "양구군(남)",
+   "unit": "방산면",
+   "point": "127.937, 38.237",
+   "historic_county": "양구군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1945 38선 이북→1954 수복"
+  },
+  {
+   "zone": "양구군(남)",
+   "unit": "양구읍",
+   "point": "127.949, 38.107",
+   "historic_county": "양구군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1945 38선 이북→1954 수복"
+  },
+  {
+   "zone": "양구군(남)",
+   "unit": "해안면",
+   "point": "128.123, 38.286",
+   "historic_county": "양구군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1945 38선 이북→1954 수복. 1954~1973 인제군 소속 후 양구로 환원"
+  },
+  {
+   "zone": "연안군(북)",
+   "unit": "개안리",
+   "point": "126.190, 37.917",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 연안면·호동면"
+  },
+  {
+   "zone": "연안군(북)",
+   "unit": "도남리",
+   "point": "126.033, 37.954",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 괘궁면"
+  },
+  {
+   "zone": "연안군(북)",
+   "unit": "룡호리",
+   "point": "126.150, 37.933",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 봉북면"
+  },
+  {
+   "zone": "연안군(북)",
+   "unit": "발산리",
+   "point": "125.995, 37.881",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 룡도면"
+  },
+  {
+   "zone": "연안군(북)",
+   "unit": "부흥리",
+   "point": "126.031, 37.871",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 해룡면"
+  },
+  {
+   "zone": "연안군(북)",
+   "unit": "소아리",
+   "point": "126.107, 37.945",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 봉서면"
+  },
+  {
+   "zone": "연안군(북)",
+   "unit": "송야리",
+   "point": "126.163, 37.854",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 호남면"
+  },
+  {
+   "zone": "연안군(북)",
+   "unit": "창덕리",
+   "point": "126.070, 38.038",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 괘궁·목단면"
+  },
+  {
+   "zone": "연안군(북)",
+   "unit": "청화리",
+   "point": "126.083, 37.875",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 송봉면"
+  },
+  {
+   "zone": "연안군(북)",
+   "unit": "해남리",
+   "point": "126.130, 37.779",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 해성면"
+  },
+  {
+   "zone": "연안군(북)",
+   "unit": "화양리",
+   "point": "126.100, 37.818",
+   "historic_county": "연백군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 연백군 해성면"
+  },
+  {
+   "zone": "연천군(남)",
+   "unit": "군남면",
+   "point": "127.039, 38.070",
+   "historic_county": "연천군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "연천군(남)",
+   "unit": "미산면",
+   "point": "126.974, 38.033",
+   "historic_county": "연천군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "1914 마전군→연천군"
+  },
+  {
+   "zone": "연천군(남)",
+   "unit": "백학면",
+   "point": "126.890, 38.032",
+   "historic_county": "연천군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "1914 마전군→연천군. 1954 장단군 대강·장도면 수복지구 일부 편입"
+  },
+  {
+   "zone": "연천군(남)",
+   "unit": "신서면",
+   "point": "127.108, 38.203",
+   "historic_county": "철원군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1963.1.1 강원도 철원군 신서면→경기도 연천군"
+  },
+  {
+   "zone": "연천군(남)",
+   "unit": "연천읍",
+   "point": "127.104, 38.114",
+   "historic_county": "연천군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "연천군(남)",
+   "unit": "왕징면",
+   "point": "126.935, 38.096",
+   "historic_county": "연천군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "1914 마전군→연천군. 장단군 강상면·연천 서남면 수복지구 일부 포함"
+  },
+  {
+   "zone": "연천군(남)",
+   "unit": "장남면",
+   "point": "126.856, 37.996",
+   "historic_county": "장단군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "1963.1.1 장단군 장남면→연천군(백학면 병합 후 1989 장남면 복원)"
+  },
+  {
+   "zone": "연천군(남)",
+   "unit": "전곡읍",
+   "point": "127.032, 37.995",
+   "historic_county": "연천군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "1945.11~1954 파주군 소속"
+  },
+  {
+   "zone": "연천군(남)",
+   "unit": "중면",
+   "point": "127.012, 38.169",
+   "historic_county": "연천군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "1954 연천 삭녕면 수복지구(도연·어적산·적음리) 편입"
+  },
+  {
+   "zone": "연천군(남)",
+   "unit": "청산면",
+   "point": "127.112, 38.016",
+   "historic_county": "포천군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "1914~1983 포천군 청산면, 1983.2.15 연천군 편입"
+  },
+  {
+   "zone": "옹진군(남)",
+   "unit": "대청면",
+   "point": "124.700, 37.824",
+   "historic_county": "장연군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "1974 이전 백령면 일부. 1945.8 황해도 장연군, 1945.11 옹진군 편입"
+  },
+  {
+   "zone": "옹진군(남)",
+   "unit": "덕적면",
+   "point": "126.126, 37.235",
+   "historic_county": "부천군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "1914~1973 경기도 부천군"
+  },
+  {
+   "zone": "옹진군(남)",
+   "unit": "백령면",
+   "point": "124.670, 37.949",
+   "historic_county": "장연군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "1945.8 황해도 장연군 백령면, 1945.11.3 옹진군 편입"
+  },
+  {
+   "zone": "옹진군(남)",
+   "unit": "북도면",
+   "point": "126.451, 37.528",
+   "historic_county": "부천군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "1914~1973 경기도 부천군(신도·시도·모도)"
+  },
+  {
+   "zone": "옹진군(남)",
+   "unit": "연평면",
+   "point": "125.697, 37.665",
+   "historic_county": "벽성군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "1945.8 황해도 벽성군 송림면, 1945.11.4 옹진군 편입"
+  },
+  {
+   "zone": "옹진군(남)",
+   "unit": "영흥면",
+   "point": "126.461, 37.256",
+   "historic_county": "부천군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "1914~1973 경기도 부천군"
+  },
+  {
+   "zone": "옹진군(남)",
+   "unit": "자월면",
+   "point": "126.306, 37.258",
+   "historic_county": "부천군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 부천군 영흥면 일부(1983 분리)"
+  },
+  {
+   "zone": "옹진군(북)",
+   "unit": "구곡로동자구",
+   "point": "125.300, 37.927",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 옹진군 북면"
+  },
+  {
+   "zone": "옹진군(북)",
+   "unit": "만진리",
+   "point": "125.229, 37.937",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 옹진군 서면"
+  },
+  {
+   "zone": "옹진군(북)",
+   "unit": "사곳로동자구",
+   "point": "125.333, 37.855",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 옹진군 동남면 사곶리"
+  },
+  {
+   "zone": "옹진군(북)",
+   "unit": "삼산리",
+   "point": "125.237, 37.992",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 옹진군 북면"
+  },
+  {
+   "zone": "옹진군(북)",
+   "unit": "송월리",
+   "point": "125.143, 37.996",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 옹진군 교정면"
+  },
+  {
+   "zone": "옹진군(북)",
+   "unit": "옹진군",
+   "point": "125.274, 37.833",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 옹진군 동남면"
+  },
+  {
+   "zone": "옹진군(북)",
+   "unit": "옹진읍",
+   "point": "125.361, 37.930",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 옹진군 옹진면"
+  },
+  {
+   "zone": "옹진군(북)",
+   "unit": "원사리",
+   "point": "125.424, 37.957",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "medium",
+   "note": "옛 옹진군 옹진·흥미면 일대"
+  },
+  {
+   "zone": "옹진군(북)",
+   "unit": "은동리",
+   "point": "125.359, 37.982",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "medium",
+   "note": "옛 옹진군 옹진·북면 일대"
+  },
+  {
+   "zone": "옹진군(북)",
+   "unit": "장송리",
+   "point": "125.406, 37.876",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 옹진군 동남면"
+  },
+  {
+   "zone": "옹진군(북)",
+   "unit": "전산리",
+   "point": "125.158, 37.921",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 옹진군 서면"
+  },
+  {
+   "zone": "옹진군(북)",
+   "unit": "제작리",
+   "point": "125.063, 37.931",
+   "historic_county": "옹진군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 옹진군 룡천면"
+  },
+  {
+   "zone": "이천군(북)",
+   "unit": "건설리",
+   "point": "126.985, 38.491",
+   "historic_county": "이천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "강원도 이천군(伊川) 이천·학봉·서·산내면 일대"
+  },
+  {
+   "zone": "이천군(북)",
+   "unit": "룡각리",
+   "point": "126.840, 38.427",
+   "historic_county": "이천군",
+   "historic_province": "강원도",
+   "confidence": "medium",
+   "note": "강원도 이천군(伊川) 이천·학봉·서·산내면 일대 (서면·안협면 경계부)"
+  },
+  {
+   "zone": "이천군(북)",
+   "unit": "이천읍",
+   "point": "126.887, 38.505",
+   "historic_county": "이천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "강원도 이천군(伊川) 이천·학봉·서·산내면 일대"
+  },
+  {
+   "zone": "이천군(북)",
+   "unit": "장동리",
+   "point": "126.807, 38.587",
+   "historic_county": "이천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "강원도 이천군(伊川) 이천·학봉·서·산내면 일대"
+  },
+  {
+   "zone": "이천군(북)",
+   "unit": "하안리",
+   "point": "126.950, 38.544",
+   "historic_county": "이천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "강원도 이천군(伊川) 이천·학봉·서·산내면 일대"
+  },
+  {
+   "zone": "이천군(북)",
+   "unit": "학봉리",
+   "point": "126.771, 38.514",
+   "historic_county": "이천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "강원도 이천군(伊川) 이천·학봉·서·산내면 일대"
+  },
+  {
+   "zone": "인제군(남)",
+   "unit": "기린면",
+   "point": "128.344, 37.961",
+   "historic_county": "인제군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1945 대부분 38선 이북→1954 수복 (남부 일부는 1945~54 홍천군)"
+  },
+  {
+   "zone": "인제군(남)",
+   "unit": "남면",
+   "point": "128.105, 37.998",
+   "historic_county": "인제군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1945 대부분 38선 이북→1954 수복 (남부 일부는 1945~54 홍천군)"
+  },
+  {
+   "zone": "인제군(남)",
+   "unit": "북면",
+   "point": "128.278, 38.177",
+   "historic_county": "인제군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1945 대부분 38선 이북→1954 수복"
+  },
+  {
+   "zone": "인제군(남)",
+   "unit": "상남면",
+   "point": "128.294, 37.881",
+   "historic_county": "인제군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1983 기린면 상남·하남·미산리 + 남면 김부리로 신설. 미산리는 1973 이전 홍천군 내면"
+  },
+  {
+   "zone": "인제군(남)",
+   "unit": "서화면",
+   "point": "128.239, 38.277",
+   "historic_county": "인제군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1945 대부분 38선 이북→1954 수복"
+  },
+  {
+   "zone": "인제군(남)",
+   "unit": "인제읍",
+   "point": "128.261, 38.084",
+   "historic_county": "인제군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1945 대부분 38선 이북→1954 수복"
+  },
+  {
+   "zone": "장풍군(북)",
+   "unit": "귀존리",
+   "point": "126.897, 38.179",
+   "historic_county": "연천군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 연천군 서남면 귀존리(1953 철원군→1961 장풍군)"
+  },
+  {
+   "zone": "장풍군(북)",
+   "unit": "동막동",
+   "point": "126.807, 38.171",
+   "historic_county": "장단군",
+   "historic_province": "경기도",
+   "confidence": "low",
+   "note": "위치상 옛 장단군 강상면 북부로 추정. 연천군 서남면 일부 가능"
+  },
+  {
+   "zone": "장풍군(북)",
+   "unit": "림진리",
+   "point": "126.811, 38.089",
+   "historic_county": "장단군",
+   "historic_province": "경기도",
+   "confidence": "medium",
+   "note": "옛 장단군 대강면(림강·라부리) 일대로 추정"
+  },
+  {
+   "zone": "장풍군(북)",
+   "unit": "석촌리",
+   "point": "126.688, 38.171",
+   "historic_county": "장단군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 장단군 대남면 석촌리"
+  },
+  {
+   "zone": "장풍군(북)",
+   "unit": "십탄리",
+   "point": "126.757, 38.061",
+   "historic_county": "장단군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 장단군 소남면 두곡·지금리"
+  },
+  {
+   "zone": "장풍군(북)",
+   "unit": "장풍읍",
+   "point": "126.674, 38.084",
+   "historic_county": "장단군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 장단군 소남면 유덕·홍화리"
+  },
+  {
+   "zone": "창도군(북)",
+   "unit": "당산리",
+   "point": "127.845, 38.593",
+   "historic_county": "김화군",
+   "historic_province": "강원도",
+   "confidence": "medium",
+   "note": "옛 김화군 통구면 당평·보막·삼태리. 동부에 회양군 사동면 일부 포함 가능"
+  },
+  {
+   "zone": "창도군(북)",
+   "unit": "대백리",
+   "point": "127.666, 38.565",
+   "historic_county": "김화군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 김화군 창도면 대백리"
+  },
+  {
+   "zone": "창도군(북)",
+   "unit": "명우리",
+   "point": "127.773, 38.776",
+   "historic_county": "회양군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 회양군 안풍면 명우리(1987 회양→창도)"
+  },
+  {
+   "zone": "창도군(북)",
+   "unit": "창도읍",
+   "point": "127.743, 38.661",
+   "historic_county": "김화군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 김화군 창도면 창도·유창리"
+  },
+  {
+   "zone": "철원군(남)",
+   "unit": "갈말읍",
+   "point": "127.315, 38.212",
+   "historic_county": "철원군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "철원군(남)",
+   "unit": "근남면",
+   "point": "127.501, 38.230",
+   "historic_county": "김화군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1963.1.1 김화군→철원군"
+  },
+  {
+   "zone": "철원군(남)",
+   "unit": "근북면",
+   "point": "127.403, 38.314",
+   "historic_county": "김화군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 김화군 근북면 남부(유곡·금곡·백덕·율목리)"
+  },
+  {
+   "zone": "철원군(남)",
+   "unit": "김화읍",
+   "point": "127.393, 38.262",
+   "historic_county": "김화군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 김화군 김화읍(군청 소재지). 1973 서면 청양·도창리 편입"
+  },
+  {
+   "zone": "철원군(남)",
+   "unit": "동송읍",
+   "point": "127.236, 38.235",
+   "historic_county": "철원군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "철원군(남)",
+   "unit": "서면",
+   "point": "127.429, 38.187",
+   "historic_county": "김화군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 김화군 서면"
+  },
+  {
+   "zone": "철원군(남)",
+   "unit": "철원읍",
+   "point": "127.162, 38.259",
+   "historic_county": "철원군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 철원군 철원읍(군청 소재지)"
+  },
+  {
+   "zone": "철원군(북)",
+   "unit": "내문리",
+   "point": "127.066, 38.337",
+   "historic_county": "철원군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 철원군 내문면"
+  },
+  {
+   "zone": "철원군(북)",
+   "unit": "대전리",
+   "point": "126.986, 38.343",
+   "historic_county": "철원군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 철원군 마장면 대전리"
+  },
+  {
+   "zone": "철원군(북)",
+   "unit": "보막리",
+   "point": "127.144, 38.351",
+   "historic_county": "철원군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 철원군 북면 보막리"
+  },
+  {
+   "zone": "철원군(북)",
+   "unit": "적동리",
+   "point": "126.926, 38.225",
+   "historic_county": "연천군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 연천군 삭녕면 적동산·도연·대사리(1952 철원군 편입)"
+  },
+  {
+   "zone": "철원군(북)",
+   "unit": "중강리",
+   "point": "127.222, 38.354",
+   "historic_county": "철원군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 철원군 어운면 중강리"
+  },
+  {
+   "zone": "철원군(북)",
+   "unit": "철원읍",
+   "point": "126.891, 38.350",
+   "historic_county": "이천군",
+   "historic_province": "강원도",
+   "confidence": "medium",
+   "note": "북한 철원읍=옛 이천군 안협면 읍내리(1961 개편). 연천 삭녕면 북부(상마산·여척리)·철원 마장면 일부 혼재 가능"
+  },
+  {
+   "zone": "청단군(북)",
+   "unit": "금양로동자구",
+   "point": "125.848, 37.978",
+   "historic_county": "벽성군",
+   "historic_province": "황해도",
+   "confidence": "medium",
+   "note": "청단군 전역이 1945.8 벽성군(영천·동운·금산·내성·청룡·일신·추화면). 위치상 영천·내성면 일대"
+  },
+  {
+   "zone": "청단군(북)",
+   "unit": "남촌리",
+   "point": "125.904, 37.880",
+   "historic_county": "벽성군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 벽성군 일신면 (내성·청룡·일신·추화면은 1945.11 연백군 편입 전 벽성군)"
+  },
+  {
+   "zone": "청단군(북)",
+   "unit": "마룡리",
+   "point": "125.936, 37.940",
+   "historic_county": "벽성군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 벽성군 추화면 마룡리 (내성·청룡·일신·추화면은 1945.11 연백군 편입 전 벽성군)"
+  },
+  {
+   "zone": "청단군(북)",
+   "unit": "삼정리",
+   "point": "125.945, 38.077",
+   "historic_county": "벽성군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 벽성군 동운면 (내성·청룡·일신·추화면은 1945.11 연백군 편입 전 벽성군)"
+  },
+  {
+   "zone": "청단군(북)",
+   "unit": "신생리",
+   "point": "125.882, 37.908",
+   "historic_county": "벽성군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 벽성군 일신면 (내성·청룡·일신·추화면은 1945.11 연백군 편입 전 벽성군)"
+  },
+  {
+   "zone": "청단군(북)",
+   "unit": "신풍리",
+   "point": "125.937, 37.834",
+   "historic_county": "벽성군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 벽성군 청룡·일신면 일대 (내성·청룡·일신·추화면은 1945.11 연백군 편입 전 벽성군)"
+  },
+  {
+   "zone": "청단군(북)",
+   "unit": "운곡리",
+   "point": "125.975, 38.107",
+   "historic_county": "벽성군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 벽성군 동운면 (내성·청룡·일신·추화면은 1945.11 연백군 편입 전 벽성군)"
+  },
+  {
+   "zone": "청단군(북)",
+   "unit": "청정리",
+   "point": "125.987, 37.967",
+   "historic_county": "벽성군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 벽성군 추화·내성면 일대 (내성·청룡·일신·추화면은 1945.11 연백군 편입 전 벽성군)"
+  },
+  {
+   "zone": "청단군(북)",
+   "unit": "칠봉리",
+   "point": "125.877, 38.075",
+   "historic_county": "벽성군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 벽성군 금산면 (내성·청룡·일신·추화면은 1945.11 연백군 편입 전 벽성군)"
+  },
+  {
+   "zone": "청단군(북)",
+   "unit": "화양리",
+   "point": "125.930, 37.995",
+   "historic_county": "벽성군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 벽성군 추화면 (내성·청룡·일신·추화면은 1945.11 연백군 편입 전 벽성군)"
+  },
+  {
+   "zone": "토산군(북)",
+   "unit": "룡암리",
+   "point": "126.804, 38.249",
+   "historic_county": "금천군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 금천군 토산면"
+  },
+  {
+   "zone": "토산군(북)",
+   "unit": "석봉리",
+   "point": "126.643, 38.283",
+   "historic_county": "금천군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 금천군 구이면"
+  },
+  {
+   "zone": "토산군(북)",
+   "unit": "하남리",
+   "point": "126.740, 38.374",
+   "historic_county": "금천군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 금천군 서천면"
+  },
+  {
+   "zone": "토산군(북)",
+   "unit": "합탄리",
+   "point": "126.707, 38.277",
+   "historic_county": "금천군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 금천군 합탄면"
+  },
+  {
+   "zone": "토산군(북)",
+   "unit": "황강리",
+   "point": "126.809, 38.315",
+   "historic_county": "금천군",
+   "historic_province": "황해도",
+   "confidence": "high",
+   "note": "옛 금천군 외류면"
+  },
+  {
+   "zone": "통천군(북)",
+   "unit": "계곡",
+   "point": "127.923, 38.867",
+   "historic_county": "통천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 통천군(1914 흡곡군 병합)"
+  },
+  {
+   "zone": "통천군(북)",
+   "unit": "구읍",
+   "point": "127.825, 38.996",
+   "historic_county": "통천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 통천군(1914 흡곡군 병합)"
+  },
+  {
+   "zone": "통천군(북)",
+   "unit": "모래골",
+   "point": "127.808, 38.927",
+   "historic_county": "통천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 통천군(1914 흡곡군 병합)"
+  },
+  {
+   "zone": "통천군(북)",
+   "unit": "미평리",
+   "point": "127.881, 38.945",
+   "historic_county": "통천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 통천군(1914 흡곡군 병합)"
+  },
+  {
+   "zone": "통천군(북)",
+   "unit": "서흥",
+   "point": "127.665, 39.069",
+   "historic_county": "통천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 통천군(1914 흡곡군 병합)"
+  },
+  {
+   "zone": "통천군(북)",
+   "unit": "원평",
+   "point": "127.717, 38.971",
+   "historic_county": "통천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 통천군(1914 흡곡군 병합)"
+  },
+  {
+   "zone": "통천군(북)",
+   "unit": "자산",
+   "point": "127.750, 39.090",
+   "historic_county": "통천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 통천군(1914 흡곡군 병합)"
+  },
+  {
+   "zone": "통천군(북)",
+   "unit": "중천리",
+   "point": "127.855, 38.822",
+   "historic_county": "통천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 통천군(1914 흡곡군 병합)"
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "광탄면",
+   "point": "126.889, 37.772",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "교하동",
+   "point": "126.694, 37.728",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "금촌1동",
+   "point": "126.782, 37.760",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "금촌2동",
+   "point": "126.774, 37.753",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "금촌3동",
+   "point": "126.749, 37.780",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "문산읍",
+   "point": "126.778, 37.873",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "법원읍",
+   "point": "126.896, 37.871",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "운정1동",
+   "point": "126.760, 37.730",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "운정2동",
+   "point": "126.741, 37.727",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "운정3동",
+   "point": "126.746, 37.711",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "운정4동",
+   "point": "126.780, 37.725",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "운정5동",
+   "point": "126.719, 37.732",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "운정6동",
+   "point": "126.728, 37.720",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "월롱면",
+   "point": "126.779, 37.800",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "장단면",
+   "point": "126.731, 37.915",
+   "historic_county": "장단군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 장단군 장단면·군내면·진동면·진서면 남부(1963/1972 파주 편입)"
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "적성면",
+   "point": "126.925, 37.947",
+   "historic_county": "연천군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "1914 적성군→연천군 적성면, 1945.11 파주군 편입(미환원)"
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "조리읍",
+   "point": "126.827, 37.751",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "탄현면",
+   "point": "126.705, 37.800",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "파주읍",
+   "point": "126.819, 37.829",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "파주시(남)",
+   "unit": "파평면",
+   "point": "126.853, 37.914",
+   "historic_county": "파주군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": ""
+  },
+  {
+   "zone": "판문구역(북)",
+   "unit": "덕수리",
+   "point": "126.614, 37.858",
+   "historic_county": "개풍군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 개풍군 중면 덕수·송산리"
+  },
+  {
+   "zone": "판문구역(북)",
+   "unit": "동내리",
+   "point": "126.643, 37.902",
+   "historic_county": "개풍군",
+   "historic_province": "경기도",
+   "confidence": "medium",
+   "note": "옛 개풍군 봉동·상도면 일대로 추정"
+  },
+  {
+   "zone": "판문구역(북)",
+   "unit": "봉동리",
+   "point": "126.598, 37.941",
+   "historic_county": "개풍군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 개풍군 봉동면"
+  },
+  {
+   "zone": "판문구역(북)",
+   "unit": "선적리",
+   "point": "126.682, 38.005",
+   "historic_county": "장단군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 장단군 진서면 눌목·선적리"
+  },
+  {
+   "zone": "판문구역(북)",
+   "unit": "전재리",
+   "point": "126.646, 37.971",
+   "historic_county": "장단군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 장단군 진서면 전재·대원리"
+  },
+  {
+   "zone": "판문구역(북)",
+   "unit": "채련리",
+   "point": "126.579, 37.814",
+   "historic_county": "개풍군",
+   "historic_province": "경기도",
+   "confidence": "high",
+   "note": "옛 개풍군 림한면 채련리"
+  },
+  {
+   "zone": "평강군(북)",
+   "unit": "남양리",
+   "point": "127.231, 38.425",
+   "historic_county": "평강군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 평강군 평강면 남양리"
+  },
+  {
+   "zone": "평강군(북)",
+   "unit": "문봉리",
+   "point": "127.131, 38.444",
+   "historic_county": "평강군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 평강군 서면 문봉리"
+  },
+  {
+   "zone": "평강군(북)",
+   "unit": "상원리",
+   "point": "127.373, 38.503",
+   "historic_county": "평강군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 평강군 현내면 상원리"
+  },
+  {
+   "zone": "평강군(북)",
+   "unit": "송포리",
+   "point": "127.215, 38.523",
+   "historic_county": "평강군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 평강군 현내면 송포리"
+  },
+  {
+   "zone": "평강군(북)",
+   "unit": "장촌로동자구",
+   "point": "127.081, 38.494",
+   "historic_county": "평강군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 평강군 목전면 장촌리"
+  },
+  {
+   "zone": "평강군(북)",
+   "unit": "천암리",
+   "point": "127.346, 38.379",
+   "historic_county": "평강군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 평강군 남면 천마·지암리"
+  },
+  {
+   "zone": "평강군(북)",
+   "unit": "청룡산리",
+   "point": "127.129, 38.571",
+   "historic_county": "평강군",
+   "historic_province": "강원도",
+   "confidence": "medium",
+   "note": "옛 평강군 목전·서면 북부 일대"
+  },
+  {
+   "zone": "평강군(북)",
+   "unit": "평강읍",
+   "point": "127.283, 38.409",
+   "historic_county": "평강군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 평강군 평강면"
+  },
+  {
+   "zone": "화천군(남)",
+   "unit": "간동면",
+   "point": "127.830, 38.061",
+   "historic_county": "화천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1945 38선 이북→1954 수복"
+  },
+  {
+   "zone": "화천군(남)",
+   "unit": "사내면",
+   "point": "127.506, 38.077",
+   "historic_county": "화천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1945 38선 이북→1954 수복"
+  },
+  {
+   "zone": "화천군(남)",
+   "unit": "상서면",
+   "point": "127.627, 38.228",
+   "historic_county": "화천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1945 38선 이북→1954 수복"
+  },
+  {
+   "zone": "화천군(남)",
+   "unit": "하남면",
+   "point": "127.667, 38.079",
+   "historic_county": "화천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1945 38선 이북→1954 수복"
+  },
+  {
+   "zone": "화천군(남)",
+   "unit": "화천읍",
+   "point": "127.780, 38.219",
+   "historic_county": "화천군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "1945 38선 이북→1954 수복"
+  },
+  {
+   "zone": "회양군(북)",
+   "unit": "금선리",
+   "point": "127.500, 38.761",
+   "historic_county": "회양군",
+   "historic_province": "강원도",
+   "confidence": "medium",
+   "note": "옛 회양군 란곡면 일대로 추정"
+  },
+  {
+   "zone": "회양군(북)",
+   "unit": "기정리",
+   "point": "127.606, 38.813",
+   "historic_county": "회양군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 회양군 상북면"
+  },
+  {
+   "zone": "회양군(북)",
+   "unit": "신명리",
+   "point": "127.696, 38.828",
+   "historic_county": "회양군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 회양군 상북면 신명리"
+  },
+  {
+   "zone": "회양군(북)",
+   "unit": "회양읍",
+   "point": "127.612, 38.694",
+   "historic_county": "회양군",
+   "historic_province": "강원도",
+   "confidence": "high",
+   "note": "옛 회양군 회양면 읍내리"
+  }
+ ],
+ "counties": [
+  {
+   "name": "장단군",
+   "province_1945": "경기도",
+   "seat": "장단면 (도라산리 일대, 위키백과 기준)",
+   "disappeared": "1945년 38선으로 북부 5개 면(강상·대강·대남·소남·장도)이 장풍군(황해도)에 편입. 남측은 1963년 군내면→파주, 장남면→연천, 1972년 장단·진동·진서면 남부→파주군 편입으로 폐지. 북측 진서면 일부는 1952년 판문군",
+   "restorable": true,
+   "summary": "임진강 북쪽의 경기도 군으로, 분단과 전쟁 뒤 남은 땅은 파주·연천에, 북쪽은 장풍군·판문군에 나뉘어 사라졌다. 장단콩과 도라산이 이름을 잇고 있다."
+  },
+  {
+   "name": "김화군",
+   "province_1945": "강원도",
+   "seat": "김화읍 읍내리",
+   "disappeared": "전쟁 후 군사분계선이 군 중앙을 가로지름. 남측은 1963.1.1 철원군에 통합(김화읍·서면·근남면 전체, 근북·근동·원남·원동·임남면 일부). 북측은 1952년 폐지되어 창도군 등으로 나뉜 뒤 1954년 김화군 재설치",
+   "restorable": true,
+   "summary": "금성천과 남대천 유역의 강원도 군으로, 휴전선이 군을 반으로 갈라 남쪽은 철원군에 흡수되었다. 북쪽에는 같은 이름의 김화군이 남아 있다."
+  },
+  {
+   "name": "개풍군",
+   "province_1945": "경기도",
+   "seat": "개성부 용산동 (군청이 개성부 안에 있었음)",
+   "disappeared": "1945년 38선 이북 영남·영북·북면은 장풍·금천군으로. 전쟁 후 전역이 북측. 1952년 개풍군·판문군으로 분할, 2005년 개성시 편입, 2020년 개풍구역·판문구역",
+   "restorable": true,
+   "summary": "개성을 둘러싼 경기도 군으로, 고려 왕릉과 판문점이 있다. 분단 뒤 개성시의 개풍구역·판문구역으로 나뉘었다."
+  },
+  {
+   "name": "연백군",
+   "province_1945": "황해도",
+   "seat": "연안읍",
+   "disappeared": "1945년 38선으로 남부가 경기도 연백군이 됨. 전쟁 후 전역이 북측, 1952년 연안군·배천군으로 분할(일부 평천군)",
+   "restorable": true,
+   "summary": "연백평야를 품은 황해도 곡창 지대로, 연안과 배천 두 고을을 합친 군이었다. 분단 뒤 연안군과 배천군으로 갈라졌다."
+  },
+  {
+   "name": "철원군",
+   "province_1945": "강원도",
+   "seat": "철원읍",
+   "disappeared": "군사분계선으로 분할. 북측은 1952년 북면·어운·내문·인목·마장면에 이천군 안협·동면, 연천군 삭녕·서남면을 합쳐 북한 철원군 구성. 남측은 1963년 김화군 흡수, 신서면을 연천군에 이관",
+   "restorable": true,
+   "summary": "철원평야와 궁예도성이 있는 강원도 군. 남북 모두 철원군이 있지만 각각 다른 군의 땅이 섞여 있다."
+  },
+  {
+   "name": "연천군",
+   "province_1945": "경기도",
+   "seat": "연천면 (현 연천읍)",
+   "disappeared": "북부 삭녕면·서남면이 군사분계선 이북으로 1952년 북한 철원군(서남면 일부는 1961 장풍군)에 편입. 적성면은 1945년 파주로. 남측은 1963년 신서면·장남면, 1983년 청산면을 편입",
+   "restorable": true,
+   "summary": "임진강과 한탄강이 만나는 경기도 북단의 군. 옛 삭녕 땅은 지금 북한 철원군에 들어가 있다."
+  },
+  {
+   "name": "고성군(강원)",
+   "province_1945": "강원도",
+   "seat": "고성면 (현 북측 고성군 구읍리 일대)",
+   "disappeared": "군사분계선으로 분할. 북측 고성군(1952 통천군 임남면 추가), 남측은 옛 간성 지역(간성·거진·현내·죽왕·토성)",
+   "restorable": true,
+   "summary": "외금강과 해금강을 품은 동해안 군. 남북 모두 고성군이 있으며, 군청이 있던 옛 고성읍은 북측에 있다."
+  },
+  {
+   "name": "양구군",
+   "province_1945": "강원도",
+   "seat": "양구면 (현 양구읍)",
+   "disappeared": "수입면 북부가 군사분계선 이북으로 1952년 금강군·창도군에 편입",
+   "restorable": true,
+   "summary": "펀치볼로 알려진 강원도 산간 군. 북쪽 수입면 일부가 휴전선 너머 금강군에 들어갔다."
+  },
+  {
+   "name": "인제군",
+   "province_1945": "강원도",
+   "seat": "인제면 (현 인제읍)",
+   "disappeared": "서화면 북부(이포리 일대)가 군사분계선 이북으로 1952년 금강군에 편입",
+   "restorable": true,
+   "summary": "설악산 서쪽의 강원도 군. 서화면 북쪽 일부가 미수복 지역으로 금강군에 속해 있다."
+  },
+  {
+   "name": "벽성군",
+   "province_1945": "황해도",
+   "seat": "해주 인근 (1938 해주군→벽성군)",
+   "disappeared": "1945년 38선 이남 동부 면들이 연백·옹진군에 편입되었고 1952년 청단군·강령군 동부가 됨. 연평도는 1945.11 옹진군으로. 군사분계선으로 갈린 군은 아님",
+   "restorable": false,
+   "summary": "해주를 둘러싼 황해도 군. 이 지도 범위에서는 청단군 전역과 강령군 동부, 연평도가 옛 벽성군 땅이다."
+  },
+  {
+   "name": "옹진군(황해도)",
+   "province_1945": "황해도",
+   "seat": "옹진면 온천리 (현 옹진읍)",
+   "disappeared": "1945년 38선 이남으로 경기도 편입. 전쟁 후 본토는 북측, 1952년 옹진군·강령군으로 분할. 남측 백령·대청도는 1945.8 장연군, 연평도는 벽성군 소속이었음",
+   "restorable": false,
+   "summary": "옹진반도의 황해도 군. 북측 옹진군과 강령군 서부가 옛 영역이며, 남측 섬들은 1945년 8월에는 옹진군이 아니었다."
+  }
+ ],
+ "sources": [
+  "https://ko.wikipedia.org/wiki/장단군",
+  "https://ko.wikipedia.org/wiki/연천군",
+  "https://ko.wikipedia.org/wiki/청산면_(연천군)",
+  "https://ko.wikipedia.org/wiki/포천시",
+  "https://ko.wikipedia.org/wiki/창도군",
+  "https://ko.wikipedia.org/wiki/금강군",
+  "https://ko.wikipedia.org/wiki/토산군",
+  "https://ko.wikipedia.org/wiki/장풍군",
+  "https://ko.wikipedia.org/wiki/개풍군",
+  "https://ko.wikipedia.org/wiki/연백군",
+  "https://ko.wikipedia.org/wiki/백령면",
+  "https://ko.wikipedia.org/wiki/연평면",
+  "https://ko.wikipedia.org/wiki/인제군",
+  "https://wiki.onul.works/w/김화군_(대한민국)",
+  "https://namu.wiki/w/군면리 대폐합/개편현황",
+  "https://encykorea.aks.ac.kr/Article/E0048868",
+  "https://encykorea.aks.ac.kr/Article/E0048358",
+  "https://encykorea.aks.ac.kr/Article/E0059648"
+ ]
+}
