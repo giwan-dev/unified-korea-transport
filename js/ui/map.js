@@ -333,8 +333,10 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   // 큰 강·호수의 물 면 (OSM): 인구·지표 색칠 위에 그려 한강·낙동강·대동강 등이 보이게 한다
   map.addSource('waterarea', { type: 'geojson', data: 'data/base/waterarea.geojson' });
   map.addLayer({ id: 'water-area', type: 'fill', source: 'waterarea', paint: { 'fill-color': (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? PALETTE.dark : PALETTE.light).water, 'fill-opacity': 0.95 } }, below);
-  // 강·호수 물가선: 채움만 있으면 둘레의 땅 색과 섞여 강변이 흐릿하다
-  map.addLayer({ id: 'water-area-line', type: 'line', source: 'waterarea', minzoom: 8,
+  // 강·호수 물가선: 채움만 있으면 둘레의 땅 색과 섞여 강변이 흐릿하다.
+  // 물 면 둘레를 그대로 그으면 이어진 강·하천 조각 사이와 하구(바다와 맞닿은 곳)에도 선이 생기므로, 육지와 맞닿은 둘레만 따로 만든 선을 쓴다
+  map.addSource('waterline', { type: 'geojson', data: 'data/base/waterline.geojson' });
+  map.addLayer({ id: 'water-area-line', type: 'line', source: 'waterline', minzoom: 8,
     paint: { 'line-color': (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? '#4f86ad' : '#5b8fb5'), 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 0.6, 11, 1.1, 14, 1.8] } }, below);
 
   map.addSource('links', { type: 'geojson', data: linksFC, promoteId: 'id' });

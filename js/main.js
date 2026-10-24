@@ -21,6 +21,7 @@ import { kmBetween, routeKey } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
 import { helperPorts } from './sim/pool.js';
 import { smoothSegments, polylineKm, splineLine } from './game/curve.js';
+import { loadTerrain, terrainReady, terrainRoute, terrainProfile, terrainRule, terrainCostFactor } from './game/terrain.js';
 import { extendWorld, urbanLanes } from './game/world.js';
 import { autoLineName, cityStem, makeForeignTest } from './game/lines.js';
 import { saveSim, loadSim, clearSim } from './game/simstore.js';
@@ -898,6 +899,8 @@ function startDraft(type) {
   cancelDraft();
   select(null);
   draft = { type, points: [] };
+  // 지형 격자는 노선을 처음 그을 때 받는다 (받고 나면 공사비에 터널·교량이 들어가고 '지형 따라 선형 잡기'를 쓸 수 있다)
+  loadTerrain().then(() => { if (draft) renderBuild(); });
   map.getCanvas().style.cursor = 'crosshair';
   map.doubleClickZoom.disable();
   switchTab('build');
@@ -1149,24 +1152,56 @@ function drawDraft() {
   map.getSource('draft').setData({ type: 'FeatureCollection', features: f });
 }
 
+/** 찍은 역·IC(선형 점이 아닌 점) 사이마다 경사·물을 피하는 선형을 잡아 그 사이 선형 점을 바꾼다 */
+function terrainAlign() {
+  const rule = terrainRule(draft.type);
+  if (!rule || !terrainReady()) return;
+  const anchors = draft.points.filter((p) => !p.via);
+  const out = [];
+  let changed = 0;
+  anchors.forEach((p, k) => {
+    out.push(p);
+    const q = anchors[k + 1];
+    if (!q) return;
+    const via = terrainRoute([p.lon, p.lat], [q.lon, q.lat], rule);
+    if (!via) {
+      // 경로를 못 찾으면(너무 가깝거나 지형 밖) 원래 선형 점을 그대로 둔다
+      const i0 = draft.points.indexOf(p), i1 = draft.points.indexOf(q);
+      out.push(...draft.points.slice(i0 + 1, i1));
+      return;
+    }
+    changed++;
+    for (const [lon, lat] of via) out.push({ node: null, lon, lat, split: null, via: true });
+  });
+  draft.points = out;
+  drawDraft();
+  renderBuild();
+  if (!changed) alert('지형을 따를 구간이 없습니다 (점 사이가 3km보다 가깝거나 지형 자료 범위 밖).');
+}
+
 function draftCost() {
   const spec = NEW_BUILDS[draft.type];
   let km = 0, cost = 0, foreignKm = 0;
   const segs = smoothSegments(draftPoints());
   const segFactor = [];
+  const rule = terrainReady() ? terrainRule(draft.type) : null;
+  const terrain = { km: 0, tunnelKm: 0, bridgeKm: 0, seaKm: 0 };
   for (let i = 0; i + 1 < draft.points.length; i++) {
     const a = draft.points[i], b = draft.points[i + 1];
     const len = polylineKm(segs[i]) * 1.02;
     const kp = isKP(a.lat, a.lon) && isKP(b.lat, b.lon);
     const frac = segs[i].filter(([x, y]) => isForeign(x, y)).length / segs[i].length;
-    segFactor.push(1 - 0.5 * frac);
+    // 지형: 터널·깎기·교량 구간 비율만큼 단가가 바뀐다 (지형 격자를 받기 전이나 땅 밑 노선은 그대로)
+    const prof = rule ? terrainProfile(segs[i], rule) : null;
+    if (prof) for (const k of Object.keys(terrain)) terrain[k] += prof[k];
+    segFactor.push((1 - 0.5 * frac) * (prof ? terrainCostFactor(prof) : 1));
     foreignKm += len * frac;
     km += len; cost += spec.perKm * len * (kp ? KP_COST_FACTOR : 1) * segFactor[i];
   }
   const mids = draft.points.filter((p) => p.split != null).length;
   const rests = restPositions(segs).length;
   const extraCost = mids * (spec.mode === 0 ? MID_COST.road : MID_COST.rail) + rests * REST.cost;
-  return { km, cost: Math.round(cost) + extraCost, extraCost, mids, rests, years: spec.years, segFactor, foreignKm };
+  return { km, cost: Math.round(cost) + extraCost, extraCost, mids, rests, years: spec.years, segFactor, foreignKm, terrain: rule ? terrain : null };
 }
 
 /** 고속도로 휴게소 자리: 곡선을 따라 약 40km마다 (양 끝 20km 안쪽 제외) */
@@ -1536,7 +1571,8 @@ function renderBuild() {
       return;
     }
     const spec = NEW_BUILDS[draft.type];
-    const { km, cost, years, foreignKm } = draftCost();
+    const { km, cost, years, foreignKm, terrain } = draftCost();
+    const tRule = terrainRule(draft.type);
     // 철도 신설은 운영사 자체 재원으로도 지을 수 있다 (찍은 점 대부분이 북측이면 KPRail)
     const draftOp = spec.mode === 1 ? operatorOf(state, { mode: 1, kp: draft.points.filter((p) => isKP(p.lat, p.lon)).length * 2 > draft.points.length ? 1 : 0 }) : null;
     const draftFund = draftOp && state.rail.fund === 'op' ? draftOp : 'gov';
@@ -1556,6 +1592,7 @@ function renderBuild() {
         <tr><td>사업비</td><td>${formatWon(cost)}</td></tr>
         <tr><td>공사 기간 · 연 분담</td><td>${years}년 · ${formatWon(cost / years)}</td></tr>
         ${foreignKm > 0.5 ? `<tr><td>외국 구간 (상대국 절반 부담)</td><td>${foreignKm.toFixed(0)} km</td></tr>` : ''}
+        ${terrain && draft.points.length > 1 ? `<tr><td>지형 (어림)</td><td>터널·깎기 ${terrain.tunnelKm.toFixed(0)}km · 교량 ${(terrain.bridgeKm + terrain.seaKm).toFixed(1)}km</td></tr>` : ''}
         ${draftCost().mids ? `<tr><td>중간 ${spec.mode === 0 ? 'IC' : '역'} ${draftCost().mids}곳</td><td>${formatWon(draftCost().mids * (spec.mode === 0 ? MID_COST.road : MID_COST.rail))}</td></tr>` : ''}
         ${draftCost().rests ? `<tr><td>휴게소 ${draftCost().rests}곳 (약 ${REST.spacingKm}km마다)</td><td>${formatWon(draftCost().rests * REST.cost)}</td></tr>` : ''}
       </table>
@@ -1569,6 +1606,7 @@ function renderBuild() {
       <div class="actions">
         <button class="primary" id="draft-ok" ${draft.points.length < 2 || !affordable ? 'disabled' : ''}>착공</button>
         <button id="draft-prev" ${draft.points.length < 2 ? 'disabled' : ''}>효과 미리보기</button>
+        ${tRule ? `<button id="draft-terrain" ${draft.points.length < 2 || !terrainReady() ? 'disabled' : ''} title="찍은 역·IC 사이를 경사가 급한 산지와 강·바다를 덜 지나는 선형으로 다시 잡습니다">지형 따라 선형 잡기</button>` : ''}
         <button id="draft-cancel">취소</button>
       </div>`;
   }
@@ -1579,6 +1617,8 @@ function renderBuild() {
   if (draft) {
     $('#draft-ok').onclick = commitDraft;
     $('#draft-prev').onclick = previewDraft;
+    const tb = $('#draft-terrain');
+    if (tb) tb.onclick = terrainAlign;
     $('#snap-node').onchange = (e) => { snap.node = e.target.checked; };
     bindFund(el, renderBuild);
     bindPPP(el);

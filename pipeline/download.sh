@@ -14,3 +14,9 @@ curl -fSL -o HangJeongDong_ver20261001.geojson https://raw.githubusercontent.com
 NE=https://naciscdn.org/naturalearth/10m
 for f in cultural/ne_10m_admin_0_countries physical/ne_10m_rivers_lake_centerlines physical/ne_10m_lakes cultural/ne_10m_populated_places_simple; do curl -fSL -o $(basename $f).zip $NE/$f.zip; done
 curl -fSL -o gadm41_PRK_2.json.zip https://geodata.ucdavis.edu/gadm/gadm4.1/json/gadm41_PRK_2.json.zip
+# 표고: Copernicus DEM GLO-90 (약 90m, 1°×1° 타일, 바다만 있는 칸은 없다). build_terrain.py가 쓴다
+mkdir -p dem
+for lat in $(seq 33 42); do for lon in $(seq 124 130); do
+  t=Copernicus_DSM_COG_30_N${lat}_00_E${lon}_00_DEM
+  [ -s dem/$t.tif ] || curl -fsSL -o dem/$t.tif https://copernicus-dem-90m.s3.amazonaws.com/$t/$t.tif || rm -f dem/$t.tif
+done; done
