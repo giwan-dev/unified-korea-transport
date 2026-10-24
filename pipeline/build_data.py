@@ -71,8 +71,9 @@ CITY_CELLS = set()      # 도시 안인 바깥 격자 칸 (round(lon/GRID), roun
 CITY_ONLY_ROADS = {}   # 3차 도로(tertiary)까지 넣으면 계산망이 2.5배가 되어 해마다 계산이 너무 느려진다
 
 ROAD_CLASSES = ["motorway", "trunk", "primary", "secondary"]
-# 국도가 없어 지방도가 간선인 섬 (경도·위도 범위): 제주도, 울릉도
-ISLANDS_SECONDARY = [(126.1, 33.1, 127.0, 33.6), (130.75, 37.42, 130.95, 37.56)]
+# 국도가 없어 지방도가 간선인 섬 (경도·위도 범위): 제주도, 울릉도, 인천 옹진군의 섬(백령·대청·연평·덕적·자월)
+ISLANDS_SECONDARY = [(126.1, 33.1, 127.0, 33.6), (130.75, 37.42, 130.95, 37.56),
+                     (124.6, 37.78, 124.78, 38.0), (125.6, 37.62, 125.75, 37.7), (126.0, 37.15, 126.3, 37.3)]
 ROAD_LINKS = {"motorway_link": "motorway", "trunk_link": "trunk", "primary_link": "primary", "secondary_link": "secondary"}
 WGS84_KM = 111.32
 
@@ -701,7 +702,17 @@ def build_network(zones):
     stations += [(n, c) for n, c, _ in added]
     stations = merge_station_names(stations, {s[0] for s in ref["stations"]} if ref else set())
     junctions = dedupe_junctions(_snap_points([j for h in handlers.values() for j in h.junctions], road_cells, 1), edges)
-    metro_stations = _snap_points([s for h in handlers.values() for s in h.metro_stations], metro_cells, 1)
+    # 도시철도 칸마다 지나는 노선 (같은 칸을 지나는 다른 노선끼리 서로 끊지 않게 노드는 노선마다 따로 둔다)
+    mlines_at = defaultdict(set)
+    for k in edges:
+        if k[0] == "metro":
+            ln = k[3].split("@")[0]
+            mlines_at[k[1]].add(ln); mlines_at[k[2]].add(ln)
+    rail_pos = defaultdict(list)
+    for n, c in stations:
+        rail_pos[n].append(c)
+    metro_stations, metro_station_lines = _attach_metro_stations([s for h in handlers.values() for s in h.metro_stations],
+                                                                 mlines_at, ref_lines, canon, rail_pos)
     rail_station_cells = {c for _, c in stations}
     # 도시철도로 태그됐지만 일반철도 선로 위에만 있는 역(서해선·경의중앙선·경강선 등)은 일반철도 역으로도 쓴다.
     # 도시철도 선로 위의 역(시청·경복궁 등)은 그 밑을 지나는 대심도 철도(GTX)의 역으로 잡히지 않게 뺀다.
@@ -743,12 +754,7 @@ def build_network(zones):
     log("stations attached to other lines nearby", len(extra))
     # 단순화 때 남길 칸은 수단마다 따로: 도로 접근점·IC가 철도를 끊거나 역이 도로를 끊지 않게
     # 도시철도도 노선마다 노드를 따로: 같은 칸을 지나는 다른 노선끼리 서로 끊지 않게 (역에서만 환승으로 묶는다)
-    mlines_at = defaultdict(set)
-    for k in edges:
-        if k[0] == "metro":
-            ln = k[3].split("@")[0]
-            mlines_at[k[1]].add(ln); mlines_at[k[2]].add(ln)
-    keep |= {("rail", c, ln) for _, c in stations for ln in station_lines[c]} | {("road", c) for _, c in junctions}         | {("metro", c, ln) for _, c in metro_stations for ln in mlines_at[c]}
+    keep |= {("rail", c, ln) for _, c in stations for ln in station_lines[c]} | {("road", c) for _, c in junctions}         | {("metro", c, ln) for _, c in metro_stations for ln in metro_station_lines[c]}
 
     # 철도 노드 묶음: (칸, 노선)마다 따로 두고, 실제로 이어진 곳만 하나로 묶는다
     # - 이름이 다른 선로 웨이가 같은 OSM 노드를 쓰는 곳 (분기·합류)
@@ -794,19 +800,25 @@ def build_network(zones):
                 munion(c, names)
         h.metro_ref = None
     for _, c in metro_stations:
-        munion(c, mlines_at[c])
+        munion(c, metro_station_lines[c])
 
     # 존 접근 셀: 인구중심에서 가장 가까운 도로 셀(간선 우선)과 철도 셀
     # 존 접근점은 일반 간선에만 둔다: 고속도로 위에 두면 고속도로가 IC가 아닌 곳에서 끊긴다
     road_major = {k[1] for k, e in edges.items() if k[0] == "road" and e["cls"] not in ("secondary", "motorway")} | \
                  {k[2] for k, e in edges.items() if k[0] == "road" and e["cls"] not in ("secondary", "motorway")}
     road_any = {k[1] for k in edges if k[0] == "road"} | {k[2] for k in edges if k[0] == "road"}
+    # 같은 나라 도로에만 둔다: 인천 옹진군(서해 섬)의 접근점이 바로 옆 북측 해안 도로에 붙지 않게
+    major_by, any_by = defaultdict(set), defaultdict(set)
+    for c in road_major:
+        major_by[zone_country(c)].add(c)
+    for c in road_any:
+        any_by[zone_country(c)].add(c)
     for z in zones:
-        z["road_cell"] = _nearest_cell((z["cx"], z["cy"]), road_major)
-        # 20km 안에 간선이 없으면(지방도만 있는 섬: 제주·울릉) 아무 도로에나 둔다. 바다 건너 육지 간선에 붙지 않게
+        z["road_cell"] = _nearest_cell((z["cx"], z["cy"]), major_by[z["country"]] or road_major)
+        # 20km 안에 간선이 없으면(지방도만 있는 섬: 제주·울릉·옹진) 아무 도로에나 둔다. 바다 건너 육지 간선에 붙지 않게
         c = z["road_cell"]
         if math.hypot((c[0] * UNIT - z["cx"]) * 88, (c[1] * UNIT - z["cy"]) * 111) > 20:
-            z["road_cell"] = _nearest_cell((z["cx"], z["cy"]), road_any)
+            z["road_cell"] = _nearest_cell((z["cx"], z["cy"]), any_by[z["country"]] or road_any)
         keep.add(("road", z["road_cell"]))
 
     links = _contract(edges, keep)
@@ -909,11 +921,28 @@ def build_network(zones):
     out_junctions = _dedupe_named([(n, node_index[c]) for n, c in junctions if c in node_index])
     out_metro = []
     for n, c in metro_stations:
-        for ln in sorted(mlines_at[c]):
+        for ln in sorted(metro_station_lines[c]):
             k = ("m", c, mfind((c, ln)))
             if k in node_index:
                 out_metro.append((n, node_index[k]))
     out_metro = _dedupe_named(out_metro)
+    # 같은 이름의 도시철도역이 노선마다 다른 칸에 놓이면(사당: 2호선·4호선) 짧은 환승 선로로 잇는다
+    # (뒤의 merge_station_twins가 이어진 같은 역 노드를 하나로 묶는다)
+    by_name = defaultdict(list)
+    for n, node in out_metro:
+        by_name[n].append(node)
+    mx = 0
+    for n, ns in by_name.items():
+        ns = sorted(set(ns))
+        for i in range(len(ns)):
+            for j in range(i + 1, len(ns)):
+                a, b = ns[i], ns[j]
+                d = math.hypot((nodes[a][0] - nodes[b][0]) * 88.0, (nodes[a][1] - nodes[b][1]) * 111.0)
+                if d < 0.6:
+                    out_links.append({"mode": 2, "cls": "metro", "a": a, "b": b, "len": round(max(d, 0.05), 2), "tracks": 2, "speed": 20,
+                                      "power": "AC", "name": f"{n} 환승", "kp": 0, "geom": nodes[a] + nodes[b], "open": 0})
+                    mx += 1
+    log("metro transfer links", mx)
     log("metro links", sum(1 for l in out_links if l["mode"] == 2), "metro stations", len(out_metro))
 
     for z in zones:
@@ -1052,6 +1081,9 @@ def final_cleanup(nodes, links, stations, metro_stations, junctions, zone_nodes)
     mst = {n for _, n in metro_stations}
     links = drop_parallel_duplicates(links)   # 틈 잇기·환승 선로가 기존 링크와 겹친 곳
     links = drop_closed_rail(links)
+    links = drop_closed_stations(links, stations)
+    st = {n for _, n in stations}
+    links = add_db_links(nodes, links, stations)
     heal_to_lines(nodes, links, st | mst)
     links = prune_rail_stubs(links, mst, mode=2)
     links = drop_small_islands(links, {1: st, 2: mst})
@@ -1059,6 +1091,11 @@ def final_cleanup(nodes, links, stations, metro_stations, junctions, zone_nodes)
     # 그물을 걷어낸 뒤 남은 짧은 꼬리(엇갈린 선로의 끝)도 뺀다
     links = prune_rail_stubs(links, st, mode=1)
     links = prune_rail_stubs(links, mst, mode=2)
+    links = prune_parallel_stubs(links, {1: st, 2: mst})
+    # 이름 없는 도시철도 링크는 노선 사이 연결선(차량 회송용)이다: 여객 노선이 아니고 지도에 군더더기로 보인다
+    n0 = len(links)
+    links = [l for l in links if not (l["mode"] == 2 and not l["name"] and not l.get("ext"))]
+    log("unnamed metro connectors dropped", n0 - len(links))
     protect = {0: {n for _, n in junctions} | zone_nodes, 1: st, 2: mst}
     links = remerge_chains(links, protect)
     for l in links:
@@ -1145,6 +1182,40 @@ def collapse_close_nodes(nodes, links, keep_first, names=None, dist_km=0.07, max
             l["a"], l["b"] = a, b
     log("close nodes collapsed", len(nmap))
     return nmap
+
+
+def prune_parallel_stubs(links, stops, near_km=0.15, max_km=12):
+    """막다른 철도·도시철도 링크가 같은 이름 노선 옆을 나란히 따라가면(모든 점이 150m 안) 뺀다.
+    복선을 따로 그린 OSM 선의 한쪽이 끝만 붙어 남은 것이다 (차가평–문악 북부내륙선). 역에서 끝나는 지선은 남긴다"""
+    deg = defaultdict(int)
+    by_name = defaultdict(list)
+    for i, l in enumerate(links):
+        if l["mode"] in (1, 2) and not l.get("ext"):
+            deg[(l["mode"], l["a"])] += 1; deg[(l["mode"], l["b"])] += 1
+            if l["name"]:
+                by_name[(l["mode"], l["name"])].append(i)
+
+    def pts(l):
+        g = l["geom"]
+        return [(g[k] * 0.8, g[k + 1]) for k in range(0, len(g) - 1, 2) if g[k] == g[k]]
+    drop = set()
+    for i, l in enumerate(links):
+        if l["mode"] not in (1, 2) or l.get("ext") or not l["name"] or l["len"] > max_km:
+            continue
+        ends = [n for n in (l["a"], l["b"]) if deg[(l["mode"], n)] == 1 and n not in stops[l["mode"]]]
+        if not ends:
+            continue
+        p = pts(l)
+        others = [shapely.LineString(pts(links[j])) for j in by_name[(l["mode"], l["name"])] if j != i and j not in drop and len(pts(links[j])) >= 2]
+        if not others:
+            continue
+        near = shapely.union_all([o for o in others if o.distance(shapely.Point(p[0])) < 0.01 or o.distance(shapely.Point(p[-1])) < 0.01])
+        if near.is_empty:
+            continue
+        if all(near.distance(shapely.Point(q)) * 111 < near_km for q in p):
+            drop.add(i)
+    log("parallel stubs dropped", len(drop))
+    return [l for i, l in enumerate(links) if i not in drop]
 
 
 def contract_motorway_stubs(nodes, links, keep, names, max_km=0.25):
@@ -1361,6 +1432,57 @@ def heal_to_lines(nodes, links, station_nodes, max_km=0.35):
                           "open": max(l0.get("open", 0), L.get("open", 0))})
             added += 1
     log("dead ends joined to nearby lines", added)
+
+
+# 노선망에 남아 있지만 폐지된 역: 이 역에 닿는 철도 링크를 지운다 (뒤의 곁가지 정리가 남은 토막을 걷는다)
+# 영동선 통리·심포리·나한정·흥전: 2012년 솔안터널 개통으로 스위치백 구간과 함께 폐지
+CLOSED_STATIONS = {"통리", "심포리", "나한정", "흥전"}
+# OSM에 빠져 있어 철도 DB 선형으로 잇는 구간 (노선, 역, 역). 영동선 솔안터널: 동백산 쪽 솔안 신호장 – 도계솔안
+DB_LINKS = [("영동선", "솔안", "도계솔안")]
+
+
+def drop_closed_stations(links, stations):
+    gone = {n for nm, n in stations if nm in CLOSED_STATIONS}
+    before = len(links)
+    links = [l for l in links if not (l["mode"] == 1 and (l["a"] in gone or l["b"] in gone))]
+    stations[:] = [s for s in stations if s[0] not in CLOSED_STATIONS]
+    log("closed stations removed", len(gone), "links", before - len(links))
+    return links
+
+
+def add_db_links(nodes, links, stations):
+    """DB_LINKS 구간을 철도 DB 선로 모양으로 잇는다 (이미 같은 노선으로 두 역이 1.5배 길이 안에 이어져 있으면 그대로)"""
+    ref = railref.load(RAW)
+    if not ref:
+        return links
+    pos = {nm: n for nm, n in stations}
+    for line, s1, s2 in DB_LINKS:
+        a, b = pos.get(s1), pos.get(s2)
+        if a is None or b is None:
+            continue
+        A, B = shapely.Point(nodes[a][0], nodes[a][1]), shapely.Point(nodes[b][0], nodes[b][1])
+        # DB 선로 가운데 두 역 모두 가까운(700m) 선을 이어 붙여 두 역 사이만 잘라 쓴다
+        parts = [shapely.LineString(p) for n, c, p, k in ref["paths"] if n == line and len(p) >= 2]
+        merged = shapely.line_merge(shapely.union_all([g for g in parts if g.distance(A) < 0.02 or g.distance(B) < 0.02]))
+        best = None
+        for g in getattr(merged, "geoms", [merged]):
+            if g.distance(A) < 0.007 and g.distance(B) < 0.007:
+                da, db_ = g.project(A), g.project(B)
+                seg = shapely.ops.substring(g, min(da, db_), max(da, db_))
+                if best is None or seg.length < best.length:
+                    best = seg
+        if best is None:
+            log("db link not found", line, s1, s2)
+            continue
+        coords = list(best.coords)
+        if math.hypot(coords[0][0] - nodes[a][0], coords[0][1] - nodes[a][1]) > math.hypot(coords[-1][0] - nodes[a][0], coords[-1][1] - nodes[a][1]):
+            coords = coords[::-1]
+        km = sum(math.hypot((coords[k][0] - coords[k - 1][0]) * 88, (coords[k][1] - coords[k - 1][1]) * 111) for k in range(1, len(coords)))
+        geom = list(nodes[a]) + [round(v, 5) for xy in coords[1:-1] for v in xy] + list(nodes[b])
+        links.append({"mode": 1, "cls": "conv", "a": a, "b": b, "len": round(km, 2), "tracks": 1, "speed": 80, "power": "AC",
+                      "name": line, "kp": 0, "geom": geom, "open": 0})
+        log("db link added", line, s1, s2, round(km, 1), "km")
+    return links
 
 
 def drop_closed_rail(links):
@@ -1690,6 +1812,56 @@ def _cell_country_lookup(zones, cellpts):
         cache[cell] = r
         return r
     return f
+
+
+def _attach_metro_stations(points, mlines_at, ref_lines, canon, rail_pos, radius=5):
+    """도시철도역을 노선별로 붙인다 (radius: 0.001도 칸 수, 약 500m).
+    철도 DB가 이 역의 노선을 알면 근처(500m)를 지나는 그 노선마다 가장 가까운 칸에 둔다: 승강장이 떨어진 환승역(사당·공덕)이
+    한 노선에만 붙지 않게. DB가 아는 노선이 근처 도시철도에 없으면(남영: 경부선 역) 도시철도에는 붙이지 않는다.
+    DB가 모르는 역은 가장 가까운 도시철도 칸 하나에 (그 칸을 지나는 노선 모두)."""
+    out, lines_of = [], defaultdict(set)
+    metro_norms = {railref.norm_line(ln) for v in mlines_at.values() for ln in v}
+    for name, lon, lat in points:
+        nm = canon(name, lon, lat) or name
+        known = ref_lines(nm, lon, lat)
+        cx, cy = round(lon / UNIT), round(lat / UNIT)
+        best_by_line, nearest, nd = {}, None, 1e9
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                c = (cx + dx, cy + dy)
+                if c not in mlines_at:
+                    continue
+                d = dx * dx + dy * dy
+                if d < nd:
+                    nearest, nd = c, d
+                for ln in mlines_at[c]:
+                    if ln not in best_by_line or d < best_by_line[ln][1]:
+                        best_by_line[ln] = (c, d)
+        # 500m 칸 격자(도시 밖)에서는 위 칸 번호가 맞지 않으므로 바깥 격자 칸도 본다
+        if nearest is None:
+            for nm2, c in _snap_points([(nm, lon, lat)], set(mlines_at), 1):
+                nearest = c
+                for ln in mlines_at[c]:
+                    best_by_line[ln] = (c, 0)
+        if nearest is None:
+            continue
+        # DB의 노선 이름이 도시철도 이름과 하나도 겹치지 않으면: 같은 이름 일반철도 역이 1km 안에 있으면 일반철도 역이고
+        # (남영·용산: 1호선 지상 구간. 옆 4호선에 붙이면 안 된다), 아니면 DB가 다른 이름으로 부르는 노선이라 DB가 모르는 역처럼 다룬다
+        if known and not (known & metro_norms):
+            if any(abs(c[0] * UNIT - lon) * 88 + abs(c[1] * UNIT - lat) * 111 < 1.0 for c in rail_pos.get(nm, ())):
+                continue
+            known = set()
+        if known:
+            want = {ln: cd for ln, cd in best_by_line.items() if railref.norm_line(ln) in known}
+            if not want:
+                continue   # 근처 도시철도는 이 역이 서는 노선이 아니다 (남영: 1호선 지상 구간 역, 옆은 4호선)
+            for ln, (c, _) in want.items():
+                out.append((name, c)); lines_of[c].add(ln)
+        else:
+            out.append((name, nearest)); lines_of[nearest] |= mlines_at[nearest]
+    out = list(dict.fromkeys(out))
+    log("metro stations attached", len(out), "(per line)")
+    return out, lines_of
 
 
 def _snap_points(points, cells, radius):

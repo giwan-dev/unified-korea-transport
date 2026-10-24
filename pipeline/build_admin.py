@@ -270,6 +270,37 @@ def to_fc(rows, props):
     return {"type": "FeatureCollection", "attribution": ATTRIBUTION, "features": feats}
 
 
+def absorb_dmz(units, reach=0.03, claim=0.006):
+    """비무장지대처럼 어느 시군에도 속하지 않는 남북 사이 땅을 맞닿은 읍면동(따라서 그 시군)에 붙인다.
+    남측과 북측 영역 모두에서 reach(약 3km) 안인 육지 가운데 비어 있는 곳을, 가까운 읍면동부터 claim(약 600m) 반경씩 나눠 갖는다.
+    남은 조각은 가장 가까운 읍면동에. 이렇게 하면 지도에는 군사분계선 하나만 남는다 (따로 그리던 남북 시군 경계가 겹치지 않는다)"""
+    import geopandas as gpd
+    kr = unary_union([u["geom"] for u in units if u["country"] == "KR"])
+    kp = unary_union([u["geom"] for u in units if u["country"] == "KP"])
+    band = kr.buffer(reach).intersection(kp.buffer(reach))
+    land = unary_union(gpd.read_file(f"zip://{(RAW / 'ne_10m_land.zip').as_posix()}").clip(band.bounds).geometry)
+    gap = shapely.make_valid(land.intersection(band)).difference(kr.union(kp))
+    pieces = [g for g in getattr(gap, "geoms", [gap]) if g.geom_type == "Polygon" and g.area > 1e-8]
+    if not pieces:
+        return
+    gap = unary_union(pieces)
+    tree = shapely.STRtree([u["geom"] for u in units])
+    near = tree.query(gap.buffer(claim))
+    left = gap
+    for i in sorted(near, key=lambda i: gap.distance(units[i]["geom"])):
+        part = left.intersection(units[i]["geom"].buffer(claim))
+        if part.is_empty or part.area < 1e-9:
+            continue
+        units[i]["geom"] = shapely.make_valid(units[i]["geom"].union(part))
+        left = left.difference(part)
+    for g in getattr(left, "geoms", [left]):
+        if g.is_empty or g.area < 1e-9:
+            continue
+        i = int(tree.nearest(g))
+        units[i]["geom"] = shapely.make_valid(units[i]["geom"].union(g))
+    log("dmz land absorbed into adjacent units", round(gap.area * 111 * 88, 1), "km2")
+
+
 def main():
     units = kr_units() + kp_units()
     # MERGE_ZONES에 적힌 군은 한 존으로 묶고, 존에 다른 쪽 인구 격자도 함께 세도록 also를 단다
@@ -278,6 +309,7 @@ def main():
         if key in MERGE_ZONES:
             u["country"], u["province"], u["zone"] = MERGE_ZONES[key]
             u["from_country"] = key[0]
+    absorb_dmz(units)
     # 존(시군구) 묶기: 순서는 남 → 북, 이름순
     groups = defaultdict(list)
     for u in units:
