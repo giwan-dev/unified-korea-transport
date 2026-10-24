@@ -249,6 +249,9 @@ table.cmp th.asc, table.cmp th.desc { color: var(--ink); }
 .ld-steps li.now, .ld-steps li.ok { color: var(--ink); }
 .ld-steps li.ok .p { width: 100% !important; background: var(--good); }
 .ld-tip { font-size: 12px; color: var(--muted); }
+.ld-ver { display: inline-block; margin-top: 4px; padding: 1px 7px; border-radius: 4px; background: var(--chip); color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+.ld-contact { margin: 14px 0 0; text-align: right; font-size: 12px; color: var(--muted); }
+.ld-contact a { color: inherit; }
 
 /* 노선 모식도 (지도 아래쪽에 겹쳐 띄움) */
 #linediagram {
@@ -465,3 +468,16 @@ details > summary.flash { animation: flash 1.4s ease-out; }
 .place-intro p { margin: 6px 0 0; line-height: 1.55; }
 .place-country { display: flex; align-items: center; gap: 8px; }
 .place-country .flag { flex: none; border: 1px solid var(--line, #ccc); border-radius: 2px; }
+/* 통일 첫해 행정구역 정리 창 */
+.setup-wrap { position: fixed; inset: 0; background: rgba(15, 20, 28, .45); display: flex; align-items: center; justify-content: center; z-index: 1001; padding: 16px; }
+.setup { background: var(--panel, #fff); color: var(--ink, #1d232b); width: min(640px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; border-radius: 12px; box-shadow: 0 12px 48px rgba(0, 0, 0, .3); }
+.setup h2 { margin: 0; padding: 18px 20px 4px; font-size: 18px; }
+.setup-intro { margin: 0; padding: 0 20px 10px; font-size: 13px; line-height: 1.6; }
+.setup-body { overflow-y: auto; padding: 0 20px 8px; border-top: 1px solid var(--line, #e3e6ea); }
+.setup section { padding: 10px 0 4px; }
+.setup h3 { margin: 4px 0 6px; font-size: 14px; }
+.setup-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 13px; }
+.setup-row span { flex: 1; }
+.setup-row select { max-width: 52%; }
+.setup-btns { display: flex; gap: 8px; align-items: center; padding: 12px 20px 16px; border-top: 1px solid var(--line, #e3e6ea); }
+@media (max-width: 560px) { .setup-row { flex-direction: column; align-items: stretch; gap: 4px; } .setup-row select { max-width: none; } }

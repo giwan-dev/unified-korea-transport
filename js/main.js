@@ -2,7 +2,7 @@
 import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView, LAYER_VIEWS } from './ui/map.js';
 import { Namer } from './game/naming.js';
 import {
-  newGame, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
+  newGame, START_YEAR, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
   updateCongestion, defaultFix, updateApproval, canAfford, isKP, linksUnderWork, UPGRADES, NEW_BUILDS, upgradeCost,
   placeName, setPlaceName, startRestoreName, RENAME, startAirport, startAirportExpand, renameLine, splitLink,
   fundFor, settlePPP, settleRail, renameKPLines, KP_LINE_RENAME, LINE_RENAME_COST, railDividend, railEquity, mergeRail, OP_FACTORS, initOngoing, linkPending, setProjectPace, PACES,
@@ -45,8 +45,9 @@ import { P } from './sim/params.js';
 import { PPP_TYPES, PPP_DEFAULTS, initPPP, tollKind, linkToll, annualRevenue, evaluatePPP } from './game/ppp.js';
 import {
   PARTIES, initLocal, regionOf, hasAutonomy, leanP, runElection, bumpApproval, governorTitle, mayorTitle, isMetroCity,
-  HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST, ADMIN_OPTIONS, ADMIN_DEFAULT, adminNames,
+  HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST, ADMIN_OPTIONS, ADMIN_DEFAULT, adminNames, HISTORIC_COUNTIES,
 } from './game/local.js';
+import { openAdminSetup } from './ui/setup.js';
 import { initRail, operatorOf, opInfo, opBadge, OPERATORS, MERGE_MIN_INTEGRATION, EQUITY_STEP, FOREIGN_OPERATORS, foreignOpBadge } from './game/operators.js';
 
 const $ = (s) => document.querySelector(s);
@@ -1476,7 +1477,9 @@ function bindUI() {
     d.onclick = go;
     d.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
   });
-  if (guideShouldAutoShow()) setTimeout(showGuide, 600);
+  // 통일 첫해: 행정구역 정리 창을 먼저 띄우고, 정하면 사용법 안내로 이어진다
+  if (needsAdminSetup()) setTimeout(() => adminSetup(true), 400);
+  else if (guideShouldAutoShow()) setTimeout(showGuide, 600);
   $('#legend').addEventListener('change', (e) => {
     if (e.target.id === 'metric') { metric = e.target.value; paintZones(); renderLegend(); }
     if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); syncRailKind(map); renderLegend(); }
@@ -1554,16 +1557,19 @@ function paletteCommands() {
 
 function showGuide() {
   switchTab('status');
+  const tab = (t) => () => switchTab(t);
   startGuide([
-    { target: '#map', title: '지도', body: '도로·철도 구간을 누르면 오른쪽에 개량·이름 바꾸기 메뉴가 열립니다. <b>Shift를 누른 채 끌면</b> 여러 구간을 한꺼번에 고릅니다. 역을 누르면 운행 계통과 노선도를 봅니다.' },
-    { target: '#tabs', title: '오른쪽 패널', body: GUIDE_TABS },
-    { target: '#topbar .stats', title: '예산과 지지율', body: '숫자를 누르면 관련 탭으로 갑니다. 예산은 해마다 들어오고, 공사비는 몇 해에 나눠 나갑니다.' },
-    { target: '#legend', title: '보기 메뉴', body: '도로만·철도만·항공만으로 걸러 보거나, 인구·소득·행복도 같은 지표로 지도를 색칠합니다.' },
-    { target: '#btn-find', title: '메뉴 찾기', body: '찾는 메뉴가 어디 있는지 모르겠으면 <b>Ctrl+K</b>(또는 /)로 이름 일부나 초성을 쳐 보세요. 탭·묶음·지역·노선·계획 사업으로 바로 갑니다.' },
-    { target: '#btn-next', title: '다음 해', body: '사업을 벌였으면 다음 해로 넘깁니다. 교통 수요와 인구 이동을 다시 계산합니다.' },
-  ], () => { const sel = $('#guide-mode'); if (sel) sel.value = getGuideMode(); });   // "다시 보지 않기"를 누르면 설정 칸도 맞춘다
+    { target: '#map', title: '지도', body: '남북 전체의 도로·철도와 인구입니다. 도로 색은 혼잡도(초록 → 빨강)이고, 빨간 세모는 정체가 심한 곳입니다. 구간을 누르면 오른쪽에 개량 메뉴가, 역을 누르면 운행 계통과 노선도가 열립니다. <b>Shift를 누른 채 끌면</b> 여러 구간을 한꺼번에 고릅니다.' },
+    { target: '#topbar .stats', title: '예산과 지지율', body: '해마다 SOC 예산이 들어오고, 공사비는 몇 해에 나눠 나갑니다. 쓰지 않은 예산은 한 해 치까지만 남습니다. 지지율은 정체·민원·완공 사업·부채로 오르내리고, 남북 통합도가 오르면 북측 관광지와 교류가 열립니다.' },
+    { target: '#legend', title: '보기 메뉴', body: '도로만·철도만·항공만 걸러 보거나, 인구·소득·행복도 같은 지표로 지도를 색칠합니다.' },
+    { target: '[data-panel=build]', before: tab('build'), title: '건설: 새 노선 놓기', body: '종류(고속도로·고속철도·도시철도 등)를 고르고 지도에 점을 차례로 찍으면 노선이 그려집니다. 산·강은 지형을 따라 돌아가고, 공사비와 B/C가 바로 나옵니다. <b>효과 미리보기</b>로 통행 변화를 본 뒤 <b>착공</b>하세요. 아래 목록의 GTX·서부선·서울–평양 고속철도 같은 계획 사업은 눌러서 바로 열 수 있습니다.' },
+    { target: '[data-panel=projects]', before: tab('projects'), title: '사업: 공사와 돈', body: '진행 중인 공사와 해마다 들어갈 돈입니다. 사업마다 투입 속도를 빠르게·느리게 바꿀 수 있습니다. 처음부터 진행 중인 사업 100여 건(실제 공사 중인 노선)이 들어 있습니다.' },
+    { target: '[data-panel=ops]', before: tab('ops'), title: '운영: 열차와 항공', body: '역을 골라 특급·급행 계통을 짜고, 코레일·북측 철도 회사의 수지와 노선별 영업계수를 봅니다. 국제선·국내선 항공 노선도 여기서 엽니다.' },
+    { target: '[data-panel=requests]', before: tab('requests'), title: '민원·정책', body: '혼잡 구간 확장 요구와 지자체 제안이 쌓입니다. 오래 두면 지지율이 떨어집니다. 이주 정책, 북측 지방자치, 통일 첫해에 정한 행정구역도 여기 있습니다.' },
+    { target: '#btn-find', before: tab('status'), title: '메뉴 찾기', body: '어디 있는지 모르겠으면 <b>Ctrl+K</b>(또는 /)를 누르고 이름 일부나 초성을 쳐 보세요. 탭·지역·노선·계획 사업으로 바로 갑니다.' },
+    { target: '#btn-next', title: '다음 해', body: '사업을 벌였으면 다음 해로 넘깁니다. 한 해 동안의 통행·혼잡과 인구 이동을 다시 계산합니다 (10~20초). 이 안내는 상단의 <b>?</b> 단추로 다시 볼 수 있습니다.' },
+  ], () => { switchTab('status'); const sel = $('#guide-mode'); if (sel) sel.value = getGuideMode(); });   // "다시 보지 않기"를 누르면 설정 칸도 맞춘다
 }
-const GUIDE_TABS = '<b>현황</b>은 올해 성적, <b>건설</b>은 새 노선·계획 사업, <b>사업</b>은 진행 중인 공사와 예산 투입, <b>운영</b>은 운행 계통·철도 회사·노선 수지·항공, <b>민원·정책</b>은 혼잡 요구·지자체 제안·행정구역·국가 대형 사업, <b>통계</b>는 순위와 추이, <b>설정</b>은 저장과 새 게임입니다.';
 
 function removeLastPoint() {
   const p = draft.points.pop();
@@ -2167,7 +2173,7 @@ function renderSettings() {
     <div class="name-row"><span style="flex:1">난이도</span>
       <select id="difficulty">${Object.entries(DIFFICULTY).map(([k, v]) => `<option value="${k}" ${state.difficulty === k ? 'selected' : ''}>${v.label} (연 ${formatWon(v.annualBudget)})</option>`).join('')}</select></div>
     <p class="hint" style="margin-top:8px">남북 행정구역 정리 (시작할 때 정하면 비용·선거 없이 적용됩니다)</p>
-    ${adminSelectsHTML('new', ADMIN_DEFAULT)}
+    <p class="hint">행정구역 정리(개성·옹진·고성, 분단 전 군 되살리기 등)는 새 게임을 시작하면 뜨는 창에서 정합니다.</p>
     <button id="btn-new" style="margin-top:6px">이 설정으로 새로 시작</button>
     <p class="hint">진행 상황은 이 브라우저에 자동 저장됩니다.</p>
     <h3 style="margin-top:16px">데이터</h3>
@@ -2183,9 +2189,7 @@ function renderSettings() {
     clearSave();
     clearSim();
     const d = $('#difficulty').value;
-    const admin = readAdminSelects(el, 'new');
     state = newGame(d);
-    setAdmin(admin);
     save(state);
     location.reload();
   };
@@ -3293,13 +3297,7 @@ function localSettingsHTML() {
     ${L.autonomyKP ? '<p class="hint">북측 지방자치 시행 중.</p>' : `<div class="item"><div class="t">북측 지방자치 도입</div>
       <div class="m">북측에도 도지사·시장·군수를 선거로 뽑습니다. 남북 통합도 30% 이상 · ${formatWon(EVENT_COST.autonomy)}</div>
       <button class="small primary" id="ev-autonomy" ${state.integration >= 0.3 ? '' : 'disabled'}>도입</button></div>`}
-    <div class="item"><div class="t">남북 행정구역 정리</div>
-      <div class="m">개성 지역 편입, 선전용 지명·노동자구 정리, 남북으로 갈린 옹진·고성·철원군의 통합과 소속을 정합니다. 소속이 바뀐 광역 단체는 단체장을 새로 뽑습니다 · ${formatWon(EVENT_COST.admin)}</div>
-      ${adminSelectsHTML('ev', L.admin || ADMIN_DEFAULT)}
-      <button class="small primary" id="ev-admin">정리</button></div>
-    ${L.historic ? '<p class="hint">북측 행정구역을 1945년 이전으로 되돌렸습니다 (강원북도·강원남도).</p>' : `<div class="item"><div class="t">북측 행정구역 1945년 이전으로 복원</div>
-      <div class="m">북측의 신설 도·직할시(자강·량강·평양·남포·라선·황해남북도 등)를 1945년 이전의 도로 되돌립니다. 강원도는 강원북도(북측)와 강원남도(남측)로 부르고, 개성은 경기도로 돌아갑니다. 바뀐 곳의 광역단체장을 새로 뽑고, 북측 주민 행복도가 조금 오릅니다 · ${formatWon(EVENT_COST.historic)}</div>
-      <button class="small primary" id="ev-historic">복원</button></div>`}
+    ${adminSummaryHTML()}
     ${state.linesRenamed ? '<p class="hint">북측 노선 이름을 남측 기준으로 바꿨습니다.</p>' : `<div class="item"><div class="t">북측 노선 이름을 남측 기준으로</div>
       <div class="m">${Object.entries(KP_LINE_RENAME).map(([a, b]) => `${esc(a)}→${esc(b)}`).join(', ')}. 남북을 잇는 노선이 한 이름이 되어 직통 계통·노선도·수익성이 한 노선으로 묶입니다 · ${formatWon(LINE_RENAME_COST)}</div>
       <button class="small primary" id="ev-rename">바꾸기</button></div>`}
@@ -3377,23 +3375,7 @@ function bindLocalSettings(el) {
     holdElection('kp', '북측 첫 지방선거');
     save(state); renderAll();
   });
-  el.querySelector('#ev-admin')?.addEventListener('click', () => {
-    const admin = readAdminSelects(el, 'ev');
-    const cur = L.admin || ADMIN_DEFAULT;
-    const diff = ADMIN_OPTIONS.filter((o) => admin[o.key] !== cur[o.key]);
-    if (!diff.length) { alert('바뀐 항목이 없습니다.'); return; }
-    const lines = diff.map((o) => `${o.label}: ${o.choices.find((c) => c[0] === admin[o.key])[1]}`);
-    if (!confirm(['행정구역을 정리할까요?', ...lines].join('\n'))) return;
-    if (!payEvent(EVENT_COST.admin)) return;
-    reorganize(() => setAdmin(admin), `${state.year}년 남북 행정구역 정리: ${diff.map((o) => o.choices.find((c) => c[0] === admin[o.key])[1]).join(', ')}`);
-    refreshNames(map);
-  });
-  el.querySelector('#ev-historic')?.addEventListener('click', () => {
-    if (!confirm('북측 행정구역을 1945년 이전으로 되돌릴까요? 바뀐 곳의 광역단체장을 새로 뽑습니다.')) return;
-    if (!payEvent(EVENT_COST.historic)) return;
-    zoneProps.forEach((z, i) => { if (z.country === 'KP' && !z.ext) state.happyBonus[i] = (state.happyBonus[i] || 0) + 3; });
-    reorganize(() => { L.historic = true; }, `${state.year}년 북측 행정구역을 1945년 이전으로 되돌렸습니다 (강원북도·강원남도).`);
-  });
+  el.querySelector('#ev-admin')?.addEventListener('click', () => adminSetup(false));
   el.querySelector('#ev-rename')?.addEventListener('click', () => {
     const r = renameKPLines(base, state);
     if (!r.ok) { alert(r.reason); return; }
@@ -3413,14 +3395,70 @@ function bindLocalSettings(el) {
   });
 }
 
-/** 행정구역 정리 선택 칸 (prefix: 'new' 새 게임 / 'ev' 이벤트) */
-function adminSelectsHTML(prefix, cur) {
-  return ADMIN_OPTIONS.map((o) => `<div class="name-row"><span style="flex:1">${esc(o.label)}</span>
-    <select id="${prefix}-adm-${o.key}">${o.choices.map(([v, t]) => `<option value="${v}" ${cur[o.key] === v ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></div>`).join('');
+// ------------------------------------------------------------ 통일 첫해 행정구역 정리 (게임 시작 창)
+
+// 북측 도 체계는 행정구역 정리 창의 한 칸 (예전에는 따로 돈을 내는 이벤트였다)
+const HISTORIC_PROV = { key: '_historic', label: '북측 도 체계', choices: [['keep', '지금 북측 도 그대로 (자강·량강·평양 등)'], ['historic', '1945년 이전 도로 되돌린다 (강원북도·강원남도, 개성은 경기도)']] };
+const HIST_KEYS = new Set(HISTORIC_COUNTIES.map((h) => h.key));
+
+function needsAdminSetup() {
+  return state.year === START_YEAR && !state.local?.adminDecided;
 }
 
-function readAdminSelects(el, prefix) {
-  return Object.fromEntries(ADMIN_OPTIONS.map((o) => [o.key, el.querySelector(`#${prefix}-adm-${o.key}`)?.value || ADMIN_DEFAULT[o.key]]));
+/** 행정구역 정리 창. first: 게임을 막 시작한 때 (닫으면 사용법 안내로 이어진다) */
+function adminSetup(first) {
+  const L = initLocal(state);
+  const cur = { ...ADMIN_DEFAULT, ...(L.admin || {}), _historic: L.historic ? 'historic' : 'keep' };
+  const pick = (keys) => ADMIN_OPTIONS.filter((o) => keys.includes(o.key));
+  openAdminSetup({
+    esc, current: cur, defaults: { ...ADMIN_DEFAULT, _historic: 'keep' },
+    title: `${START_YEAR}년, 통일 첫해 행정구역 정리`,
+    intro: '남과 북의 행정구역을 어떻게 맞출지 지금 정합니다. 비용은 들지 않고, 정한 뒤에도 '
+      + `${START_YEAR}년 안에는 민원·정책 탭에서 다시 고칠 수 있습니다. 다음 해로 넘기면 그대로 굳습니다. 소속 광역 단체가 바뀐 곳은 단체장을 새로 뽑습니다.`,
+    okLabel: first ? '정하고 시작하기' : '이대로 정리',
+    groups: [
+      { title: '남북 정리', options: pick(['kaesong', 'propaganda', 'workers', 'ongjin', 'goseong', 'dueum']) },
+      { title: '북측 도 체계', options: [HISTORIC_PROV, ...pick(['jagang'])] },
+      { title: '분단 전 군 되살리기', hint: '분단으로 갈라지거나 없어진 군입니다. 되살리면 그 군에 속했던 읍면이 옛 군 이름으로 한 도에 묶입니다.',
+        options: ADMIN_OPTIONS.filter((o) => HIST_KEYS.has(o.key)) },
+    ],
+    onApply: (c) => {
+      const { _historic: hist, ...admin } = c;
+      const was = cur;
+      const changed = ADMIN_OPTIONS.filter((o) => admin[o.key] !== was[o.key]);
+      const histChanged = (hist === 'historic') !== !!L.historic;
+      const lines = changed.map((o) => o.choices.find((x) => x[0] === admin[o.key])[1]);
+      if (histChanged) lines.push(hist === 'historic' ? '북측 도를 1945년 이전으로' : '북측 도를 지금대로');
+      if (lines.length) {
+        reorganize(() => {
+          setAdmin(admin);
+          if (histChanged) {
+            // 1945년 이전 도로 되돌리면 북측 주민 행복도가 조금 오른다 (되돌리면 그만큼 뺀다)
+            const d = hist === 'historic' ? 3 : -3;
+            zoneProps.forEach((z, i) => { if (z.country === 'KP' && !z.ext) state.happyBonus[i] = (state.happyBonus[i] || 0) + d; });
+            L.historic = hist === 'historic';
+          }
+        }, `${state.year}년 행정구역 정리: ${lines.join(', ')}`);
+        refreshNames(map);
+      }
+      L.adminDecided = true;
+      save(state); renderAll();
+      if (first && guideShouldAutoShow()) setTimeout(showGuide, 300);
+    },
+    onClose: first ? null : () => {},
+  });
+}
+
+/** 민원·정책 탭: 정한 행정구역 (첫해에는 다시 정하기 단추) */
+function adminSummaryHTML() {
+  const L = initLocal(state);
+  const A = { ...ADMIN_DEFAULT, ...(L.admin || {}) };
+  const chosen = ADMIN_OPTIONS.filter((o) => A[o.key] !== ADMIN_DEFAULT[o.key]).map((o) => `${esc(o.label.replace(/ \(.*\)$/, ''))}: ${esc(o.choices.find((c) => c[0] === A[o.key])?.[1] || '')}`);
+  if (L.historic) chosen.unshift('북측 도: 1945년 이전으로 되돌림 (강원북도·강원남도)');
+  const open = state.year === START_YEAR;
+  return `<div class="item"><div class="t">남북 행정구역 정리 (${START_YEAR}년)</div>
+    <div class="m">${chosen.length ? chosen.join('<br>') : '모두 지금 행정구역 그대로 두었습니다.'}</div>
+    ${open ? `<button class="small primary" id="ev-admin">다시 정하기 (${START_YEAR}년 안에만)</button>` : `<p class="hint">행정구역은 통일 첫해(${START_YEAR}년)에 정했습니다.</p>`}</div>`;
 }
 
 /** 행정구역 정리 적용: 소속은 regionOf가, 이름은 state.adminNames가 맡는다 */

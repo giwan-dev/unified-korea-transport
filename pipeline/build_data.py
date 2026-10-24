@@ -1117,6 +1117,13 @@ def final_cleanup(nodes, links, stations, metro_stations, junctions, zone_nodes)
             item[1] = nmap.get(item[1], item[1])
     zone_nodes.clear(); zone_nodes.update(nmap.get(n, n) for n in list(zone_nodes))
     junctions[:] = _dedupe_junction_list(junctions)
+    # 링크를 다시 이은 뒤에야 짧아진 같은 이름 역 사이(오송: 고속선 본선 노드와 0.4km 옆 노드)도 한 번 더 모은다
+    nmap = merge_station_twins(nodes, links, {n: nm for nm, n in stations + metro_stations})
+    for lst in (stations, metro_stations, junctions):
+        for item in lst:
+            item[1] = nmap.get(item[1], item[1])
+    zone_nodes.clear(); zone_nodes.update(nmap.get(n, n) for n in list(zone_nodes))
+    links = [l for l in links if l["a"] != l["b"]]
     align_shared_starts(links)
     for l in links:
         gtx = l["mode"] == 1 and "광역급행" in (l["name"] or "")   # GTX는 대심도 직선 선로

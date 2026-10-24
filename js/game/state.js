@@ -9,7 +9,7 @@ import { MEGA, applyMega, TSR_FREIGHT } from './mega.js';
 import { dueum } from './local.js';
 
 const SAVE_KEY = 'ukt-save-v1';
-const START_YEAR = 2026;
+export const START_YEAR = 2026;
 export const CONGESTION_VC = 1.0;
 export const CONGESTION_YEARS = 1;
 
