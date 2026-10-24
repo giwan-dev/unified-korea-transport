@@ -22,6 +22,7 @@ function handle(m) {
     } else if (m.type === 'sync') {
       if (m.net) model.setNetwork(m.net);
       model.restore(m.snapshot);
+      if (m.groups) model.setOriginGroups(m.groups);
       out.postMessage({ ok: true });
     } else if (m.type === 'origins') {
       const r = model.originsFor(m);

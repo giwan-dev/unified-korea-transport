@@ -19,8 +19,8 @@ async function makePool() {
     await Promise.all(ports.map((p) => call(p, { type: 'init', zones: inputs.zones, grid: inputs.grid }, 120000)));
     return {
       size: ports.length, netSent: null,
-      async sync(net, snapshot) {
-        await Promise.all(ports.map((p) => call(p, { type: 'sync', net: this.netSent === net ? null : net, snapshot }, 60000)));
+      async sync(net, snapshot, groups) {
+        await Promise.all(ports.map((p) => call(p, { type: 'sync', net: this.netSent === net ? null : net, snapshot, groups }, 60000)));
         this.netSent = net;
       },
       run: (mk) => Promise.all(ports.map((p, k) => call(p, mk(k), 120000))),
@@ -37,7 +37,7 @@ async function assign(net, integration, prog, warm = false, offsetOverride = nul
   if (pool === undefined) pool = await makePool();
   if (pool) {
     try {
-      await pool.sync(net, model.snapshot());
+      await pool.sync(net, model.snapshot(), model.originGroups());
       return await model.assignParallel(pool, integration, prog, warm, offsetOverride);
     } catch (err) {
       console.warn('보조 워커 배정 실패, 한 워커로 계산합니다', err);

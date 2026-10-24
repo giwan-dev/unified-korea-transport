@@ -1,5 +1,5 @@
 // 게임 진행과 화면 패널.
-import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView } from './ui/map.js';
+import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView, LAYER_VIEWS } from './ui/map.js';
 import { Namer } from './game/naming.js';
 import {
   newGame, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
@@ -12,8 +12,10 @@ import {
 import { MEGA, TSR_FREIGHT } from './game/mega.js';
 import { AIRPORT } from './game/catalog.js';
 import { setNameResolver, refreshNames, setRegions, setLinks, paintHotspots } from './ui/map.js';
-import { isNarrow } from './ui/traffic.js';
+import { isNarrow, twinPrimary, mergeTwins, ROAD_RANK, motorwayMainline, flattenMainline, connectJunctions, smoothMainlineEnds, mainlineBubbles, roundMainlineCorners } from './ui/traffic.js';
 import { subFold, initPanelUI, toast } from './ui/panel.js';
+import { initPalette, openPalette, goSection } from './ui/palette.js';
+import { startGuide, guideShouldAutoShow, guideOnNewGame, getGuideMode, setGuideMode, GUIDE_MODES } from './ui/guide.js';
 import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.js';
 import { kmBetween, routeKey } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
@@ -282,11 +284,8 @@ function applyResult(res) {
   result = res;
   state.snapshot = res.snapshot;
 
-  const { vc, vol } = res.links;
-  for (let i = 0; i < vc.length; i++) {
-    map.setFeatureState({ source: 'links', id: i }, { vc: vc[i], vol: vol[i] });
-  }
-  paintHotspots(map, vc);
+  const { vc } = res.links;
+  paintVolumes();
   paintZones();
   paintAir(res.air);
   refreshPoints();   // 역 중요도는 이용객으로 정한다
@@ -443,26 +442,64 @@ function allLinks() {
   return base.links.concat(state.newLinks);
 }
 
+// linkTwins: 링크마다 화면에 그리는 대표 링크 (같은 두 노드를 잇는 쌍), shownTraffic: 쌍을 합친 화면용 교통량·혼잡도
+let linkTwins = null, shownTraffic = null;
+let mainlineNext = new Map();   // 본선 조각 → [a 쪽 이웃 본선들, b 쪽 이웃 본선들]
 function linksFC() {
   const building = new Set();
   for (const p of state.projects) {
     if (p.status !== 'building') continue;
     if (p.kind === 'new') p.links.forEach((id) => building.add(id));
   }
-  const features = allLinks().map((l, i) => {
+  const all = allLinks();
+  const pending = (i) => building.has(i) || (i < base.links.length && linkPending(base, state, i));
+  // 같은 두 노드를 잇는 쌍은 하나만 그린다 (twinPrimary 참고)
+  linkTwins = twinPrimary(all.map((l, i) => (state.replaced?.[i] || l.replaced ? null
+    : (() => {
+      const e = linkAt(base, state, i);
+      // 도로는 등급이 달라도 묶는다 (여객선·국경 연결은 따로), 철도는 고속선·일반선을 따로
+      const road = e.mode === 0 && e.cls !== 'ferry' && !e.ext;
+      return { a: l.a, b: l.b, mode: e.mode, k: `${road ? 'road' : `${e.cls}:${e.ext ? 1 : 0}`}:${pending(i) ? 1 : 0}`, rank: road ? ROAD_RANK[e.cls] ?? 9 : 0 };
+    })())));
+  // 고속도로는 본선만 고속도로로 그리고, IC 연결로·접속도로는 일반도로(주요 도로 굵기)로, JC 연결로는 그리지 않는다 (JC가 사거리로 보이게)
+  const mainline = motorwayMainline(all.map((l, i) => (state.replaced?.[i] || l.replaced ? null : linkAt(base, state, i))), nodeCoord, (i) => i >= base.links.length);
+  const features = all.map((l, i) => {
     const eff = linkAt(base, state, i);
     // 같은 역의 다른 노선 승강장을 잇는 환승 선로는 계산에만 쓰고 그리지 않는다 (서울역·용산역 주변이 지저분해진다)
-    if (state.replaced?.[i] || l.replaced || eff.name?.endsWith(' 환승')) {
+    // 같은 두 노드를 잇는 쌍(대표만)·JC 연결로도 그리지 않는다
+    if (state.replaced?.[i] || l.replaced || eff.name?.endsWith(' 환승') || linkTwins[i] !== i || mainline[i] === 2) {
       const p0 = [l.geom[0], l.geom[1]];   // 길이 0인 선: 그려지지 않는다
       return { type: 'Feature', id: i, properties: { id: i, mode: -1 }, geometry: { type: 'LineString', coordinates: [p0, p0] } };
     }
     const parts = smoothParts(l, i);
     return {
       type: 'Feature', id: i,
-      properties: { id: i, mode: eff.mode, cls: eff.cls, minor: eff.mode === 0 && eff.cls === 'secondary' && !eff.kp ? 1 : 0, building: building.has(i) || (i < base.links.length && linkPending(base, state, i)) ? 1 : 0, colour: eff.colour || '', ext: eff.ext ? 1 : 0, narrow: isNarrow(eff) ? 1 : 0 },
+      properties: { id: i, mode: eff.mode, cls: eff.cls === 'motorway' && eff.mode === 0 && mainline[i] !== 1 ? 'primary' : eff.cls, minor: eff.mode === 0 && eff.cls === 'secondary' && !eff.kp ? 1 : 0, building: pending(i) ? 1 : 0, colour: eff.colour || '', ext: eff.ext ? 1 : 0, narrow: isNarrow(eff) ? 1 : 0 },
       geometry: parts.length > 1 ? { type: 'MultiLineString', coordinates: parts } : { type: 'LineString', coordinates: parts[0] },
     };
   });
+  // 본선의 삐죽한 꺾임을 편다
+  // 같은 이름 본선이 한 노드에서 갈라졌다 다른 한 노드에서 다시 만나는 상·하행 분리 구간은 한 갈래만 그린다
+  const effAll = all.map((l, i) => (state.replaced?.[i] || l.replaced ? null : linkAt(base, state, i)));
+  const bubbles = mainlineBubbles(effAll, mainline, (i) => effAll[i] && linkTwins[i] === i);
+  for (const [h, to] of bubbles) {
+    const p0 = [all[h].geom[0], all[h].geom[1]];
+    features[h] = { type: 'Feature', id: h, properties: { id: h, mode: -1 }, geometry: { type: 'LineString', coordinates: [p0, p0] } };
+  }
+  if (bubbles.size) for (let j = 0; j < linkTwins.length; j++) if (bubbles.has(linkTwins[j])) linkTwins[j] = bubbles.get(linkTwins[j]);
+  const linkEnds = (i) => ({ a: all[i].a, b: all[i].b, pa: nodeCoord(all[i].a), name: linkAt(base, state, i).name });
+  flattenMainline(features, mainline, linkEnds);
+  // JC 연결로를 숨긴 자리: 다른 고속도로에 붙어 끝나는 본선 끝을 상대 본선까지 잇는다 (T자·사거리)
+  connectJunctions(features, mainline, linkEnds);
+  smoothMainlineEnds(features, mainline);
+  // 이음매·꺾인 점을 둥글게 (노드–노드 곡선이 짧은 구간에서 꺾이는 곳). 짧은 조각은 양 끝 이음매를 함께 깎으면
+  // 한쪽이 먼저 바뀌어 다른 쪽 이음매를 놓치므로 한 번 더 돈다
+  for (let t = 0; t < 2; t++) roundMainlineCorners(features, mainline);
+  // 본선 조각마다 양 끝 노드에서 이어지는 본선 조각 (교통량 0 토막 메우기용, paintVolumes)
+  const mainAt = new Map();
+  features.forEach((f) => { if (mainline[f.id] === 1 && f.properties.mode === 0) for (const nd of [all[f.id].a, all[f.id].b]) { if (!mainAt.has(nd)) mainAt.set(nd, []); mainAt.get(nd).push(f.id); } });
+  mainlineNext = new Map();
+  for (const ids of mainAt.values()) for (const i of ids) { if (!mainlineNext.has(i)) mainlineNext.set(i, []); mainlineNext.get(i).push(ids.filter((j) => j !== i)); }
   return { type: 'FeatureCollection', features };
 }
 
@@ -608,11 +645,24 @@ function smoothParts(l, i) {
 function refreshLinks() {
   nodeAdj = null;   // 새 구간이 생기면 노드에서 곧게 이어지는 구간이 바뀐다
   setLinks(map, linksFC());
-  if (result) {
-    const { vc, vol } = result.links;
-    for (let i = 0; i < vc.length; i++) map.setFeatureState({ source: 'links', id: i }, { vc: vc[i], vol: vol[i] });
-    paintHotspots(map, vc);
+  if (result) paintVolumes();
+}
+
+/** 지도에 교통량·혼잡도를 칠한다. 같은 두 노드를 잇는 쌍(분리 차로·복선)은 대표 링크 하나에 합쳐 칠한다 */
+function paintVolumes() {
+  const m = shownTraffic = mergeTwins(linkTwins || twinPrimary([]), result.links.vc, result.links.vol);
+  // 교통량이 있는 본선 사이에 낀 0 조각: 노선망에서 같은 두 노드를 잇는 옆 일반도로 등으로 교통이 새는 곳(데이터 결함)이라
+  // 지도에는 양옆 본선 가운데 작은 값을 보여 준다 (본선이 회색 토막으로 끊겨 보이지 않게)
+  for (const [i, sides] of mainlineNext) {
+    if (m.vol[i] > 0 || sides.length !== 2) continue;
+    const side = sides.map((ids) => ids.filter((j) => m.vol[j] > 0));
+    if (side.some((ids) => !ids.length)) continue;
+    const pick = side.map((ids) => ids.reduce((b, j) => (m.vol[j] > m.vol[b] ? j : b), ids[0]));
+    const k = m.vol[pick[0]] <= m.vol[pick[1]] ? pick[0] : pick[1];
+    m.vol[i] = m.vol[k]; m.vc[i] = m.vc[k];
   }
+  for (let i = 0; i < m.vc.length; i++) map.setFeatureState({ source: 'links', id: i }, { vc: m.vc[i], vol: m.vol[i] });
+  paintHotspots(map, m.vc);
 }
 
 function nodeCoord(id) {
@@ -1208,6 +1258,16 @@ function bindUI() {
   document.querySelectorAll('#tabs button').forEach((b) => { b.onclick = () => switchTab(b.dataset.tab); });
   watchFolds();
   initPanelUI($('#side'));
+  initPalette(paletteCommands);
+  $('#btn-find').onclick = () => openPalette();
+  $('#btn-help').onclick = showGuide;
+  // 상단 바 숫자를 누르면 관련 탭으로 (예산·부채 → 사업, 지지율·통합도 → 현황)
+  document.querySelectorAll('#topbar [data-go]').forEach((d) => {
+    const go = () => switchTab(d.dataset.go);
+    d.onclick = go;
+    d.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+  });
+  if (guideShouldAutoShow()) setTimeout(showGuide, 600);
   $('#legend').addEventListener('change', (e) => {
     if (e.target.id === 'metric') { metric = e.target.value; paintZones(); renderLegend(); }
     if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); renderLegend(); }
@@ -1219,6 +1279,77 @@ function bindUI() {
     if (e.key === 'Backspace') removeLastPoint();
   });
 }
+
+/** 메뉴 찾기(Ctrl+K)에 넣는 동작. 탭·접는 묶음 제목은 palette.js가 화면에서 따로 모은다 */
+function paletteCommands() {
+  const cmds = [];
+  const add = (group, title, run, extra = {}) => cmds.push({ group, title, run, ...extra });
+  add('진행', '다음 해로 넘기기', () => $('#btn-next').click(), { hint: `${state.year}년 → ${state.year + 1}년`, keywords: '턴 진행 연도', order: 0 });
+  add('진행', '소요 시간 재기', () => $('#btn-measure').click(), { keywords: '측정 이동 시간 경로', order: 1 });
+  for (const [k, v] of Object.entries(NEW_BUILDS)) {
+    add('건설', `새로 놓기: ${v.label}`, () => { switchTab('build'); startDraft(k); }, { hint: `${formatWon(v.perKm)}/km`, keywords: '신설 그리기 노선', order: 2 });
+  }
+  add('건설', `새로 놓기: ${AIRPORT.build.label}`, () => { switchTab('build'); startDraft('airport'); }, { keywords: '공항 신설', order: 2 });
+  add('개량', '구간 개량하기', () => toast('지도에서 도로·철도 구간을 누르면 개량 메뉴가 열립니다. Shift를 누른 채 끌면 여러 구간을 한꺼번에 고릅니다.'), { keywords: '확장 복선화 전철화 차로', order: 3 });
+  add('개량', '확장 요구 (혼잡 민원) 보기', () => switchTab('requests'), { keywords: '민원 정체 요구', order: 3 });
+  add('운행', '역 골라 특급·급행 짜기', () => { switchTab('build'); startServicePick(); }, { keywords: '운행 계통 열차 노선 운행', order: 3 });
+  add('예산', '예산·사업 투입 속도', () => switchTab('projects'), { hint: `가용 ${formatWon(state.budget)}`, keywords: '돈 부채 공사 진행', order: 3 });
+  add('도움말', '처음 안내 다시 보기', showGuide, { keywords: '튜토리얼 도움말 사용법', order: 9 });
+  // 묶음 안 깊숙한 항목으로 바로 가기 (정책·이벤트는 민원·정책 탭, 운영 성격은 운영 탭)
+  const deep = [
+    ['정책', '광역시 독립·승격', 'requests', '지방자치', '광역시', '광역시 승격 독립 시 도'],
+    ['정책', '북측 지방자치 도입', 'requests', '지방자치', '북측 지방자치', '선거 자치'],
+    ['정책', '북측 행정구역 1945년 이전으로 복원', 'requests', '지방자치', '1945', '강원북도 복원 행정구역 개편'],
+    ['정책', '남북 행정구역 정리', 'requests', '지방자치', '행정구역 정리', '행정구역 개편 통합 정리'],
+    ['정책', '북측 노선 이름을 남측 기준으로', 'requests', '지방자치', '노선 이름', '노선명 이름 바꾸기'],
+    ['정책', '이주 정책 (북→남)', 'requests', '이주 정책', null, '이주 남하 통제'],
+    ['정책', '국가 대형 사업', 'requests', '국가 대형 사업', null, '한일해저터널 시베리아 메가'],
+    ['정책', '옛 이름 되찾기', 'requests', '옛 이름', null, '지명 이름 복원'],
+    ['민원', '지자체 SOC 제안', 'requests', '지자체 SOC', null, '제안 단체장 받아들이기'],
+    ['운영', '노선 폐선·감편 (영업계수)', 'ops', '영업계수', null, '폐선 감편 적자 수지 재개통'],
+    ['운영', '철도 회사 재원·배당·합병', 'ops', '철도 운영사', null, '코레일 운영사 합병 증자 배당'],
+    ['운영', '운행 계통 (특급·급행)', 'ops', '철도 운행 계통', null, '열차 계통 특급 급행'],
+    ['운영', '항공 노선 자동 운영', 'ops', '항공', null, '취항 증편 단항 비행기'],
+    ['설정', '저장 슬롯 (저장·불러오기)', 'settings', '저장 슬롯', null, '세이브 로드 되돌리기'],
+    ['설정', '새 게임·난이도', 'settings', '새 게임', null, '처음부터 다시 난이도'],
+  ];
+  for (const [g, title, tab, sec, find, kw] of deep) add(g, title, () => goSection(tab, sec, find), { keywords: kw, order: 4 });
+  for (const m of MEGA) add('국가 대형 사업', m.name, () => goSection('requests', '국가 대형 사업', m.name), { keywords: '대형 사업 메가', order: 4 });
+  for (const [k, v] of Object.entries(LAYER_VIEWS)) {
+    add('보기', `지도 보기: ${v}`, () => { const sel = $('#layerview'); sel.value = k; sel.dispatchEvent(new Event('change', { bubbles: true })); }, { keywords: '레이어 표시', order: 6 });
+  }
+  for (const [k, v] of Object.entries(METRICS)) {
+    add('보기', `지도 색칠: ${v.label}`, () => { const sel = $('#metric'); sel.value = k; sel.dispatchEvent(new Event('change', { bubbles: true })); }, { keywords: '지표 색 범례', order: 6 });
+  }
+  for (const p of plans) {
+    add('계획 사업', p.name, () => { switchTab('build'); openPlan(p.id); }, { hint: p.group, keywords: `${p.group} 계획`, order: 5 });
+  }
+  zoneProps.forEach((z, i) => {
+    if (z.ext) return;
+    add('지역', zoneName(i), () => { map.flyTo({ center: [z.cx, z.cy], zoom: 9.5 }); select({ type: 'zone', id: i }); }, { hint: z.province, keywords: `${z.province} 시군구`, order: 7 });
+  });
+  // 철도·도시철도 노선 이름
+  const lines = new Map();
+  allLinks().forEach((_, i) => {
+    const e = linkAt(base, state, i);
+    if (e.mode >= 1 && e.name && !e.ext && !e.name.endsWith(' 환승')) { if (!lines.has(e.name)) lines.set(e.name, []); lines.get(e.name).push(i); }
+  });
+  for (const [name, ids] of lines) add('노선', name, () => gotoLinks(ids.slice(0, 400)), { keywords: '철도 노선 운행', order: 8 });
+  return cmds;
+}
+
+function showGuide() {
+  switchTab('status');
+  startGuide([
+    { target: '#map', title: '지도', body: '도로·철도 구간을 누르면 오른쪽에 개량·이름 바꾸기 메뉴가 열립니다. <b>Shift를 누른 채 끌면</b> 여러 구간을 한꺼번에 고릅니다. 역을 누르면 운행 계통과 노선도를 봅니다.' },
+    { target: '#tabs', title: '오른쪽 패널', body: GUIDE_TABS },
+    { target: '#topbar .stats', title: '예산과 지지율', body: '숫자를 누르면 관련 탭으로 갑니다. 예산은 해마다 들어오고, 공사비는 몇 해에 나눠 나갑니다.' },
+    { target: '#legend', title: '보기 메뉴', body: '도로만·철도만·항공만으로 걸러 보거나, 인구·소득·행복도 같은 지표로 지도를 색칠합니다.' },
+    { target: '#btn-find', title: '메뉴 찾기', body: '찾는 메뉴가 어디 있는지 모르겠으면 <b>Ctrl+K</b>(또는 /)로 이름 일부나 초성을 쳐 보세요. 탭·묶음·지역·노선·계획 사업으로 바로 갑니다.' },
+    { target: '#btn-next', title: '다음 해', body: '사업을 벌였으면 다음 해로 넘깁니다. 교통 수요와 인구 이동을 다시 계산합니다.' },
+  ], () => { const sel = $('#guide-mode'); if (sel) sel.value = getGuideMode(); });   // "다시 보지 않기"를 누르면 설정 칸도 맞춘다
+}
+const GUIDE_TABS = '<b>현황</b>은 올해 성적, <b>건설</b>은 새 노선·계획 사업, <b>사업</b>은 진행 중인 공사와 예산 투입, <b>운영</b>은 운행 계통·철도 회사·노선 수지·항공, <b>민원·정책</b>은 혼잡 요구·지자체 제안·행정구역·국가 대형 사업, <b>통계</b>는 순위와 추이, <b>설정</b>은 저장과 새 게임입니다.';
 
 function removeLastPoint() {
   const p = draft.points.pop();
@@ -1235,7 +1366,7 @@ function switchTab(tab) {
 
 // ---- 접는 묶음: 패널의 소제목(h4, 설정은 h3)마다 그 아래 내용을 <details>로 묶는다. 펼침 상태는 이 브라우저에 남긴다
 const FOLD_KEY = 'ukt-folds-v2';   // v2: 사업·설정 탭을 접힌 채로 시작하도록 예전 펼침 기록을 버린다
-const FOLD_CLOSED = new Set(['settings:저장 슬롯', 'settings:새 게임', 'settings:데이터', 'status:추이', 'stats:관광', 'stats:추이']);
+const FOLD_CLOSED = new Set(['settings:저장 슬롯', 'settings:새 게임', 'settings:데이터', 'status:추이', 'stats:관광', 'stats:추이', 'requests:옛 이름 되찾기']);
 // 사업 탭(건설 사업 목록)과 설정 탭은 처음에 모두 접어 둔다
 const FOLD_CLOSED_PANELS = new Set(['projects', 'settings']);
 let folds = {};
@@ -1263,7 +1394,7 @@ function foldSections(el, key, tag) {
 
 function watchFolds() {
   const spots = [['[data-panel=status]', 'status', 'H4'], ['[data-panel=stats]', 'stats', 'H3'], ['[data-panel=settings]', 'settings', 'H3'],
-    ['[data-panel=projects]', 'projects', 'H3'], ['#selection', 'sel', 'H4']];
+    ['[data-panel=projects]', 'projects', 'H3'], ['[data-panel=requests]', 'requests', 'H3'], ['[data-panel=ops]', 'ops', 'H3'], ['#selection', 'sel', 'H4']];
   for (const [sel, key, tag] of spots) {
     const el = $(sel);
     const run = () => foldSections(el, key, tag);
@@ -1282,7 +1413,7 @@ function setBusy(on, label = '', v = 0) {
 
 function renderAll() {
   renderRegions();
-  renderTop(); renderLegend(); renderStatus(); renderBuild(); renderProjects(); renderRequests(); renderSettings(); renderStats(); renderSelection();
+  renderTop(); renderLegend(); renderStatus(); renderBuild(); renderProjects(); renderRequests(); renderOps(); renderSettings(); renderStats(); renderSelection();
 }
 
 /** 지도의 광역 단체 경계·이름: 북측 도 복원, 광역시 승격(독립)이 바로 보이게 */
@@ -1411,19 +1542,15 @@ function renderBuild() {
       <p class="hint">노란 점(◆)은 중국·러시아·일본 거점 도시입니다. 끝점을 거점에 붙이면 국제 노선이 됩니다.
         기존 ${spec.mode ? '선로' : '도로'} 중간을 누르면 그 자리에 ${spec.mode === 0 ? 'IC·JCT를' : '역을'} 만들고 이어집니다.</p>
       ${!affordable && draft.points.length > 1 ? '<p class="hint neg">예산과 차입 한도를 넘습니다.</p>' : ''}
-      <div class="row" style="display:flex;gap:6px;margin-top:8px">
+      <div class="actions">
         <button class="primary" id="draft-ok" ${draft.points.length < 2 || !affordable ? 'disabled' : ''}>착공</button>
         <button id="draft-prev" ${draft.points.length < 2 ? 'disabled' : ''}>효과 미리보기</button>
         <button id="draft-cancel">취소</button>
       </div>`;
   }
-  const restore = historic.length ? `<h4>옛 이름 되찾기</h4>
-    <p class="hint">북측에서 지도자 이름이나 선전 구호로 바뀐 지명을 바뀌기 전 이름으로 돌립니다. 표지판·행정 문서·지도를 바꾸는 데 예산이 들고, 완공되면 그 지역 주민 행복도가 오릅니다.</p>
-    <div class="list">${historic.map((t) => restoreRow(t)).join('')}</div>` : '';
-  el.innerHTML = `<div class="tools">${tools}</div>${body}${draft ? '' : plansHTML() + restore}`;
+  el.innerHTML = `<div class="tools">${tools}</div>${body}${draft ? '' : plansHTML()}`;
   el.querySelectorAll('[data-plan]').forEach((b) => { b.onclick = () => openPlan(b.dataset.plan); });
   el.querySelectorAll('.svc-pick-b').forEach((b) => { b.onclick = startServicePick; });
-  bindRestore(el);
   el.querySelectorAll('[data-build]').forEach((b) => { b.onclick = () => startDraft(b.dataset.build); });
   if (draft) {
     $('#draft-ok').onclick = commitDraft;
@@ -1552,7 +1679,7 @@ function renderRequests() {
   const c = $('#req-count');
   c.hidden = requests.length === 0;
   c.textContent = requests.length;
-  el.innerHTML = `${proposalsHTML()}<h3>확장 요구</h3>
+  el.innerHTML = `${proposalsHTML()}<h3>확장 요구 (${requests.length})</h3>
     <p class="hint">혼잡도(V/C)가 1.0을 넘는 상태가 2년 이상 이어진 노선입니다(남은 고속도로·간선국도, 북은 모든 도로, 그리고 철도). 방치하면 지지율이 떨어집니다. 넓혀도 통행비용이 줄면 수요가 다시 늘 수 있습니다.</p>
     <div class="list">${requests.map((r, i) => {
       const l = linkAt(base, state, r.links[0]);
@@ -1565,7 +1692,9 @@ function renderRequests() {
           <button class="small" data-goto="${i}">보기</button>
           <button class="small" data-dismiss="${i}">올해 보류</button>
         </div></div>`;
-    }).join('') || '<p class="hint">요구가 없습니다.</p>'}</div>`;
+    }).join('') || '<p class="hint">요구가 없습니다.</p>'}</div>
+    ${policyHTML()}`;
+  bindPolicy(el);
   el.querySelectorAll('[data-fix]').forEach((b) => {
     b.onclick = () => {
       const r = requests[+b.dataset.fix];
@@ -1626,15 +1755,13 @@ function renderStats() {
       const e = linkAt(base, state, i);
       if (e.mode !== mode || !e.name || e.ext || i >= result.links.vc.length) return;
       const cur = m.get(e.name) || { vol: 0, vc: 0, cls: e.cls };
-      cur.vol = Math.max(cur.vol, result.links.vol[i]); cur.vc = Math.max(cur.vc, result.links.vc[i]);
+      cur.vol = Math.max(cur.vol, shownTraffic.vol[linkTwins[i]]); cur.vc = Math.max(cur.vc, shownTraffic.vc[linkTwins[i]]);
       m.set(e.name, cur);
     });
     return [...m.entries()];
   };
   const railRows = byName(1).sort((x, y) => y[1].vol - x[1].vol).slice(0, 10)
     .map(([n, v]) => `<tr><td>${esc(n)}</td><td>${Math.round(v.vol).toLocaleString()}</td><td class="${v.vc > 1 ? 'neg' : ''}">${v.vc.toFixed(2)}</td></tr>`).join('');
-  const svcRows = svcStats().map((x) => `<tr><td>${esc(x.s.name)} <span class="m">${x.s.name.includes(SERVICE_KINDS[x.s.kind].label) ? "" : `${SERVICE_KINDS[x.s.kind].label} · `}${x.s.stops.length}역</span></td>
-    <td>${x.s.trains}</td><td>${Math.round(x.peak).toLocaleString()}</td><td>${Math.round(x.load * 100)}%</td><td class="${x.ratio > 100 ? 'neg' : ''}">${fmtRatio(x.ratio)}</td></tr>`).join('');
   const roadRows = byName(0).filter(([, v]) => v.cls === 'motorway' || v.cls === 'trunk').sort((x, y) => y[1].vc - x[1].vc).slice(0, 10)
     .map(([n, v]) => `<tr><td>${esc(n)}</td><td>${Math.round(v.vol).toLocaleString()}</td><td class="${v.vc > 1 ? 'neg' : ''}">${v.vc.toFixed(2)}</td></tr>`).join('');
   const h = state.history;
@@ -1653,9 +1780,7 @@ function renderStats() {
     <h3 style="margin-top:16px">철도</h3>
     <h4>역 순위 (지역 간 승하차)</h4><table class="cmp"><tr><th>역</th><th>명/일</th></tr>${stRows}</table>
     <h4>노선 순위 (최대 구간 이용객)</h4><table class="cmp"><tr><th>노선</th><th>명/일</th><th>V/C</th></tr>${railRows}</table>
-    ${railStatsHTML()}
-    ${svcRows ? `<h4>운행 계통</h4><table class="cmp"><tr><th>계통</th><th>회/일</th><th>최대 구간</th><th>승차율</th><th>영업계수</th></tr>${svcRows}</table>` : ''}
-    ${econPanelHTML()}
+    <p class="hint">철도 회사 수지·노선별 영업계수·운행 계통은 <a href="#" data-goto-tab="ops">운영 탭</a>에 있습니다.</p>
     <h3 style="margin-top:16px">도로</h3>
     <h4>가장 막히는 고속도로·간선국도</h4><table class="cmp"><tr><th>노선</th><th>PCU/일</th><th>V/C</th></tr>${roadRows}</table>
     ${h.length > 1 ? `<h3 style="margin-top:16px">추이</h3>
@@ -1666,8 +1791,7 @@ function renderStats() {
       ${chart('철도 분담률 (%)', h.map((r) => [r.year, r.rail * 100]))}
       ${h.some((r) => r.air) ? chart('항공 분담률 (%)', h.filter((r) => r.air != null).map((r) => [r.year, r.air * 100])) : ''}
       ${chart('지지율 (%)', h.filter((r) => r.approval != null).map((r) => [r.year, r.approval]))}` : '<p class="hint">해를 넘기면 연도별 추이가 쌓입니다.</p>'}`;
-  bindRailStats(el);
-  bindEcon(el);
+  el.querySelectorAll('[data-goto-tab]').forEach((a) => { a.onclick = (e) => { e.preventDefault(); switchTab(a.dataset.gotoTab); }; });
 }
 
 // ---- 영업계수 패널: 노선별 수지를 나쁜 순으로 보고 감편·폐선·재개통한다
@@ -1710,7 +1834,7 @@ function econPanelHTML() {
     }).join('') || '<p class="hint">노선이 없습니다.</p>'}</div>
     ${rows.length > 20 ? `<button class="small" data-econ="all:${!econView.all}" style="margin-top:6px">${econView.all ? '20개만 보기' : `모두 보기 (${rows.length})`}</button>` : ''}
     ${idle.length ? `<p class="hint">여객 이용이 없는 노선 ${idle.length}개(화물선, 역이 없는 선로: ${idle.slice(0, 6).map((e) => esc(e.name)).join(', ')}${idle.length > 6 ? ' 등' : ''})는 순위에서 뺐습니다. 여객 열차 없이 선로 유지비 연 ${formatWon(idle.reduce((a, e) => a + e.cost, 0) / 1e8)}만 셉니다.</p>` : ''}
-    ${closed.length ? `<h4>폐선한 노선</h4><div class="list">${closed.map(([n, y]) => `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
+    ${closed.length ? `<h4>폐선한 노선</h4><div class="list">${closed.map(([n, y]) => `<div class="item opt"><div class="opt-row">
       <span>${esc(n)} <span class="m">${y}년 폐선 · ${Math.round(lineKmOf(n))}km</span></span>
       <button class="small" data-reopen="${esc(n)}">재개통 ${formatWon(lineKmOf(n) * REOPEN_PER_KM)}</button></div></div>`).join('')}</div>` : ''}
     <p class="hint">영업계수 = 영업비용 ÷ 영업수입 × 100 (100 미만이면 흑자, 200 이상이면 수입의 두 배를 씁니다). 수입은 구간 이용객 × 거리 × km당 운임, 비용은 운행 열차-km와 선로 유지비로 셈한 추정입니다. 도시철도는 같은 구 안 이용을 역세권 인구로 어림해 더했습니다.<br>
@@ -1719,10 +1843,10 @@ function econPanelHTML() {
 
 function bindEcon(el) {
   el.querySelectorAll('[data-econ]').forEach((b) => {
-    b.onclick = () => { const [k, v] = b.dataset.econ.split(':'); econView[k] = k === 'all' ? v === 'true' : v; renderStats(); };
+    b.onclick = () => { const [k, v] = b.dataset.econ.split(':'); econView[k] = k === 'all' ? v === 'true' : v; renderOps(); };
   });
   el.querySelectorAll('[data-freq]').forEach((sel) => {
-    sel.onchange = () => { setLineFreq(state, sel.dataset.freq, +sel.value); econCache = null; save(state); renderStats(); renderStatus(); };
+    sel.onchange = () => { setLineFreq(state, sel.dataset.freq, +sel.value); econCache = null; save(state); renderOps(); renderStatus(); };
   });
   el.querySelectorAll('[data-close-line]').forEach((b) => {
     b.onclick = () => {
@@ -1765,17 +1889,11 @@ function chart(title, pts) {
 function renderSettings() {
   const el = $('[data-panel=settings]');
   el.innerHTML = `
-    <h3>정책</h3>
-    <div class="name-row"><span style="flex:1">북→남 이주</span>
-      <select id="policy">${Object.entries(POLICY_LABEL).map(([k, v]) => `<option value="${k}" ${state.policy === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
-    <p class="hint">통일 직후 대규모 남하를 막을지 정합니다. 통제할수록 북측 인구는 유지되지만 지지율과 통합 속도에 영향이 있습니다.</p>
-    <h3 style="margin-top:16px">지방자치·행정구역</h3>
-    ${localSettingsHTML()}
-    <h3 style="margin-top:16px">국가 대형 사업</h3>
-    ${megaHTML()}
-    <h3 style="margin-top:16px">항공</h3>
-    <label class="name-row"><input type="checkbox" id="air-auto" ${state.air?.auto ? 'checked' : ''}>
-      <span>항공 노선 자동 운영 (수요에 따른 취항·증편·단항)</span></label>
+    <h3>도움말</h3>
+    <div class="actions"><button class="small" id="help-guide">처음 안내 다시 보기</button><button class="small" id="help-find">메뉴 찾기 (Ctrl+K)</button></div>
+    <div class="name-row"><span style="flex:1">게임을 열 때 처음 안내</span>
+      <select id="guide-mode">${Object.entries(GUIDE_MODES).map(([k, v]) => `<option value="${k}" ${getGuideMode() === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+    <p class="hint">정책·지방자치·행정구역·국가 대형 사업은 <a href="#" data-goto-tab="requests">민원·정책 탭</a>, 항공 자동 운영·철도 회사·노선 정리는 <a href="#" data-goto-tab="ops">운영 탭</a>에 있습니다.</p>
     <h3 style="margin-top:16px">저장 슬롯</h3>
     <p class="hint">진행은 자동 저장되고, 여기에 따로 세 개까지 남겨 두었다가 되돌릴 수 있습니다.</p>
     ${slotsHTML()}
@@ -1788,7 +1906,41 @@ function renderSettings() {
     <p class="hint">진행 상황은 이 브라우저에 자동 저장됩니다.</p>
     <h3 style="margin-top:16px">데이터</h3>
     <p class="hint">도로·철도·행정구역·지명: © OpenStreetMap 기여자 (ODbL)<br>인구 격자: WorldPop 2020 (CC BY 4.0)<br>소득·HDI 초기값과 공사비 단가는 게임용 가정값입니다. 자세한 내용은 저장소의 docs/model.md를 보세요.</p>`;
-  $('#air-auto').onchange = (e) => { state.air.auto = e.target.checked; save(state); };
+  $('#help-guide').onclick = showGuide;
+  $('#help-find').onclick = () => openPalette();
+  $('#guide-mode').onchange = (e) => { setGuideMode(e.target.value); toast(`처음 안내: ${GUIDE_MODES[e.target.value]}`); };
+  el.querySelectorAll('[data-goto-tab]').forEach((a) => { a.onclick = (e) => { e.preventDefault(); switchTab(a.dataset.gotoTab); }; });
+  bindSlots(el);
+  $('#btn-new').onclick = () => {
+    if (!confirm('지금 게임을 지우고 새로 시작할까요?')) return;
+    guideOnNewGame();
+    clearSave();
+    clearSim();
+    const d = $('#difficulty').value;
+    const admin = readAdminSelects(el, 'new');
+    state = newGame(d);
+    setAdmin(admin);
+    save(state);
+    location.reload();
+  };
+}
+
+/** 민원·정책 탭 아래쪽: 이주 정책, 지방자치·행정구역 이벤트, 국가 대형 사업, 옛 이름 되찾기 (정책·이벤트 성격은 이 탭에 모은다) */
+function policyHTML() {
+  return `<h3 style="margin-top:16px">이주 정책</h3>
+    <div class="name-row"><span style="flex:1">북→남 이주</span>
+      <select id="policy">${Object.entries(POLICY_LABEL).map(([k, v]) => `<option value="${k}" ${state.policy === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+    <p class="hint">통일 직후 대규모 남하를 막을지 정합니다. 통제할수록 북측 인구는 유지되지만 지지율과 통합 속도에 영향이 있습니다.</p>
+    <h3 style="margin-top:16px">지방자치·행정구역</h3>
+    ${localSettingsHTML()}
+    <h3 style="margin-top:16px">국가 대형 사업</h3>
+    ${megaHTML()}
+    ${historic.length ? `<h3 style="margin-top:16px">옛 이름 되찾기</h3>
+    <p class="hint">북측에서 지도자 이름이나 선전 구호로 바뀐 지명을 바뀌기 전 이름으로 돌립니다. 표지판·행정 문서·지도를 바꾸는 데 예산이 들고, 완공되면 그 지역 주민 행복도가 오릅니다.</p>
+    <div class="list">${historic.map((t) => restoreRow(t)).join('')}</div>` : ''}`;
+}
+
+function bindPolicy(el) {
   bindLocalSettings(el);
   el.querySelectorAll('[data-mega]').forEach((b) => {
     b.onclick = () => {
@@ -1800,19 +1952,32 @@ ${formatWon(m.cost)} · ${m.years}년 (해마다 ${formatWon(m.cost / m.years)})
       save(state); renderAll();
     };
   });
-  bindSlots(el);
-  $('#policy').onchange = (e) => { state.policy = e.target.value; state.log.unshift(`${state.year}년 이주 정책: ${POLICY_LABEL[state.policy]}`); save(state); renderStatus(); };
-  $('#btn-new').onclick = () => {
-    if (!confirm('지금 게임을 지우고 새로 시작할까요?')) return;
-    clearSave();
-    clearSim();
-    const d = $('#difficulty').value;
-    const admin = readAdminSelects(el, 'new');
-    state = newGame(d);
-    setAdmin(admin);
-    save(state);
-    location.reload();
-  };
+  bindRestore(el);
+  el.querySelector('#policy').onchange = (e) => { state.policy = e.target.value; state.log.unshift(`${state.year}년 이주 정책: ${POLICY_LABEL[state.policy]}`); save(state); renderStatus(); };
+}
+
+/** 운영 탭: 철도 운행 계통, 철도 회사(재원·합병), 노선 영업계수·감편·폐선, 항공 자동 운영 */
+function renderOps() {
+  const el = $('[data-panel=ops]');
+  if (!el) return;
+  if (!result) { el.innerHTML = '<p class="hint">계산 중입니다…</p>'; return; }
+  const svcRows = svcStats().map((x) => `<tr><td>${esc(x.s.name)} <span class="m">${x.s.name.includes(SERVICE_KINDS[x.s.kind].label) ? '' : `${SERVICE_KINDS[x.s.kind].label} · `}${x.s.stops.length}역</span></td>
+    <td>${x.s.trains}</td><td>${Math.round(x.peak).toLocaleString()}</td><td>${Math.round(x.load * 100)}%</td><td class="${x.ratio > 100 ? 'neg' : ''}">${fmtRatio(x.ratio)}</td></tr>`).join('');
+  el.innerHTML = `
+    <h3>철도 운행 계통</h3>
+    <div class="actions"><button class="small primary svc-pick-b">역 골라 특급·급행 짜기</button></div>
+    <p class="hint">역을 누르면 그 역을 지나는 노선의 노선도·운행 계통을 보고 고칠 수 있습니다.</p>
+    ${svcRows ? `<table class="cmp"><tr><th>계통</th><th>회/일</th><th>최대 구간</th><th>승차율</th><th>영업계수</th></tr>${svcRows}</table>` : '<p class="hint">아직 짠 계통이 없습니다.</p>'}
+    ${railStatsHTML()}
+    ${econPanelHTML()}
+    <h3 style="margin-top:16px">항공</h3>
+    <label class="name-row"><input type="checkbox" id="air-auto" ${state.air?.auto ? 'checked' : ''}>
+      <span>항공 노선 자동 운영 (수요에 따른 취항·증편·단항)</span></label>
+    <p class="hint">노선을 직접 열거나 닫으려면 지도에서 공항을 누르세요.</p>`;
+  el.querySelectorAll('.svc-pick-b').forEach((b) => { b.onclick = startServicePick; });
+  el.querySelector('#air-auto').onchange = (e) => { state.air.auto = e.target.checked; save(state); };
+  bindRailStats(el);
+  bindEcon(el);
 }
 
 function renderSelection() {
@@ -2108,7 +2273,7 @@ function servicePanel() {
       <tr><td>차량 구입비</td><td>${cost ? formatWon(cost) : '없음'}${cur ? ` (보유 ${cur.sets}편성)` : ''}</td></tr>` : '<tr><td colspan="2">정차역을 둘 이상 고르세요.</td></tr>'}
     </table>
     <p class="hint">특급·급행은 고른 역에만 서서 통과역마다 정차 시간을 줄이고, 정차역의 배차 간격이 짧아집니다. 열차는 같은 선로 용량을 나눠 씁니다. 고친 내용은 다음 해부터 반영됩니다.</p>
-    <div class="row" style="display:flex;gap:6px;margin:8px 0">
+    <div class="actions">
       <button class="small" data-svc-preset="local">모든 역</button><button class="small" data-svc-preset="express">큰 역 절반</button>
       <button class="small" data-svc-preset="limited">주요 역만</button></div>
     <div class="name-row"><span class="kind">노선</span><span>${e.lines.map(esc).join(' → ')}</span></div>
@@ -2121,7 +2286,7 @@ function servicePanel() {
     })()}
     <div style="max-height:240px;overflow:auto">${rows}</div>
     ${e.id ? '' : fundSelect(plan ? [serviceOperator({ segs: plan.segs })] : [])}
-    <div class="row" style="display:flex;gap:6px;margin-top:8px">
+    <div class="actions">
       <button class="primary" id="svc-ok" ${plan && typeOk ? '' : 'disabled'}>${e.id ? (cost ? `저장 (차량 ${formatWon(cost)})` : '저장') : `운행 시작 (차량 ${formatWon(cost)} · 1년)`}</button>
       ${e.id ? '<button id="svc-del">운행 중단</button>' : ''}
     </div>`;
@@ -2167,15 +2332,15 @@ function serviceSection(l) {
   const ec = lineEconomics().find((x) => x.name === l.name);
   const econ = ec ? `<p class="hint">이 노선: 연 수입 ${formatWon(ec.rev / 1e8)} · 비용 ${formatWon(ec.cost / 1e8)} · 영업계수 <b class="${ec.ratio > 100 ? 'neg' : ''}">${fmtRatio(ec.ratio)}</b></p>` : '';
   const diagram = '<button class="small" id="line-diagram">노선도 보기 (열차 위치·정차역·혼잡도)</button>';
-  if (l.mode === 2) return `<h4>노선도 · 수익성</h4>${diagram}${econ}<p class="hint">도시철도 수입에는 같은 구 안 이용을 역세권 인구로 어림해 더했습니다.</p>`;
+  if (l.mode === 2) return `<h4>노선도 · 수익성</h4><div class="actions">${diagram}</div>${econ}<p class="hint">도시철도 수입에는 같은 구 안 이용을 역세권 인구로 어림해 더했습니다.</p>`;
   const list = (state.services || []).filter((s) => s.line === l.name || s.lines?.includes(l.name));
-  return `<h4>노선도 · 운행 계통 · 수익성</h4>${diagram}
-    <button class="small" id="st-start" title="두 역 사이를 단순한 곡선으로 새로 놓고 옛 구간은 폐선">구간 직선화 (두 역 고르기)</button>${econ}
-    <div class="list">${list.map((s) => `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
+  return `<h4>노선도 · 운행 계통 · 수익성</h4><div class="actions">${diagram}
+    <button class="small" id="st-start" title="두 역 사이를 단순한 곡선으로 새로 놓고 옛 구간은 폐선">구간 직선화 (두 역 고르기)</button></div>${econ}
+    <div class="list">${list.map((s) => `<div class="item opt"><div class="opt-row">
       <span>${esc(s.name)} <span class="m">${s.name.includes(SERVICE_KINDS[s.kind].label) ? "" : `${SERVICE_KINDS[s.kind].label} · `}${s.stops.length}개 역 · ${TRAIN_TYPES[s.type]?.label.split(' ')[0] || ''} ${s.sets}편성 · 하루 ${s.trains}회${s.built ? '' : ' · 차량 제작 중'}</span></span>
       <button class="small" data-svc-edit="${s.id}">고치기</button></div></div>`).join('')}</div>
-    <button class="small" id="svc-new" data-line="${esc(l.name)}" data-cls="${l.cls}">새 운행 계통 짜기 (특급·급행·보통)</button>
-    <button class="small svc-pick" title="설 역을 지도에서 차례로 눌러 여러 노선을 지나는 계통을 만듭니다">역 골라 계통 짜기</button>`;
+    <div class="actions"><button class="small" id="svc-new" data-line="${esc(l.name)}" data-cls="${l.cls}">새 운행 계통 짜기 (특급·급행·보통)</button>
+    <button class="small svc-pick" title="설 역을 지도에서 차례로 눌러 여러 노선을 지나는 계통을 만듭니다">역 골라 계통 짜기</button></div>`;
 }
 
 function fmtRatio(r) { return isFinite(r) ? Math.round(r).toLocaleString() : '–'; }
@@ -2398,7 +2563,7 @@ function railStatsHTML() {
       <td class="${e.rev < e.cost ? 'neg' : ''}">${formatWon((e.rev - e.cost) / 1e8)}</td><td class="${ratio > 100 ? 'neg' : ''}">${fmtRatio(ratio)}</td><td>${formatWon(o.cash)}</td></tr>`;
   }).join('');
   const charts = ops.map((op) => (r.ops[op].hist.length > 1 ? chart(`${opInfo(state, op).name} 잔액 (억원)`, r.ops[op].hist.map((h) => [h.year, h.cash])) : '')).join('');
-  const actions = ops.map((op) => `<div class="row" style="display:flex;gap:6px;margin:4px 0;align-items:center">${opBadge(state, op)}
+  const actions = ops.map((op) => `<div class="actions">${opBadge(state, op)}
       <button class="small" data-rail-div="${op}" ${r.ops[op].cash > 0 ? '' : 'disabled'}>배당 (잔액 절반 → 정부)</button>
       <button class="small" data-rail-eq="${op}">출자 ${formatWon(EQUITY_STEP)}</button></div>`).join('');
   const canMerge = !r.merged && state.integration >= MERGE_MIN_INTEGRATION;
@@ -2715,7 +2880,7 @@ function proposalsHTML() {
       const partial = ck.targets.length < p.links.length ? ` · 일부 구간(${ck.targets.length}/${p.links.length})은 이미 공사 중` : '';
       return `<div class="item"><div class="t">${esc(p.title)}</div>
         <div class="m">${off ? `${partyBadge(off.party)} ${esc(off.title)}` : ''} · ${p.year}년 제안 · ${formatWon(ck.cost)}${partial}</div>
-        <div class="row" style="display:flex;gap:6px;margin-top:4px"><button class="small primary" data-prop-ok="${p.id}" ${ck.afford ? '' : 'disabled title="예산과 차입 한도가 부족합니다"'}>${ck.afford ? '받아들이기' : '받아들이기 (예산 부족)'}</button>
+        <div class="actions"><button class="small primary" data-prop-ok="${p.id}" ${ck.afford ? '' : 'disabled title="예산과 차입 한도가 부족합니다"'}>${ck.afford ? '받아들이기' : '받아들이기 (예산 부족)'}</button>
         <button class="small" data-prop-no="${p.id}">거절</button></div></div>`;
     }).join('')}</div>`;
 }
@@ -3128,7 +3293,7 @@ function straightenPanel() {
     ${merged.length ? `<div class="m" style="margin-top:4px">합치는 역: ${merged.join(' · ')}</div>` : ''}
     <p class="hint">완공되면 옛 구간 ${pl.via.length}개는 폐선하고, 역 이름과 운행 계통의 정차역은 새 자리로 이어집니다.</p>
     ${fundSelect([operatorOf(state, { mode: 1, kp: isKP(nodeCoord(pl.A)[1], nodeCoord(pl.A)[0]) ? 1 : 0 })])}
-    <div class="row" style="display:flex;gap:6px;margin-top:8px">
+    <div class="actions">
       <button class="primary" id="st-ok">착공</button><button id="st-prev">효과 미리보기</button><button id="st-cancel">취소</button></div>`;
 }
 
@@ -3355,7 +3520,7 @@ function slotInfo(n) {
 function slotsHTML() {
   return `<div class="list">${Array.from({ length: SLOTS }, (_, k) => {
     const v = slotInfo(k + 1);
-    return `<div class="item"><div class="row" style="margin:0;justify-content:space-between;align-items:center">
+    return `<div class="item opt"><div class="opt-row">
       <span>슬롯 ${k + 1} <span class="m">${v ? `${v.state.year}년 · ${new Date(v.savedAt).toLocaleString('ko-KR')}` : '비어 있음'}</span></span>
       <span><button class="small" data-slot-save="${k + 1}">저장</button> <button class="small" data-slot-load="${k + 1}" ${v ? '' : 'disabled'}>불러오기</button></span></div></div>`;
   }).join('')}</div>`;
@@ -3674,7 +3839,7 @@ function servicePickPanel() {
   return `${header('역 골라 계통 짜기')}
     <p class="hint">특급·급행이 설 역을 지도에서 차례로 누르세요 (다시 누르면 빠집니다). 노선이 달라도 됩니다 — 사이 경로와 지나는 노선은 저절로 잡습니다.</p>
     <div class="m">${picks.map((n, i) => `${i + 1}. ${esc(nn.get(n)?.name || '')}`).join(' → ') || '아직 고른 역이 없습니다.'}</div>
-    <div class="row" style="display:flex;gap:6px;margin-top:8px">
+    <div class="actions">
       <button class="primary" id="sp-ok" ${picks.length >= 2 ? '' : 'disabled'}>이 역들로 계통 만들기</button><button id="sp-cancel">취소</button></div>`;
 }
 
@@ -3713,12 +3878,13 @@ function commitServicePick() {
 }
 
 function header(title) {
-  return `<div style="display:flex;justify-content:space-between;align-items:center"><h3>${esc(title)}</h3><button class="small close">닫기</button></div>`;
+  return `<div class="sel-head"><h3>${esc(title)}</h3><button class="small close" title="닫기 (Esc)">닫기</button></div>`;
 }
 
 function linkPanel(id) {
   const l = linkAt(base, state, id);
-  const vc = result ? result.links.vc[id] : 0, vol = result ? result.links.vol[id] : 0;
+  // 분리 차로 쌍은 합친 값 (지도 색과 같게)
+  const vc = shownTraffic ? shownTraffic.vc[linkTwins[id]] : 0, vol = shownTraffic ? shownTraffic.vol[linkTwins[id]] : 0;
   const speed = result ? result.links.speed[id] : 0;
   const busyProj = state.projects.find((p) => p.status === 'building' && p.links.includes(id));
   const isRoad = l.mode === 0;
@@ -3761,7 +3927,7 @@ function linkPanel(id) {
     : l.ext ? '<p class="hint">국외 거점과 잇는 국경 연결 구간입니다. 개량 대상이 아닙니다.</p>'
     : l.cls === 'ferry' ? '<p class="hint">여객선 항로입니다. 개량 대상이 아닙니다.</p>'
     : busyProj ? `<p class="hint">공사 중: ${esc(busyProj.label)} (${busyProj.doneYear}년 완공)</p>` : `<h4>개량</h4>
-    <button class="small sec-start" title="두 역·IC를 차례로 눌러 그 사이만 고릅니다">구간 선택 (${l.mode === 0 ? 'IC' : '역'} 두 곳 누르기)</button>
+    <div class="actions"><button class="small sec-start" title="두 역·IC를 차례로 눌러 그 사이만 고릅니다">구간 선택 (${l.mode === 0 ? 'IC' : '역'} 두 곳 누르기)</button></div>
     ${l.mode === 1 ? fundSelect([operatorOf(state, l)]) : ''}
     ${route.length > 1 ? `<label class="name-row"><input type="checkbox" id="whole-route" ${wholeRoute ? 'checked' : ''}>
       <span>같은 이름 노선 전체 (${route.length}개 구간, ${routeKm.toFixed(0)}km)</span></label>` : ''}
@@ -3769,9 +3935,9 @@ function linkPanel(id) {
       const ids = (wholeRoute && route.length > 1 ? route : secIds).filter((x) => u.applies(linkAt(base, state, x)));
       const cost = ids.reduce((sum, x) => sum + upgradeCost(u, linkAt(base, state, x)), 0);
       const ok = canAfford(state, cost, u.years, fundFor(state, ids.map((x) => linkAt(base, state, x))));
-      return `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
+      return `<div class="item opt"><div class="opt-row">
         <span>${resolve(u.label, l)}${ids.length > 1 ? ` · ${ids.length}개 구간` : ''}</span>
-        <span><button class="small" data-prev-up="${u.id}" title="다 지었을 때 효과">미리보기</button>
+        <span class="btns"><button class="small" data-prev-up="${u.id}" title="다 지었을 때 효과">미리보기</button>
         <button class="small ${ok ? 'primary' : ''}" data-up="${u.id}" ${ok ? '' : 'disabled'}>${formatWon(cost)} · ${u.years}년</button></span></div></div>`;
     }).join('') || '<p class="hint">가능한 개량이 없습니다.</p>'}</div>`}`;
 }
@@ -3798,12 +3964,12 @@ function multiPanel(ids) {
   const nn = nodeNames();
   const title = sc ? `${nn.get(sc.A)?.name || '교차점'} – ${nn.get(sc.B)?.name || '교차점'} 구간` : `${label} ${pool.length}개 구간 선택`;
   return `${header(title)}
-    ${sc ? `<div class="row" style="display:flex;gap:6px;margin:4px 0">${sc.mode === 1 ? '<button class="small" id="sec-straight">이 구간 직선화</button>' : ''}
+    ${sc ? `<div class="actions">${sc.mode === 1 ? '<button class="small" id="sec-straight">이 구간 직선화</button>' : ''}
       <button class="small" id="sec-prev">첫 개량 효과 미리보기</button><button class="small sec-start">다른 구간 고르기</button></div>` : ''}
     <p class="hint">${km[mode].toFixed(0)}km · ${names.map(esc).join(', ')}${names.length === 6 ? ' 등' : ''}${pool.length < ids.length ? ` (다른 수단·공사 중 구간 ${ids.length - pool.length}개 제외)` : ''}</p>
     <div class="list">${ups.map(({ u, app, cost, len }) => {
       const ok = canAfford(state, cost, u.years);
-      return `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
+      return `<div class="item opt"><div class="opt-row">
         <span>${resolve(u.label, linkAt(base, state, app[0]))} · ${app.length}개 구간 ${len.toFixed(0)}km</span>
         <button class="small ${ok ? 'primary' : ''}" data-mup="${u.id}" data-ids="${JSON.stringify(app)}" ${ok ? '' : 'disabled'}>${formatWon(cost)} · ${u.years}년</button></div></div>`;
     }).join('') || '<p class="hint">고른 구간에 가능한 개량이 없습니다.</p>'}</div>`;
@@ -3896,7 +4062,7 @@ function airportPanel(id) {
       <tr><td>혼잡도 (V/C)</td><td class="${pax > cap ? 'neg' : ''}">${(pax / cap).toFixed(2)}</td></tr>
     </table>
     ${ap.ext ? '' : busyProj ? `<p class="hint">공사 중: ${esc(busyProj.label)} (${busyProj.doneYear}년 완공)</p>`
-      : `<div class="row" style="margin-top:8px"><button class="small primary" id="ap-expand">${AIRPORT.expand.label} ${formatWon(cost)} · ${AIRPORT.expand.years}년</button></div>`}
+      : `<div class="actions"><button class="small primary" id="ap-expand">${AIRPORT.expand.label} ${formatWon(cost)} · ${AIRPORT.expand.years}년</button></div>`}
     ${routePanel(id, k)}`;
 }
 
@@ -3921,14 +4087,14 @@ function routePanel(id, k) {
       const key = routeKey(id, other);
       const r = state.air.routes[key];
       const load = pax / (2 * f * seats);
-      return `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
+      return `<div class="item opt"><div class="opt-row">
         <span>${esc(airportName(other))} · 하루 ${f}회 · ${pax.toLocaleString()}명 · 탑승률 <span class="${load > 1 ? 'neg' : ''}">${Math.round(load * 100)}%</span>
           <span class="m">${ORIGIN[r?.origin] || ''}</span></span>
         <button class="small" data-close-route="${key}">운항 중단</button></div></div>`;
     }).join('') || '<p class="hint">운항 중인 노선이 없습니다.</p>'}</div>
     ${latent.length ? `<h4>잠재 수요가 큰 미취항 노선</h4><div class="list">${latent.map(([a, b, pax]) => {
       const other = air.ids[a === k ? b : a];
-      return `<div class="item"><div class="row" style="margin:0;justify-content:space-between">
+      return `<div class="item opt"><div class="opt-row">
         <span>${esc(airportName(other))} · 하루 약 ${pax.toLocaleString()}명</span>
         <button class="small primary" data-open-route="${other}">개설 ${formatWon(AIR.openCost * (here.country !== aps.find((x) => x.id === other)?.country ? 1.5 : 1))}</button></div></div>`;
     }).join('')}</div>` : ''}
@@ -3947,7 +4113,7 @@ function nodePanel(id) {
     ${n.kind === 'station' ? stationPanel(id, n) : ''}
     <h4>이름</h4>
     <div class="name-row"><input type="text" id="node-name" value="${esc(n.name)}">
-      <button class="small primary" id="node-save">이름 변경</button>
+      <button class="small" id="node-save">바꾸기</button>
       <button class="small" id="node-auto" title="자동 이름">↻</button></div>`;
 }
 

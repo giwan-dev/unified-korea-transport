@@ -27,11 +27,13 @@
     <div class="brand"><img src="assets/brand/mark.svg" alt="" width="26" height="26">통일 한반도 교통망</div>
     <div class="stats">
       <div><span class="k">연도</span><span id="s-year" class="v">–</span></div>
-      <div><span class="k">가용 예산</span><span id="s-budget" class="v">–</span></div>
-      <div><span class="k">부채</span><span id="s-debt" class="v">–</span></div>
-      <div><span class="k">지지율</span><span id="s-approval" class="v">–</span></div>
-      <div><span class="k">남북 통합도</span><span id="s-integration" class="v">–</span></div>
+      <div data-go="projects" role="button" tabindex="0" title="사업 탭: 예산 투입과 공사"><span class="k">가용 예산</span><span id="s-budget" class="v">–</span></div>
+      <div data-go="projects" role="button" tabindex="0" title="사업 탭: 예산 투입과 공사"><span class="k">부채</span><span id="s-debt" class="v">–</span></div>
+      <div data-go="status" role="button" tabindex="0" title="현황 탭: 지지율이 오르내린 까닭"><span class="k">지지율</span><span id="s-approval" class="v">–</span></div>
+      <div data-go="status" role="button" tabindex="0" title="현황 탭"><span class="k">남북 통합도</span><span id="s-integration" class="v">–</span></div>
     </div>
+    <button id="btn-find" title="메뉴 찾기 (Ctrl+K)" aria-label="메뉴 찾기">⌕<span class="lbl"> 메뉴 찾기</span><kbd class="lbl">Ctrl K</kbd></button>
+    <button id="btn-help" title="처음 안내 다시 보기" aria-label="도움말">?</button>
     <button id="btn-measure" title="두 지점을 눌러 수단별 소요 시간을 잽니다">⏱<span class="lbl"> 소요 시간</span></button>
     <button id="btn-next" class="primary" disabled>다음 해 ▶</button>
   </header>
@@ -50,7 +52,8 @@
         <button data-tab="status" class="on">현황</button>
         <button data-tab="build">건설</button>
         <button data-tab="projects">사업</button>
-        <button data-tab="requests">민원 <span id="req-count" class="badge" hidden></span></button>
+        <button data-tab="ops">운영</button>
+        <button data-tab="requests">민원·정책 <span id="req-count" class="badge" hidden></span></button>
         <button data-tab="stats">통계</button>
         <button data-tab="settings">설정</button>
       </nav>
@@ -58,6 +61,7 @@
       <section data-panel="status" class="panel on"></section>
       <section data-panel="build" class="panel"></section>
       <section data-panel="projects" class="panel"></section>
+      <section data-panel="ops" class="panel"></section>
       <section data-panel="requests" class="panel"></section>
       <section data-panel="stats" class="panel"></section>
       <section data-panel="settings" class="panel"></section>
