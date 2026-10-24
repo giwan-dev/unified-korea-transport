@@ -154,6 +154,14 @@ table.cmp th.asc, table.cmp th.desc { color: var(--ink); }
 .tools button { text-align: left; padding: var(--s2) 10px; justify-content: flex-start; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 48px; font-weight: 600; }
 .tools button .c { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
 .tools button.on .c { color: var(--accent); }
+/* 카드 높이가 달라도(두 줄 이름) 글자는 위에서부터, 아래 작은 단추들은 두 칸 격자로 */
+.tools button { height: 100%; white-space: normal; }
+.tool-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); margin-bottom: var(--s3); }
+.tool-row button { width: 100%; white-space: normal; text-align: center; padding: 4px 8px; }
+.tool-row button.wide { grid-column: 1 / -1; }
+/* 착공·효과 미리보기·취소는 한 줄에 */
+.actions.nowrap { flex-wrap: nowrap; }
+.actions.nowrap button { flex: 1 1 0; min-width: 0; white-space: nowrap; padding: 0 8px; }
 
 .name-row { display: flex; gap: var(--s2); align-items: center; margin: var(--s2) 0; flex-wrap: wrap; }
 .name-row label { display: inline-flex; gap: 6px; align-items: center; }

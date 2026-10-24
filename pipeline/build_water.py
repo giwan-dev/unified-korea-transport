@@ -12,6 +12,7 @@ from pathlib import Path
 
 import osmium
 import shapely
+import shapely.geometry.polygon
 from shapely import wkb
 from shapely.geometry import mapping
 
@@ -80,7 +81,24 @@ def write_merged(geoms):
     sea = box(116, 21.5, 148, 48).difference(land)
     edge = unary_union([p.boundary for p in parts]).difference(sea.buffer(0.0004))
     edge = shapely.set_precision(edge, 0.00001)
-    area_feats = [{"type": "Feature", "properties": {"kind": "water"}, "geometry": mapping(shapely.set_precision(p, 0.00001))} for p in parts]
+    # 큰 물 면(한강~안양천처럼 수백 개 조각이 이어진 것)은 0.1° 격자로 잘라 둔다: 지도 라이브러리가 아주 큰 다각형을
+    # 삼각형으로 나누다 실패하면 육지에 쐐기 모양 물이 칠해진다. 물가선은 따로 그리므로 자른 경계에는 선이 생기지 않는다
+    tiles = []
+    for p in parts:
+        x0, y0, x1, y1 = p.bounds
+        if x1 - x0 <= 0.1 and y1 - y0 <= 0.1:
+            tiles.append(p)
+            continue
+        for i in range(int(x0 // 0.1), int(x1 // 0.1) + 1):
+            for j in range(int(y0 // 0.1), int(y1 // 0.1) + 1):
+                cut = p.intersection(box(i * 0.1, j * 0.1, (i + 1) * 0.1, (j + 1) * 0.1))
+                tiles += [g for g in getattr(cut, "geoms", [cut]) if g.geom_type == "Polygon" and g.area > 1e-9]
+    area_feats = []
+    for p in tiles:
+        g = shapely.make_valid(shapely.set_precision(p, 0.00001))
+        for q in getattr(g, "geoms", [g]):
+            if q.geom_type == "Polygon" and not q.is_empty:
+                area_feats.append({"type": "Feature", "properties": {"kind": "water"}, "geometry": mapping(shapely.geometry.polygon.orient(q))})
     line_feats = [{"type": "Feature", "properties": {}, "geometry": mapping(g)}
                   for g in getattr(edge, "geoms", [edge]) if not g.is_empty and g.geom_type in ("LineString", "MultiLineString")]
     OUT.write_text(json.dumps({"type": "FeatureCollection", "features": area_feats}, separators=(",", ":")), encoding="utf-8")

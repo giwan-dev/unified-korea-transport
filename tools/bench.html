@@ -43,7 +43,7 @@
 
     // ?mode=setup: 계산 워커 준비(모델 만들기·망 설정·기준선 읽기) 부분별 시간
     if (new URLSearchParams(location.search).get('mode') === 'setup') {
-      for (const m of ['initSubzones', 'setNetwork', 'buildAccess', 'buildTransit', 'buildAir', 'buildOriginGroups', 'importBaseline', 'computeAccess', 'linkResults', 'zoneResults', 'subResults', 'exportBaseline']) wrap(Model.prototype, m);
+      for (const m of ['initSubzones', 'setNetwork', 'buildAccess', 'buildTransit', 'buildAir', 'buildOriginGroups', 'metroLocalLoads', 'densityAt', 'importBaseline', 'computeAccess', 'linkResults', 'zoneResults', 'subResults', 'exportBaseline']) wrap(Model.prototype, m);
       const t0 = performance.now();
       const m = new Model(zones, new Float32Array(grid));
       const t1 = performance.now();
@@ -83,6 +83,7 @@
       const ctxW = { integration: state.integration, policy: state.policy };
       const netW = effectiveNetwork(net, state);
       const wait = () => new Promise((res) => { worker.onmessage = (ev) => {
+        if (ev.data.type === 'warn') log('경고: ' + ev.data.message);
         if (ev.data.type === 'progress') document.title = `${ev.data.label} ${Math.round(ev.data.value * 100)}%`;
         if (ev.data.type === 'result' || ev.data.type === 'error') res(ev.data);
       }; });

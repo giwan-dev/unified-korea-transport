@@ -52,7 +52,7 @@ function baseStyle() {
       { id: 'bg-coast', type: 'line', source: 'edges', filter: ['==', ['get', 'b'], -1], paint: { 'line-color': c.sido, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.5, 10, 1] } },
       { id: 'bg-sido', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1],
         layout: { 'line-join': 'round' }, paint: { 'line-color': c.sido, 'line-opacity': 0.85, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.6, 10, 3.2] } },
-      { id: 'bg-mdl', type: 'line', source: 'lines', paint: { 'line-color': c.mdl, 'line-width': 1.6, 'line-dasharray': [3, 2] } },
+      // 군사분계선은 그리지 않는다: 통일 뒤 남북 경계는 맞닿은 시군의 도 경계로 그린다 (bg-sido)
       { id: 'lb-unit', type: 'symbol', source: 'unitLabels', minzoom: 11,
         layout: { 'symbol-placement': 'point', 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 10 },
         paint: { 'text-color': c.foreign, 'text-halo-color': c.halo, 'text-halo-width': 1 } },
@@ -80,7 +80,7 @@ let regionKey = '';
 /**
  * 광역 단체 경계와 이름을 지금 행정구역으로 다시 그린다.
  * @param {string[]} regionOfZone 존 id → 광역 단체 이름 (북측 도 복원·광역시 승격 반영)
- * @param {string[]} countryOfZone 존 id → 'KR' | 'KP' (남북 사이는 군사분계선이 따로 그려진다)
+ * @param {string[]} countryOfZone 존 id → 'KR' | 'KP' (지금은 쓰지 않는다: 남북 사이 경계도 도 경계로 그린다)
  * @param {(name:string)=>string} short 라벨용 짧은 이름
  */
 export function setRegions(map, regionOfZone, countryOfZone, zoneCenter, short = (n) => n) {
@@ -91,7 +91,7 @@ export function setRegions(map, regionOfZone, countryOfZone, zoneCenter, short =
     const ids = [], inner = [];
     for (const f of edges) {
       const { i, a, b } = f.properties;
-      if (b < 0 || countryOfZone[a] !== countryOfZone[b]) continue;
+      if (b < 0) continue;
       (regionOfZone[a] === regionOfZone[b] ? inner : ids).push(i);
     }
     map.setFilter('bg-sido', ['in', ['get', 'i'], ['literal', ids]]);

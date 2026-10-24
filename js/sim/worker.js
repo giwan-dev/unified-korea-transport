@@ -11,7 +11,7 @@ let pool;                                // 보조 워커 묶음 (undefined: 아
 /** 보조 워커 묶음: 페이지가 만들어 넘긴 포트(inputs.ports)로 잇는다. 없거나 응답이 없으면 null (한 워커에서 계산한다) */
 async function makePool() {
   const ports = inputs?.ports || [];
-  if (!ports.length) return null;
+  if (!ports.length) { post('warn', { message: '보조 워커 포트가 없어 한 워커로 계산합니다' }); return null; }
   const call = (p, msg, timeoutMs = 0) => new Promise((resolve, reject) => {
     const timer = timeoutMs && setTimeout(() => reject(new Error(`보조 워커 응답 없음 (${msg.type})`)), timeoutMs);
     p.onmessage = (e) => { clearTimeout(timer); e.data?.error ? reject(new Error(e.data.error)) : resolve(e.data); };
@@ -29,7 +29,7 @@ async function makePool() {
       close() { ports.forEach((p) => p.close()); },
     };
   } catch (err) {
-    console.warn('보조 워커를 쓰지 못해 한 워커로 계산합니다', err);
+    post('warn', { message: `보조 워커를 쓰지 못해 한 워커로 계산합니다: ${err.message}` });
     return null;
   }
 }
@@ -42,7 +42,7 @@ async function assign(net, integration, prog, warm = false, offsetOverride = nul
       await pool.sync(net, model.snapshot(), model.originGroups());
       return await model.assignParallel(pool, integration, prog, warm, offsetOverride);
     } catch (err) {
-      console.warn('보조 워커 배정 실패, 한 워커로 계산합니다', err);
+      post('warn', { message: `보조 워커 배정 실패, 한 워커로 계산합니다: ${err.message}` });
       pool.close();
       pool = null;
     }
@@ -125,13 +125,16 @@ async function handle(msg) {
         results(totals);
       }
     } else if (msg.type === 'step') {
+      wmark('step received');
       model.setNetwork(msg.net);
+      wmark('network set');
       lastNet = msg.net;
       // 지난 1년의 교통 조건으로 경제·인구를 갱신한 뒤 새 해의 통행을 배정한다 (완공된 역세권 개발 인구를 먼저 옮긴다)
       if (msg.ctx.dev?.length) model.applyDevelopments(msg.ctx.dev);
       // 열린 북측 관광지만 관광 수요를 끈다 (해금)
       if (msg.ctx.tourKP?.length === model.tourKP.length) model.tourKP.set(msg.ctx.tourKP);
       model.advanceYear(msg.ctx.integration, msg.ctx.policy);
+      wmark('advanced');
       // 새 노선이 개통한 해에는 지난해 교통량과 반씩 섞어 이용이 빨리 자리 잡게 한다
       results(await assign(lastNet, msg.ctx.integration, progress('통행배정'), true, msg.opened ? 1 : null));
     } else if (msg.type === 'preview') {

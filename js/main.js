@@ -331,9 +331,11 @@ function onWorker(ev) {
   else if (m.type === 'route') showRoute(m.route);
   else if (m.type === 'preview') onPreview(m);
   else if (m.type === 'probe') window.__probe = m.v;
+  else if (m.type === 'warn') console.warn(m.message);
 }
 
 function applyResult(res) {
+  if (pendingStep) { for (const [n, t] of res.perf || []) perf.push([`worker: ${n}`, t]); mark('y: result'); }
   loading.done('sim');
   const stepped = result !== null && pendingStep;
   pendingStep = false;
@@ -381,10 +383,14 @@ function applyResult(res) {
       happyKR: avgHappiness().KR, happyKP: avgHappiness().KP, debt: state.debt, approval: state.approval,
     });
   }
+  mark('y: applied');
   save(state);
+  mark('y: saved');
   if (res.sim) saveSim({ year: state.year, stamp: dataStamp, sizes: res.sim.sizes, totals: res.totals, bin: res.sim.bin });
   setBusy(false);
-  renderAll();
+  // 해 넘김 뒤에는 보이는 탭만 다시 그린다 (모든 탭을 그리면 1~2초). 다른 탭은 열 때 그린다
+  if (stepped) renderVisible(); else renderAll();
+  mark('y: rendered');
 }
 
 let pendingStep = false;
@@ -392,6 +398,7 @@ let gains = null;   // 읍면동 체감 교통 개선 (시작 대비 점수)
 
 function nextYear() {
   if (busy || !result) return;
+  mark('y: start');
   cancelDraft();
   // 노선도는 지난해 결과로 그렸으므로 닫는다
   stopLineDiagram();
@@ -400,8 +407,10 @@ function nextYear() {
   lastDone = done;
   afterStraighten(done);
   if (done.some((p) => p.kind === 'rename')) refreshNames(map);
+  mark('y: budget');
+  // 노선 다시 그리기(1~2초)는 완공·개통한 사업이 있는 해에만
   if (done.length) { refreshLinks(); refreshPoints(); }
-  else refreshLinks();
+  mark('y: links');
   pendingStep = true;
   setBusy(true, `${state.year}년 계산 중`, 0);
   // 선로가 열리기를 기다리던 계통(서해선 원시–서화성 직통 등)은 그해부터 다닌다
@@ -418,6 +427,7 @@ function nextYear() {
   }
   const tourKP = unlockedTourKP(state, tourSites, zoneOfSite, zoneProps.length);
   worker.postMessage({ type: 'step', net: effectiveNetwork(base, state), ctx: { ...ctx(), dev, tourKP }, opened });
+  mark('y: posted');
 }
 
 function autoApprove() {
@@ -1131,8 +1141,41 @@ function showRoute(r) {
   map.getSource('route').setData({ type: 'FeatureCollection', features: feats });
 }
 
+/** 그리는 중인 새 노선 위(10px 안)를 눌렀으면 그 구간 앞뒤 점 사이에 끼울 자리 {index, lon, lat} */
+function draftInsertAt(lngLat) {
+  if (!draft || draft.points.length < 2) return null;
+  const p = map.project(lngLat);
+  // 이미 있는 점 가까이(14px)는 끼우지 않는다 (그 점을 누른 것)
+  if (draft.points.some((q) => { const a = map.project([q.lon, q.lat]); return Math.hypot(a.x - p.x, a.y - p.y) < 14; })) return null;
+  const segs = smoothSegments(draftPoints());
+  let best = null;
+  segs.forEach((seg, i) => {
+    for (let k = 0; k + 1 < seg.length; k++) {
+      const a = map.project(seg[k]), b = map.project(seg[k + 1]);
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+      const d = Math.hypot(a.x + t * dx - p.x, a.y + t * dy - p.y);
+      if (d <= 10 && (!best || d < best.d)) {
+        const ll = map.unproject([a.x + t * dx, a.y + t * dy]);
+        best = { d, index: i + 1, lon: ll.lng, lat: ll.lat };
+      }
+    }
+  });
+  return best;
+}
+
 function addDraftPoint(lngLat) {
   const spec = NEW_BUILDS[draft.type];
+  // 새 노선 위를 누르면 끝에 잇지 않고 그 자리에 역(도로는 IC)을 끼운다
+  const ins = draftInsertAt(lngLat);
+  if (ins) {
+    const pt = { node: null, lon: ins.lon, lat: ins.lat, split: null, inserted: true };
+    draft.points.splice(ins.index, 0, pt);
+    nameDraftPoint(pt, ins.index);
+    drawDraft();
+    renderBuild();
+    return;
+  }
   // 노드는 화면 24px, 선은 16px 안이면 붙인다 (정확히 누르지 않아도 되게)
   let node = snap.node ? nearestNode(lngLat, spec.mode, 24) : null;
   let split = null;
@@ -1170,7 +1213,7 @@ function nameDraftPoint(pt) {
     pt.kind = 'station';
     pt.name = namer.suggest(pt.lon, pt.lat, 'station');
     pt.reserved = true;
-  } else if (pt.node != null || pt.split != null) {
+  } else if (pt.node != null || pt.split != null || pt.inserted) {
     if (existing && existing.kind !== 'station') { pt.name = existing.name; pt.kind = existing.kind; pt.existing = true; return; }
     // 고속도로끼리 만나면 JCT, 고속도로와 일반도로가 만나면 IC
     const newMw = draft.type === 'motorway' || draft.type === 'tunnelRoad';
@@ -1524,6 +1567,7 @@ function switchTab(tab) {
   if (!$('#selection').hidden) $('#selection .close')?.click();
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
   document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('on', p.dataset.panel === tab));
+  if (stalePanels.delete(tab)) PANEL_RENDER()[tab]?.();
   if (tab !== 'build') showPlan(null);
 }
 
@@ -1532,7 +1576,8 @@ let shownPlan = null;
 function showPlan(id) {
   if (!map) return;
   shownPlan = id;
-  const line = showPlanLine(map, id ? plans.find((p) => p.id === id) : null);
+  const plan = id ? plans.find((p) => p.id === id) : null;
+  const line = showPlanLine(map, plan, plan ? planPreviewLine(plan) : null);
   document.querySelectorAll('[data-plan-show]').forEach((el) => { el.style.textDecoration = el.dataset.planShow === id ? 'underline' : ''; });
   if (!line) return;
   const xs = line.map((c) => c[0]), ys = line.map((c) => c[1]);
@@ -1586,7 +1631,21 @@ function setBusy(on, label = '', v = 0) {
   $('#btn-next').disabled = on || !result;
 }
 
+const PANEL_RENDER = () => ({ status: renderStatus, build: renderBuild, projects: renderProjects, requests: renderRequests,
+  ops: renderOps, settings: renderSettings, stats: renderStats });
+const stalePanels = new Set();
+
+/** 상단·범례·지도 경계와 지금 보이는 탭만 다시 그리고, 나머지 탭은 열 때 그리도록 표시해 둔다 */
+function renderVisible() {
+  renderRegions(); renderTop(); renderLegend(); renderSelection();
+  const on = document.querySelector('.panel.on')?.dataset.panel;
+  for (const [tab, fn] of Object.entries(PANEL_RENDER())) {
+    if (tab === on) fn(); else stalePanels.add(tab);
+  }
+}
+
 function renderAll() {
+  stalePanels.clear();
   renderRegions();
   renderTop(); renderLegend(); renderStatus(); renderBuild(); renderProjects(); renderRequests(); renderOps(); renderSettings(); renderStats(); renderSelection();
 }
@@ -1677,8 +1736,8 @@ function renderBuild() {
   const tools = Object.entries(NEW_BUILDS).map(([k, v]) =>
     `<button data-build="${k}" class="${draft?.type === k ? 'on' : ''}">${v.label}<span class="c">${formatWon(v.perKm)}/km · ${v.years}년</span></button>`).join('')
     + `<button data-build="airport" class="${draft?.type === 'airport' ? 'on' : ''}">${AIRPORT.build.label}<span class="c">${formatWon(AIRPORT.build.cost)} · ${AIRPORT.build.years}년</span></button>`;
-  let body = `<div class="row" style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px"><button class="small svc-pick-b">역 골라 특급·급행 짜기</button>
-    <button class="small" data-padd="station">역 신설 (노선 위 한 점)</button><button class="small" data-padd="ic">IC 신설 (고속도로 위 한 점)</button></div>
+  let body = `<div class="tool-row"><button class="small" data-padd="station">역 신설 (노선 위 한 점)</button><button class="small" data-padd="ic">IC 신설 (고속도로 위 한 점)</button>
+    <button class="small svc-pick-b wide">역 골라 특급·급행 짜기</button></div>
     <div class="name-row" style="margin-bottom:4px"><input type="text" id="rec-text" placeholder="예: 평양에 도시철도 3호선을 짓고 싶어, 노선을 추천해줘" style="flex:1">
       <button class="small primary" id="rec-go">노선 추천</button></div>
     <p class="hint" id="rec-msg">${esc(recMsg)}</p>
@@ -1710,6 +1769,7 @@ function renderBuild() {
       Backspace: 마지막 점 지우기 · Enter: 착공 · Esc: 취소</p>
       <div>${draft.points.map((p, i) => (p.via ? '' : pointRow(p, i))).join('') || '<p class="hint">시작점을 누르세요.</p>'}</div>
       ${draft.points.some((p) => p.via) ? `<p class="hint">선형을 잡는 경유점 ${draft.points.filter((p) => p.via).length}개 (역·IC 없음)</p>` : ''}
+      ${draft.planFilled ? `<p class="hint">계획 노선이 기존 국도·지방도와 만나는 곳에 IC ${draft.planFilled}곳을 넣었습니다. 필요 없으면 목록에서 지우세요.</p>` : ''}
       <table class="kv" style="margin-top:8px">
         <tr><td>길이</td><td>${km.toFixed(1)} km</td></tr>
         <tr><td>사업비</td><td>${formatWon(cost)}</td></tr>
@@ -1726,10 +1786,10 @@ function renderBuild() {
       <p class="hint">노란 점(◆)은 중국·러시아·일본 거점 도시입니다. 끝점을 거점에 붙이면 국제 노선이 됩니다.
         기존 ${spec.mode ? '선로' : '도로'} 중간을 누르면 그 자리에 ${spec.mode === 0 ? 'IC·JCT를' : '역을'} 만들고 이어집니다.</p>
       ${!affordable && draft.points.length > 1 ? '<p class="hint neg">예산과 차입 한도를 넘습니다.</p>' : ''}
-      <div class="actions">
+      ${tRule ? `<div class="actions"><button id="draft-terrain" ${draft.points.length < 2 || !terrainReady() ? 'disabled' : ''} title="찍은 역·IC 사이를 경사가 급한 산지와 강·바다를 덜 지나는 선형으로 다시 잡습니다">지형 따라 선형 잡기</button></div>` : ''}
+      <div class="actions nowrap">
         <button class="primary" id="draft-ok" ${draft.points.length < 2 || !affordable ? 'disabled' : ''}>착공</button>
         <button id="draft-prev" ${draft.points.length < 2 ? 'disabled' : ''}>효과 미리보기</button>
-        ${tRule ? `<button id="draft-terrain" ${draft.points.length < 2 || !terrainReady() ? 'disabled' : ''} title="찍은 역·IC 사이를 경사가 급한 산지와 강·바다를 덜 지나는 선형으로 다시 잡습니다">지형 따라 선형 잡기</button>` : ''}
         <button id="draft-cancel">취소</button>
       </div>`;
   }
@@ -2895,10 +2955,89 @@ function openPlan(id) {
   draft.lineNameEdited = true;
   if (plan.line) { draft.extendOf = plan.line; draft.planTitle = plan.name; }
   draft.plan = plan.id;
+  // 철도는 계획 자료의 실제 정차역 목록 그대로, 도로는 기존 간선도로와 만나는 곳에 IC를 넣는다
+  draft.planFilled = spec.mode === 0 ? fillPlanICs(plan.type) : 0;
   drawDraft();
   renderBuild();
   const xs = draft.points.map((p) => p.lon), ys = draft.points.map((p) => p.lat);
   map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: 60, maxZoom: 11 });
+}
+
+/** 계획 노선 미리보기 선: 양 끝이 기존 역·노드면 그리기와 같이 그 노선에 접선으로 붙인다 */
+function planPreviewLine(plan) {
+  const spec = NEW_BUILDS[plan.type];
+  if (!spec) return null;
+  const pts = plan.points.map((wp, i) => {
+    const end = i === 0 || i === plan.points.length - 1;
+    const node = end && wp[0] != null ? resolveWaypoint(wp, spec.mode, spec.attrs?.cls === 'motorway') : null;
+    const c = node != null ? nodeCoord(node) : [wp[1], wp[2]];
+    return { node, lon: c[0], lat: c[1], split: null, via: wp[0] == null };
+  });
+  if (pts.length < 2) return null;
+  return smoothSegments(withTangents(pts, spec.mode), 3).flatMap((sg, i) => (i ? sg.slice(1) : sg));
+}
+
+// 계획 노선(고속도로·국도)을 열 때 기존 간선도로와 만나는 곳에 넣는 IC 간격 (km). 철도 역은 계획 자료(plans.json)의 역 목록을 그대로 쓴다
+const IC_SPACING = { motorway: 10, trunk: 6 };
+
+/**
+ * 그리기에 열린 도로 계획(draft)의 IC 사이를 채운다: 곡선이 기존 국도·지방도와 만나는 곳에 IC (그 도로에 바로 잇는다).
+ * 큰 도로부터, 이미 있는 IC·끝점에서 간격의 0.8배 넘게 떨어진 곳만
+ * @returns {number} 넣은 IC 수
+ */
+function fillPlanICs(type) {
+  const gap = IC_SPACING[type];
+  if (!gap || !draft || draft.points.length < 2) return 0;
+  const segs = smoothSegments(draftPoints());
+  const samples = [];
+  let s = 0;
+  segs.forEach((seg, i) => {
+    seg.forEach((q, k) => {
+      if (k) s += kmBetween(seg[k - 1][0], seg[k - 1][1], q[0], q[1]);
+      samples.push({ i, x: q[0], y: q[1], s });
+    });
+  });
+  const segStart = [];
+  for (const sm of samples) if (segStart[sm.i] == null) segStart[sm.i] = sm.s;
+  const taken = draft.points.map((p, i) => (p.via ? null : segStart[i] ?? s)).filter((v) => v != null);
+  taken.push(s);
+  const xs = samples.map((q) => q.x), ys = samples.map((q) => q.y);
+  const bx0 = Math.min(...xs), bx1 = Math.max(...xs), by0 = Math.min(...ys), by1 = Math.max(...ys);
+  const cands = [];
+  allLinks().forEach((l, id) => {
+    const e = linkAt(base, state, id);
+    if (e.mode !== 0 || e.ext || !['trunk', 'primary', 'secondary'].includes(e.cls)) return;
+    const g = l.geom;
+    for (let k = 0; k + 3 < g.length; k += 2) {
+      const ax = g[k], ay = g[k + 1], bx = g[k + 2], by = g[k + 3];
+      if (Number.isNaN(ax) || Number.isNaN(bx) || Math.max(ax, bx) < bx0 || Math.min(ax, bx) > bx1 || Math.max(ay, by) < by0 || Math.min(ay, by) > by1) continue;
+      for (let m = 0; m + 1 < samples.length; m++) {
+        const p = samples[m], r = samples[m + 1];
+        if (p.i !== r.i) continue;
+        const d1x = r.x - p.x, d1y = r.y - p.y, d2x = bx - ax, d2y = by - ay;
+        const den = d1x * d2y - d1y * d2x;
+        if (!den) continue;
+        const t = ((ax - p.x) * d2y - (ay - p.y) * d2x) / den, u = ((ax - p.x) * d1y - (ay - p.y) * d1x) / den;
+        if (t < 0 || t > 1 || u < 0 || u > 1) continue;
+        cands.push({ q: { i: p.i, x: p.x + t * d1x, y: p.y + t * d1y, s: p.s + t * (r.s - p.s) }, w: { trunk: 3, primary: 2, secondary: 1 }[e.cls], link: id });
+      }
+    }
+  });
+  cands.sort((a, b) => b.w - a.w);
+  const add = [];
+  for (const c of cands) {
+    if (taken.some((t) => Math.abs(t - c.q.s) < gap * 0.8)) continue;
+    taken.push(c.q.s);
+    add.push(c);
+  }
+  // 뒤에서부터 끼워야 앞 점 번호가 밀리지 않는다 (같은 구간 안에서는 먼 것부터)
+  add.sort((a, b) => b.q.i - a.q.i || b.q.s - a.q.s);
+  for (const c of add) {
+    const pt = { node: null, lon: c.q.x, lat: c.q.y, split: c.link, inserted: true };
+    draft.points.splice(c.q.i + 1, 0, pt);
+    nameDraftPoint(pt, c.q.i + 1);
+  }
+  return add.length;
 }
 
 function plansHTML() {

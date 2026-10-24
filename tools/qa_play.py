@@ -55,7 +55,7 @@ class Page:
 
 
 WAIT_READY = """(async () => {
-  for (let k = 0; k < 600; k++) {
+  for (let k = 0; k < 240; k++) {
     const b = document.querySelector('#btn-next');
     if (window.ukt && b && !b.disabled) return true;
     await new Promise((r) => setTimeout(r, 500));
@@ -113,7 +113,8 @@ def main():
     args = ap.parse_args()
     prof = tempfile.mkdtemp(prefix="ukt-qa-")
     chrome = subprocess.Popen([CHROME, "--headless=new", f"--remote-debugging-port={args.port}", f"--user-data-dir={prof}",
-                               "--window-size=1400,900", "--no-first-run", "--disable-background-timer-throttling",
+                               "--window-size=1400,900", "--no-first-run",
+                               "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "--disable-background-timer-throttling",
                                "--disable-renderer-backgrounding", "about:blank"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         for _ in range(50):
@@ -130,7 +131,12 @@ def main():
         ready = p.js(WAIT_READY)
         print(json.dumps({"ready": ready, "load_s": round(time.time() - t0, 1)}, ensure_ascii=False), flush=True)
         if not ready:
-            print("errors", p.errors); return 1
+            print("errors", p.errors, "perf", p.js("JSON.stringify(window.__perf || [])"),
+                  "text", p.js("document.body.innerText.slice(0, 400)"))
+            if args.shots:
+                Path(args.shots).mkdir(parents=True, exist_ok=True)
+                p.shot(Path(args.shots) / "not_ready.png")
+            return 1
         shots = Path(args.shots) if args.shots else None
         if shots:
             shots.mkdir(parents=True, exist_ok=True)
@@ -156,6 +162,7 @@ def main():
             st["secs"] = secs
             st["new_errors"] = p.errors[n_err:]
             st["alerts"] = p.js("(window.__alerts || []).splice(0)")
+            st["perf"] = p.js("(() => { const a = window.__perf || []; const i = a.map((x) => x[0]).lastIndexOf('y: start'); return a.slice(i).map(([n, t]) => n + ' ' + t); })()")
             print(json.dumps(st, ensure_ascii=False), flush=True)
             if secs < 0:
                 break

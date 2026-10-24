@@ -1072,6 +1072,14 @@ def final_cleanup(nodes, links, stations, metro_stations, junctions, zone_nodes)
         for item in lst:
             item[1] = nmap.get(item[1], item[1])
     zone_nodes.clear(); zone_nodes.update(nmap.get(n, n) for n in list(zone_nodes))
+    # 분기점(JCT) 하나에 딸린 고속도로 노드들, 방향마다 따로 찍힌 같은 이름 휴게소를 노드 하나로
+    for fn in (merge_jct_nodes, merge_crossing_nodes, merge_rest_pairs):
+        nmap = fn(nodes, links, junctions)
+        for lst in (stations, metro_stations, junctions):
+            for item in lst:
+                item[1] = nmap.get(item[1], item[1])
+        zone_nodes.clear(); zone_nodes.update(nmap.get(n, n) for n in list(zone_nodes))
+    junctions[:] = _dedupe_junction_list(junctions)
     # 같은 역의 노드가 여럿(수서 6개, 서울 5개: 노선·승강장마다)이면 600m 안에서 링크로 이어진 것끼리 하나로
     nmap = merge_station_twins(nodes, links, names)
     for lst in (stations, metro_stations, junctions):
@@ -1098,10 +1106,27 @@ def final_cleanup(nodes, links, stations, metro_stations, junctions, zone_nodes)
     log("unnamed metro connectors dropped", n0 - len(links))
     protect = {0: {n for _, n in junctions} | zone_nodes, 1: st, 2: mst}
     links = remerge_chains(links, protect)
-    snap_nodes_to_motorway(nodes, links)
+    links = drop_motorway_triangles(links)
+    bridge_motorway_gaps(links)
+    for cls in ("motorway", "trunk", "primary"):   # 일반 간선도 고속도로와 같이 (진안·태안교차로)
+        snap_nodes_to_motorway(nodes, links, cls=cls)
+    # 노드를 선 위로 옮긴 뒤에도 한 분기점의 갈래 노드가 1km 안에 흩어져 있으면 (천안분기점: 경부·당진청주·논산천안) 한 번 더 모은다
+    nmap = merge_jct_nodes(nodes, links, junctions, 1.2, label="jct nodes merged (2nd)", hub=True)
+    for lst in (stations, metro_stations, junctions):
+        for item in lst:
+            item[1] = nmap.get(item[1], item[1])
+    zone_nodes.clear(); zone_nodes.update(nmap.get(n, n) for n in list(zone_nodes))
+    junctions[:] = _dedupe_junction_list(junctions)
+    align_shared_starts(links)
     for l in links:
         gtx = l["mode"] == 1 and "광역급행" in (l["name"] or "")   # GTX는 대심도 직선 선로
         l["geom"] = clean_geom(l["geom"], 40 if gtx else MAX_TURN.get(l["cls"], 110))
+        # 고속철도는 선로를 합치며 생긴 잔물결(수십 m)을 걷어 낸다 (대전 북쪽 경부고속선)
+        if (l["cls"] == "hsr" or gtx) and len(l["geom"]) > 6:
+            p = [(l["geom"][k], l["geom"][k + 1]) for k in range(0, len(l["geom"]) - 1, 2)]
+            if all(q[0] == q[0] for q in p):
+                g = shapely.LineString(p).simplify(0.0004)
+                l["geom"] = [round(v, 5) for xy in g.coords for v in xy]
     return links
 
 
@@ -1219,7 +1244,53 @@ def prune_parallel_stubs(links, stops, near_km=0.15, max_km=12):
     return [l for i, l in enumerate(links) if i not in drop]
 
 
-def snap_nodes_to_motorway(nodes, links, max_km=0.6):
+def bridge_motorway_gaps(links, max_km=0.8):
+    """같은 이름 고속도로의 끊긴 두 끝(고속도로 링크가 하나뿐인 노드)을 짧은 일반도로 링크 하나가 잇고 있으면
+    (평양희천고속도로 순안: 순안거리 430m) 그 링크를 고속도로 본선으로 친다"""
+    mw = defaultdict(list)
+    for l in links:
+        if l["mode"] == 0 and l["cls"] == "motorway" and not l.get("ext"):
+            mw[l["a"]].append(l); mw[l["b"]].append(l)
+    n = 0
+    for l in links:
+        if l["mode"] != 0 or l["cls"] == "motorway" or l.get("ext") or l["len"] > max_km:
+            continue
+        ea, eb = mw.get(l["a"], []), mw.get(l["b"], [])
+        if len(ea) == 1 and len(eb) == 1 and ea[0] is not eb[0] and ea[0]["name"] and ea[0]["name"] == eb[0]["name"]:
+            for k in ("cls", "name", "speed", "lanes"):
+                if k in ea[0]:
+                    l[k] = ea[0][k]
+            n += 1
+    log("motorway gaps bridged", n)
+
+
+def drop_motorway_triangles(links, max_km=1.5):
+    """고속도로 링크 셋이 둘레 1.5km 안의 작은 삼각형을 이루면(북오산IC: 본선과 경기대로 접속부가 따로 이어짐)
+    본선 노드에 고속도로 링크가 셋이 되어 선 위로 옮기지 못하고, 본선이 옆길 쪽으로 틀어져 보인다.
+    다른 두 변으로 돌아가는 길이가 제 길이와 가장 비슷한 변(군더더기)을 뺀다"""
+    E = defaultdict(dict)
+    for i, l in enumerate(links):
+        if l["mode"] == 0 and l["cls"] == "motorway" and not l.get("ext"):
+            E[l["a"]][l["b"]] = i; E[l["b"]][l["a"]] = i
+    drop = set()
+    for a in list(E):
+        for b in list(E[a]):
+            for c in list(E[b]):
+                if c == a or c not in E[a] or a > b or b > c:
+                    continue
+                es = [E[a][b], E[b][c], E[a][c]]
+                if any(e in drop for e in es):
+                    continue
+                ln = [links[e]["len"] for e in es]
+                if sum(ln) >= max_km:
+                    continue
+                k = min(range(3), key=lambda k: (sum(ln) - ln[k]) / max(ln[k], 1e-3))
+                drop.add(es[k])
+    log("motorway triangles cut", len(drop))
+    return [l for i, l in enumerate(links) if i not in drop]
+
+
+def snap_nodes_to_motorway(nodes, links, max_km=0.6, cls="motorway"):
     """고속도로 링크 두 개가 만나는 노드를 실제 고속도로 선 위로 옮긴다.
     노드 자리는 칸 안 도로 점(왕복 차도·연결로·옆 도로)의 평균이라 본선에서 수백 m 떨어질 수 있고, 그러면 본선이
     노드로 끌려가 V자로 꺾인다 (전국 이음매 270여 곳). 두 링크의 노드 쪽 점들(노드에서 max_km 안)로 만든 선에서
@@ -1243,8 +1314,9 @@ def snap_nodes_to_motorway(nodes, links, max_km=0.6):
         return out
     moved = 0
     for n, ids in at.items():
-        mw = [i for i in ids if links[i]["cls"] == "motorway"]
-        if len(mw) != 2:
+        mw = [i for i in ids if links[i]["cls"] == cls]
+        # 일반 간선은 같은 이름 두 링크가 이어지는 곳만 (교차로에서 다른 도로 쪽으로 끌지 않게)
+        if len(mw) != 2 or (cls != "motorway" and (links[mw[0]]["name"] != links[mw[1]]["name"] or not links[mw[0]]["name"])):
             continue
         s1, s2 = side(mw[0], n), side(mw[1], n)
         if not s1 or not s2:
@@ -1267,7 +1339,167 @@ def snap_nodes_to_motorway(nodes, links, max_km=0.6):
                 if links[i]["b"] == n:
                     g[-2], g[-1] = new
         moved += 1
-    log("nodes snapped onto motorway line", moved)
+    log("nodes snapped onto", cls, "line", moved)
+
+
+def _merge_nodes(nodes, links, groups, label):
+    """groups: {대표 노드: [합칠 노드, …]}. 링크 끝을 대표로 옮기고(도형 끝 포함) 고리가 된 링크는 뺀다"""
+    nmap = {}
+    for r, ns in groups.items():
+        for n in ns:
+            if n != r:
+                nmap[n] = r
+    for l in links:
+        a, b = nmap.get(l["a"], l["a"]), nmap.get(l["b"], l["b"])
+        if (a, b) != (l["a"], l["b"]):
+            pts = [[l["geom"][k], l["geom"][k + 1]] for k in range(0, len(l["geom"]) - 1, 2)]
+            if a != l["a"]:
+                _bend_end(pts, nodes[a])
+            if b != l["b"]:
+                pts.reverse(); _bend_end(pts, nodes[b]); pts.reverse()
+            l["geom"] = [round(v, 6) for xy in pts for v in xy]
+            l["a"], l["b"] = a, b
+    links[:] = [l for l in links if l["a"] != l["b"]]
+    log(label, len(nmap))
+    return nmap
+
+
+def _bend_end(pts, target):
+    """선 첫 점을 target으로 옮기며, 앞쪽 일부(옮긴 거리의 3배, 1.5km 이상)를 거리에 따라 줄어드는 만큼 같이 끌어
+    직선 꼬리 없이 부드럽게 휘게 한다 (고무판처럼)"""
+    if len(pts) < 2 or any(q[0] != q[0] for q in pts):
+        pts[0] = list(target)
+        return
+    dx, dy = target[0] - pts[0][0], target[1] - pts[0][1]
+    S = max(1.5, 3 * math.hypot(dx * 88, dy * 111))
+    acc = 0.0
+    out = [list(target)]
+    for k in range(1, len(pts)):
+        acc += math.hypot((pts[k][0] - pts[k - 1][0]) * 88, (pts[k][1] - pts[k - 1][1]) * 111)
+        w = max(0.0, 1 - acc / S) if k < len(pts) - 1 else 0.0
+        out.append([pts[k][0] + dx * w, pts[k][1] + dy * w])
+    pts[:] = out
+
+
+def merge_jct_nodes(nodes, links, junctions, reach_km=0.7, cls="motorway", pattern=r"(분기점|JCT)$", label="jct nodes merged", hub=False):
+    """분기점(JCT) 이름이 붙은 노드 둘레(700m)의 고속도로 노드들을 그 분기점 하나로 모은다.
+    고속도로 두 개가 만나는 곳인데 노드가 노선마다 따로 놓여(천안분기점: 당진청주·논산천안·경부 노드 넷) 갈아타기가 어긋났다.
+    다른 이름의 IC·휴게소 노드는 모으지 않는다"""
+    named = {n: nm for nm, n in junctions}
+    mw_nodes = defaultdict(int)
+    for l in links:
+        if l["mode"] == 0 and l["cls"] == cls and not l.get("ext"):
+            mw_nodes[l["a"]] += 1; mw_nodes[l["b"]] += 1
+    from scipy.spatial import cKDTree
+    ids = list(mw_nodes)
+    if not ids:
+        return {}
+    tree = cKDTree(np.array([[nodes[n][0] * 88, nodes[n][1] * 111] for n in ids]))
+    groups, used = {}, set()
+    for nm, j in junctions:
+        if not re.search(pattern, nm) or j in used or j not in mw_nodes:
+            continue
+        near = [ids[k] for k in tree.query_ball_point([nodes[j][0] * 88, nodes[j][1] * 111], reach_km)]
+        grp = [n for n in near if n not in used and (n == j or n not in named)]
+        if len(grp) > 1:
+            # hub: 고속도로가 가장 많이 모이는 노드(본선끼리 엇갈리는 곳)를 대표로, 분기점 이름도 그리로
+            r = max(grp, key=lambda n: (mw_nodes[n], n == j)) if hub else j
+            groups[r] = grp
+            used.update(grp)
+    return _merge_nodes(nodes, links, groups, label)
+
+
+def merge_crossing_nodes(nodes, links, junctions):
+    """이름 붙은 일반도로 교차로(진안교차로·태안교차로) 둘레 250m의 간선 노드들: 복선 도로의 교차점이 너덧 개로 갈라져
+    작은 고리를 그렸다. 하나로 모은다"""
+    nmap = {}
+    for cls in ("trunk", "primary"):
+        m = merge_jct_nodes(nodes, links, [[nm, nmap.get(n, n)] for nm, n in junctions], 0.25, cls,
+                            r"(교차로|사거리|삼거리|오거리|IC|나들목)$", f"{cls} crossing nodes merged")
+        nmap = {k: m.get(v, v) for k, v in nmap.items()}
+        nmap.update(m)
+    return nmap
+
+
+def _rest_base(name):
+    return re.sub(r"\s+", "", re.sub(r"\s*\(.*?\)\s*$", "", name))
+
+
+def merge_rest_pairs(nodes, links, junctions, reach_km=2.0):
+    """방향마다 따로 찍힌 같은 이름 휴게소(천안삼거리휴게소 서울 방향·부산 방향)를 노드 하나로 모으고 이름에서 방향을 뗀다"""
+    by = defaultdict(list)
+    for item in junctions:
+        if re.search(r"(휴게소|졸음쉼터|SA)", item[0]):
+            by[_rest_base(item[0])].append(item[1])
+    groups = {}
+    for base_, ns in by.items():
+        ns = list(dict.fromkeys(ns))
+        while len(ns) > 1:
+            r = ns.pop(0)
+            grp = [r] + [n for n in ns if math.hypot((nodes[n][0] - nodes[r][0]) * 88, (nodes[n][1] - nodes[r][1]) * 111) < reach_km]
+            ns = [n for n in ns if n not in grp]
+            if len(grp) > 1:
+                groups[r] = grp
+    for item in junctions:   # 방향 표시는 떼어 낸다 (한쪽 방향만 있는 휴게소도)
+        if re.search(r"(휴게소|졸음쉼터)", item[0]):
+            item[0] = _rest_base(item[0])
+    return _merge_nodes(nodes, links, groups, "rest area pairs merged")
+
+
+def _dedupe_junction_list(junctions):
+    seen, out = set(), []
+    for item in junctions:
+        k = (item[0], item[1])
+        if k not in seen:
+            seen.add(k); out.append(item)
+    return out
+
+
+def align_shared_starts(links, near_km=0.06):
+    """이름이 다른 두 철도·도시철도 링크가 한 노드에서 나란히 출발하면(병점: 경부선·병점기지선, 금정, 평택, 서울역)
+    짧은 쪽 링크의 앞부분 가운데 긴 쪽 선에서 60m 안인 점들을 그 선 위로 옮겨 정확히 겹쳐 그린다. 갈라지는 곳부터는 제 모양대로"""
+    at = defaultdict(list)
+    for i, l in enumerate(links):
+        if l["mode"] in (1, 2) and not l.get("ext") and not l["name"].endswith(" 환승"):
+            at[(l["mode"], l["a"])].append(i); at[(l["mode"], l["b"])].append(i)
+
+    def pts(l):
+        g = l["geom"]
+        return [(g[k], g[k + 1]) for k in range(0, len(g) - 1, 2)]
+    moved = 0
+    for (mode, n), ids in at.items():
+        if len(ids) < 2:
+            continue
+        ids = sorted(ids, key=lambda i: -links[i]["len"])   # 긴 선(본선)을 기준으로
+        for k, i in enumerate(ids[1:], 1):
+            li = links[i]
+            p = pts(li)
+            if len(p) < 3 or any(q[0] != q[0] for q in p):
+                continue
+            start_at_a = li["a"] == n
+            seq = p if start_at_a else p[::-1]
+            for j in ids[:k]:
+                lj = links[j]
+                if lj["name"] == li["name"]:
+                    continue
+                q = pts(lj)
+                if len(q) < 2 or any(x[0] != x[0] for x in q):
+                    continue
+                ref = shapely.LineString([(x * 0.8, y) for x, y in q])
+                changed = False
+                for m in range(1, len(seq) - 1):
+                    pt = shapely.Point(seq[m][0] * 0.8, seq[m][1])
+                    if ref.distance(pt) * 111 >= near_km:
+                        break
+                    o = ref.interpolate(ref.project(pt))
+                    seq[m] = (round(o.x / 0.8, 5), round(o.y, 5))
+                    changed = True
+                if changed:
+                    out = seq if start_at_a else seq[::-1]
+                    li["geom"] = [v for xy in out for v in xy]
+                    moved += 1
+                    break
+    log("shared starts aligned", moved)
 
 
 def contract_motorway_stubs(nodes, links, keep, names, max_km=0.25):

@@ -28,10 +28,10 @@ export function addPlansLayer(map) {
   });
 }
 
-/** 계획 하나만 지도에 보인다 (plan이 없으면 지운다). 보인 선의 좌표를 돌려준다 */
-export function showPlanLine(map, plan) {
+/** 계획 하나만 지도에 보인다 (plan이 없으면 지운다). override: 그릴 좌표 (main.js가 기존 노선에 접선으로 붙인 선). 보인 선의 좌표를 돌려준다 */
+export function showPlanLine(map, plan, override = null) {
   if (!map.getSource('plans')) return null;
-  const line = plan ? planLine(plan) : [];
+  const line = plan ? override || planLine(plan) : [];
   map.getSource('plans').setData({ type: 'FeatureCollection', features: line.length > 1
     ? [{ type: 'Feature', properties: { id: plan.id, name: plan.name, type: plan.type }, geometry: { type: 'LineString', coordinates: line } }] : [] });
   return line.length > 1 ? line : null;

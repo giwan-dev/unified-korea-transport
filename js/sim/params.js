@@ -29,8 +29,8 @@ export const P = {
   feederPenaltyMin: 10,       // 연계교통 대기·환승
   roadTerminalMin: 3,
   roadConnectors: 6,          // 소구역당 도로 접속 노드 수
-  originGroupKm2: 150,        // 승용차 출발 묶음: 존 면적이 이만큼(km²)의 n²배면 n묶음으로 나눠 경로를 따로 찾는다
-  originGroupsMax: 4,
+  originGroupKm2: 300,        // 승용차 출발 묶음: 존 면적이 이만큼(km²)의 n²배면 n묶음으로 나눠 경로를 따로 찾는다
+  originGroupsMax: 3,
   waitScale: 3160,            // 역 대기시간 = waitScale / √(일 이용객): 10만 명이면 10분
   waitMinMin: 8,
   waitMaxMin: 90,
@@ -61,7 +61,7 @@ export const P = {
   calibVersion: 3,            // 보정 방식이 바뀌면 올린다: 예전 기준 연도(data/baseline.json)는 쓰지 않고 새로 보정한다
   railASCStep: 25,            // 보정 반복마다 철도 상수 조정 폭(분)
   msaIterations: 5,
-  msaIterationsWarm: 2,       // 해마다 지난해 결과에서 이어 배정할 때 (한 번이면 경로가 해마다 이리저리 튄다)
+  msaIterationsWarm: 1,       // 해마다 지난해 결과에서 이어 배정할 때. 새 배정은 warmMsaOffset만큼 묽게(1/4) 섞어 경로가 튀지 않는다 (2번이면 연도 넘기기가 두 배)
   warmMsaOffset: 3,           // 그때 새 배정을 1/4, 1/5씩 섞는다
 
   // --- 대중교통 (버스 + 도시철도)
