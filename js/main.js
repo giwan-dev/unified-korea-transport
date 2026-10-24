@@ -12,7 +12,7 @@ import {
 import { MEGA, TSR_FREIGHT } from './game/mega.js';
 import { AIRPORT } from './game/catalog.js';
 import { setNameResolver, refreshNames, setRegions, setLinks, paintHotspots } from './ui/map.js';
-import { isNarrow, twinPrimary, mergeTwins, ROAD_RANK, motorwayMainline, flattenMainline, connectJunctions, smoothMainlineEnds, mainlineBubbles } from './ui/traffic.js';
+import { isNarrow, twinPrimary, mergeTwins, ROAD_RANK, motorwayMainline, flattenMainline, connectJunctions, smoothMainlineEnds, mainlineBubbles, roundMainlineCorners } from './ui/traffic.js';
 import { subFold, initPanelUI, toast } from './ui/panel.js';
 import { initPalette, openPalette, goSection } from './ui/palette.js';
 import { startGuide, guideShouldAutoShow, guideOnNewGame, getGuideMode, setGuideMode, GUIDE_MODES } from './ui/guide.js';
@@ -489,6 +489,9 @@ function linksFC() {
   // JC 연결로를 숨긴 자리: 다른 고속도로에 붙어 끝나는 본선 끝을 상대 본선까지 잇는다 (T자·사거리)
   connectJunctions(features, mainline, linkEnds);
   smoothMainlineEnds(features, mainline);
+  // 이음매·꺾인 점을 둥글게 (노드–노드 곡선이 짧은 구간에서 꺾이는 곳). 짧은 조각은 양 끝 이음매를 함께 깎으면
+  // 한쪽이 먼저 바뀌어 다른 쪽 이음매를 놓치므로 한 번 더 돈다
+  for (let t = 0; t < 2; t++) roundMainlineCorners(features, mainline);
   // 본선 조각마다 양 끝 노드에서 이어지는 본선 조각 (교통량 0 토막 메우기용, paintVolumes)
   const mainAt = new Map();
   features.forEach((f) => { if (mainline[f.id] === 1 && f.properties.mode === 0) for (const nd of [all[f.id].a, all[f.id].b]) { if (!mainAt.has(nd)) mainAt.set(nd, []); mainAt.get(nd).push(f.id); } });

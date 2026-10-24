@@ -418,3 +418,66 @@ export function mainlineBubbles(links, main, shown) {
   }
   return out;
 }
+
+/**
+ * 본선 모서리 둥글리기 (마지막 단계): 두 조각만 만나는 이음매와 선 안의 꺾인 점(170° 미만)을
+ * 2차 베지어 곡선으로 깎는다. 짧은 링크는 곡선을 만들어도 점이 두 개뿐이라 직선이 되고, 계산망 노드가
+ * 본선에서 조금 벗어나 있으면 두 조각이 노드로 들어갔다 나오며 꺾인다. 이음매에서는 두 조각이 곡선의
+ * 가운데 점을 함께 가져 이어진 채로 둥글어진다. 셋 이상 만나는 교차점(JC)은 사거리로 두므로 건드리지 않는다.
+ */
+export function roundMainlineCorners(features, main) {
+  const kmXY = (p, q) => Math.hypot((p[0] - q[0]) * 88.6, (p[1] - q[1]) * 111);
+  const angle = (p, q, r) => {
+    const a = [(p[0] - q[0]) * 0.8, p[1] - q[1]], b = [(r[0] - q[0]) * 0.8, r[1] - q[1]];
+    const cs = (a[0] * b[0] + a[1] * b[1]) / (Math.hypot(a[0], a[1]) * Math.hypot(b[0], b[1]) || 1);
+    return (Math.acos(Math.max(-1, Math.min(1, cs))) * 180) / Math.PI;
+  };
+  // 모서리 양쪽으로 최대 400m, 이웃 점까지 거리의 절반까지만 깎는다 (이웃 모서리와 겹치지 않게)
+  const toward = (q, p) => { const d = kmXY(q, p), r = Math.min(0.4, d / 2); const t = d ? r / d : 0; return [q[0] + (p[0] - q[0]) * t, q[1] + (p[1] - q[1]) * t]; };
+  const bez = (p0, p1, p2, t) => [(1 - t) ** 2 * p0[0] + 2 * (1 - t) * t * p1[0] + t * t * p2[0], (1 - t) ** 2 * p0[1] + 2 * (1 - t) * t * p1[1] + t * t * p2[1]];
+  // 곡선 점 수: 깎는 길이 약 40m마다 하나 (2~8개)
+  const steps = (a, q, b) => Math.max(2, Math.min(8, Math.round((kmXY(a, q) + kmXY(q, b)) / 0.04)));
+  const mains = features.filter((f) => main[f.id] === 1 && f.properties.mode === 0 && f.geometry.type === 'LineString');
+  // 0) 좌표 반올림(약 1m)으로 생긴 10m 안의 점은 먼저 지운다 (양 끝은 그대로): 아주 짧은 마디는 각도가 제멋대로다
+  for (const f of mains) {
+    const c = f.geometry.coordinates;
+    for (let k = c.length - 2; k >= 1; k--) if (kmXY(c[k], c[k + 1]) < 0.01 || kmXY(c[k], c[k - 1]) < 0.01) c.splice(k, 1);
+  }
+  // 1) 선 안의 꺾인 점
+  for (const f of mains) {
+    const c = f.geometry.coordinates;
+    for (let k = 1; k + 1 < c.length; k++) {
+      if (angle(c[k - 1], c[k], c[k + 1]) >= 170) continue;
+      const a = toward(c[k], c[k - 1]), b = toward(c[k], c[k + 1]), n = steps(a, c[k], b);
+      const pts = [];
+      for (let s = 0; s <= n; s++) pts.push(bez(a, c[k], b, s / n));
+      c.splice(k, 1, ...pts);
+      k += n;
+    }
+  }
+  // 2) 두 조각만 만나는 이음매: 두 조각이 곡선의 가운데 점을 함께 가진다
+  const ends = new Map();
+  for (const f of mains) {
+    const c = f.geometry.coordinates;
+    if (c.length < 2) continue;
+    for (const first of [true, false]) {
+      const e = first ? c[0] : c[c.length - 1];
+      const key = `${e[0].toFixed(5)},${e[1].toFixed(5)}`;
+      if (!ends.has(key)) ends.set(key, []);
+      ends.get(key).push({ c, first });
+    }
+  }
+  for (const list of ends.values()) {
+    if (list.length !== 2) continue;
+    const [x, y] = list;
+    if (x.c === y.c) continue;
+    const e = x.first ? x.c[0] : x.c[x.c.length - 1];
+    const xp = x.first ? x.c[1] : x.c[x.c.length - 2], yp = y.first ? y.c[1] : y.c[y.c.length - 2];
+    if (!xp || !yp || angle(xp, e, yp) >= 170) continue;
+    const a = toward(e, xp), b = toward(e, yp), n = 2 * Math.ceil(steps(a, e, b) / 2), half = n / 2;
+    const xs = [], ys = [];   // 바깥(이웃 점 쪽)에서 가운데로
+    for (let s = 0; s <= half; s++) { xs.push(bez(a, e, b, s / n)); ys.push(bez(b, e, a, s / n)); }
+    if (x.first) x.c.splice(0, 1, ...xs.reverse()); else x.c.splice(x.c.length - 1, 1, ...xs);
+    if (y.first) y.c.splice(0, 1, ...ys.reverse()); else y.c.splice(y.c.length - 1, 1, ...ys);
+  }
+}
