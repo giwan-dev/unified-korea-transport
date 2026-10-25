@@ -119,6 +119,24 @@ export function setRegions(map, regionOfZone, countryOfZone, zoneCenter, short =
   map.getSource('regionLabels')?.setData({ type: 'FeatureCollection', features });
 }
 
+/** 고른 시군의 바깥 테두리: 경계선 조각 가운데 한쪽만 고른 시군에 드는 변 (옛 군 조각 사이 안쪽 선은 긋지 않는다) */
+export function setZoneOutline(map, zoneIds) {
+  const want = new Set(zoneIds);
+  if (!map.getLayer('zones-sel-edge')) return;
+  // 도 경계(bg-sido)는 배경 층이 나중에 올라오므로 그 위로 옮겨 둔다
+  const ls = map.getStyle().layers, k = ls.findIndex((l) => l.id === 'bg-sido-water');
+  if (k >= 0 && ls.findIndex((l) => l.id === 'zones-sel-edge') < k) map.moveLayer('zones-sel-edge', ls[k + 1]?.id);
+  if (!want.size) { map.setFilter('zones-sel-edge', ['==', ['get', 'i'], -1]); return; }
+  fetchEdges().then((edges) => {
+    const ids = [];
+    for (const f of edges) {
+      const { i, a, b, w } = f.properties;
+      if (!w && want.has(a) !== (b >= 0 && want.has(b))) ids.push(i);
+    }
+    map.setFilter('zones-sel-edge', ['in', ['get', 'i'], ['literal', ids]]);
+  });
+}
+
 let edgeData = null;
 function fetchEdges() {
   edgeData ||= fetch('data/admin/edges.geojson').then((r) => r.json()).then((d) => d.features);
@@ -327,6 +345,10 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     id: 'zones-line', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1], layout: { 'line-join': 'round' },
     paint: { 'line-color': '#7a7f86', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.2, 9, 0.8], 'line-opacity': 0.7 },
   }, below);
+  map.addLayer({
+    id: 'zones-sel-edge', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1], layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: { 'line-color': '#1f5fbf', 'line-width': 2.5 },
+  });
   map.addLayer({
     id: 'zones-sel', type: 'line', source: 'zones',
     paint: { 'line-color': '#1f5fbf', 'line-width': ['case', ['boolean', ['feature-state', 'sel'], false], 2.5, 0] },

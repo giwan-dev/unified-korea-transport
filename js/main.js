@@ -11,7 +11,7 @@ import {
 } from './game/state.js';
 import { MEGA, TSR_FREIGHT, megaGeometry, applyMega } from './game/mega.js';
 import { AIRPORT } from './game/catalog.js';
-import { setNameResolver, setLabelGroup, refreshNames, setRegions, setLinks, paintHotspots } from './ui/map.js';
+import { setNameResolver, setLabelGroup, refreshNames, setRegions, setZoneOutline, setLinks, paintHotspots } from './ui/map.js';
 import { isNarrow, twinPrimary, mergeTwins, ROAD_RANK, motorwayMainline, bridgeMainlineGaps, flattenMainline, connectJunctions, smoothMainlineEnds, mainlineBubbles, roundMainlineCorners } from './ui/traffic.js';
 import { subFold, initPanelUI, toast } from './ui/panel.js';
 import { initPalette, openPalette, goSection } from './ui/palette.js';
@@ -1063,7 +1063,7 @@ function select(sel) {
   selection = sel;
   if (sel?.type === 'sub') map.setFeatureState({ source: 'subs', id: sel.id }, { sel: true });
   if (sel?.type === 'link') for (const i of sel.section?.ids || [sel.id]) map.setFeatureState({ source: 'links', id: i }, { sel: true });
-  if (sel?.type === 'zone') for (const j of countyZones(sel.id)) map.setFeatureState({ source: 'zones', id: j }, { sel: true });
+  setZoneOutline(map, sel?.type === 'zone' ? countyZones(sel.id) : []);
   renderSelection();
 }
 
