@@ -193,6 +193,8 @@ def main():
     print(len(out), "closed lines,", round(sum(r["km"] for r in out)), "km")
     for r in sorted(out, key=lambda r: -r["km"])[:40]:
         print(r["label"], r["country"], r["km"], "km, 역", len(r["stations"]))
+    import detour_lakes   # 댐 호수에 잠긴 구간은 호숫가로 돌린다 (금강산선–임남호), 같은 노선의 복원 계획도 따라 고친다
+    detour_lakes.main()
 
 
 if __name__ == "__main__":

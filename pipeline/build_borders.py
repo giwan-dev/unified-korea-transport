@@ -149,7 +149,7 @@ def main():
     feats += water
     out = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "id": k, "properties": {"i": k, "a": f[0], "b": f[1], **({"w": 1} if len(f) > 3 else {})},
-         "geometry": mapping(shapely.set_precision(f[2], 0.0005))} for k, f in enumerate(feats)]}
+         "geometry": mapping(shapely.set_precision(f[2], 0.00002))} for k, f in enumerate(feats)]}
     # 비무장지대 땅(시군구가 덮지 않는 육지) 면: 지도에서 육지 색으로 채운다 (안 채우면 물빛 띠로 보인다)
     if dmz is not None:
         import geopandas as gpd
