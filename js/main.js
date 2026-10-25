@@ -1,8 +1,8 @@
 // 게임 진행과 화면 패널.
-import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView, LAYER_VIEWS } from './ui/map.js';
+import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView, LAYER_VIEWS, setBasemap } from './ui/map.js';
 import { Namer } from './game/naming.js';
 import {
-  newGame, START_YEAR, startProject, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
+  newGame, START_YEAR, REOPEN_SPEED, startProject, cancelProject, cancelBlocked, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
   updateCongestion, defaultFix, updateApproval, canAfford, isKP, linksUnderWork, UPGRADES, NEW_BUILDS, upgradeCost,
   placeName, setPlaceName, startRestoreName, RENAME, startAirport, startAirportExpand, renameLine, splitLink,
   fundFor, settlePPP, settleRail, renameKPLines, KP_LINE_RENAME, LINE_RENAME_COST, railDividend, railEquity, mergeRail, OP_FACTORS, initOngoing, linkPending, setProjectPace, PACES,
@@ -50,6 +50,8 @@ import {
   HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST, ADMIN_OPTIONS, ADMIN_DEFAULT, adminNames, HISTORIC_COUNTIES,
 } from './game/local.js';
 import { openAdminSetup } from './ui/setup.js';
+import { flushSave, saveError, slotMeta, saveSlot, loadSlot, keepBackup, loadBackup } from './game/savestore.js';
+import { migrateState, rememberNetwork } from './game/migrate.js';
 import { LANG, t, startI18n, setLang } from './i18n.js';
 startI18n();
 { const ll = document.querySelector('#ld-lang'); if (ll) { ll.textContent = LANG === 'en' ? '한국어' : 'English'; ll.addEventListener('click', (e) => { e.preventDefault(); setLang(LANG === 'en' ? 'ko' : 'en'); }); } }
@@ -130,12 +132,35 @@ async function init() {
   fetch('data/base/world.geojson').then((r) => r.json()).then((w) => { isForeign = makeForeignTest(w); }).catch(() => {});
   fetch('data/plans.json').then((r) => (r.ok ? r.json() : { plans: [] })).then((p) => { plans = p.plans || []; migratePlanLines(); if (map) renderBuild(); }).catch(() => {});
   fetch('data/historic_targets.json').then((r) => (r.ok ? r.json() : [])).then((h) => { historic = h; }).catch(() => {});
+  rememberNetwork(meta?.stamp, base, zoneProps);
   subPop0 = zoneProps.flatMap((zp) => zp.subs.map((s) => s[2] * zp.pop));
-  state = load();
-  // 데이터가 바뀌면(노선망·존 구성 변경) 예전 저장 게임은 맞지 않으므로 새로 시작한다
-  if (state && meta && state.dataStamp !== meta.stamp) {
-    state = newGame(state.difficulty || 'normal');
-    state.log.unshift('지도·노선 데이터가 새로 바뀌어 이전 저장 게임 대신 새 게임으로 시작합니다.');
+  state = await load();
+  // 데이터가 바뀌면(노선망·존 구성 변경) 예전 저장 게임의 번호(노드·링크·시군)를 새 자료에 맞춰 옮긴다.
+  // 옮기지 못하면 예전 저장은 따로 남겨 두고(설정 탭에서 파일로 받을 수 있다) 새로 시작한다
+  if (state && meta && state.dataStamp && state.dataStamp !== meta.stamp) {
+    const old = state;
+    const r = await migrateState(old, { base, zones: zoneProps, stamp: meta.stamp });
+    if (r.ok) {
+      state = r.state;
+      // 운행 계통 경로는 새 망에서 다시 짠다 (못 짜면 그 계통은 없앤다)
+      const links = effectiveNetwork(base, state).links;
+      const before = (state.services || []).length;
+      state.services = (state.services || []).filter((sv) => {
+        if (!sv.replan) return true;
+        delete sv.replan;
+        const plan = sv.stops.length >= 2 && planService(links, railStationSet(), sv.stops, sv.kind, new Set(sv.lines || [sv.line]), sv.type);
+        if (!plan) return false;
+        sv.segs = plan.segs; sv.runMin = plan.runMin; sv.km = plan.km; sv.trains = tripsPerDay(sv.sets, plan.runMin);
+        return true;
+      });
+      if (state.services.length < before) r.note = [r.note, `새 지도에서 경로를 찾지 못한 운행 계통 ${before - state.services.length}개는 없앴습니다`].filter(Boolean).join(', ');
+      state.log.unshift(`지도·노선 자료가 새로 바뀌어 저장 게임을 새 자료에 맞춰 옮겼습니다${r.note ? ` (${r.note})` : ''}.`);
+    } else {
+      await keepBackup(JSON.stringify(old), old.dataStamp);
+      state = newGame(old.difficulty || 'normal');
+      state.backupStamp = old.dataStamp;
+      state.log.unshift(`지도·노선 자료가 새로 바뀌어 ${old.year}년 저장 게임을 이어 할 수 없어 새로 시작합니다 (${r.reason}). 예전 저장은 설정 탭에서 파일로 받아 둘 수 있습니다.`);
+    }
     clearSim();
   }
   state ||= newGame('normal');
@@ -1175,6 +1200,20 @@ function nearestNode(lngLat, mode, maxPx, maxKm) {
   return best;
 }
 
+/** 화면 maxPx 안의 가장 가까운 일반철도·고속철도역 노드 */
+function nearestRailStation(lngLat, maxPx) {
+  const pt = map.project(lngLat);
+  const st = new Set(effectiveNetwork(base, state).stations);
+  let best = null, bd = Infinity;
+  for (const id of nodesOfMode(1)) {
+    if (!st.has(id)) continue;
+    const q = map.project(nodeCoord(id));
+    const d = Math.hypot(q.x - pt.x, q.y - pt.y);
+    if (d < bd && d <= maxPx) { bd = d; best = id; }
+  }
+  return best;
+}
+
 /** 공항 신설: 한 번 누른 곳에 공항을 놓는다 */
 function placeAirport(lngLat) {
   const p = namer.nearbyPlaces(lngLat.lng, lngLat.lat)[0];
@@ -1337,6 +1376,8 @@ function addDraftPoint(lngLat) {
   }
   // 노드는 화면 24px, 선은 16px 안이면 붙인다 (정확히 누르지 않아도 되게)
   let node = snap.node ? nearestNode(lngLat, spec.mode, 24) : null;
+  // 도시철도는 일반철도역에도 붙일 수 있다: 그 역에서 일반철도와 바로 갈아탄다 (환승 연결로 친다)
+  if (node == null && snap.node && spec.mode === 2) node = nearestRailStation(lngLat, 24);
   let split = null;
   if (node == null && snap.line) {
     const on = nearestOnLink(lngLat, spec.mode, 16);
@@ -1638,6 +1679,7 @@ function bindUI() {
     d.onclick = go;
     d.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
   });
+  if (basemap !== 'plain') setBasemap(map, basemap);
   // 통일 첫해: 행정구역 정리 창을 먼저 띄우고, 정하면 사용법 안내로 이어진다
   if (needsAdminSetup()) setTimeout(() => adminSetup(true), 400);
   else if (guideShouldAutoShow()) setTimeout(showGuide, 600);
@@ -1648,6 +1690,10 @@ function bindUI() {
   });
   $('#legend').addEventListener('change', (e) => {
     if (e.target.id === 'metric') { metric = e.target.value; paintZones(); renderLegend(); }
+    if (e.target.id === 'basemap') {
+      basemap = e.target.value; setBasemap(map, basemap);
+      try { localStorage.setItem('ukt-basemap', basemap); } catch { /* 저장 못 해도 된다 */ }
+    }
     if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); syncRailKind(map); renderLegend(); }
     if (e.target.id === 'trains-toggle') {
       if (e.target.checked && !confirm('지도에 열차 위치를 그리면 컴퓨터 부하가 커집니다 (화면에 보이는 열차를 1초에 5번 다시 그립니다). 느려지면 다시 끄세요. 켤까요?')) { e.target.checked = false; return; }
@@ -1869,9 +1915,10 @@ function renderTop() {
 }
 
 let layerView = 'all';
+let basemap = (() => { try { return localStorage.getItem('ukt-basemap') || 'plain'; } catch { return 'plain'; } })();
 function renderLegend() {
   // 좁은 화면에서는 고르기 칸과 색 띠만 보이고, 나머지는 '범례 더 보기'로 편다 (지도를 덜 가리게)
-  $('#legend').innerHTML = legendHTML(metric, layerView) + `<div class="lg-extra">${railKindLegend()}${trainsLegend()}</div>`
+  $('#legend').innerHTML = legendHTML(metric, layerView, basemap) + `<div class="lg-extra">${railKindLegend()}${trainsLegend()}</div>`
     + `<button type="button" class="small lg-toggle">${$('#legend').classList.contains('open') ? '범례 접기' : '범례 더 보기'}</button>`;
 }
 
@@ -2091,7 +2138,8 @@ function renderProjects() {
       <div class="m">${formatWon(p.cost)} · 연 ${formatWon(Math.min(p.annual, p.cost - p.paid))} · ${p.doneYear}년 ${p.kind === 'osm' ? '개통' : '완공'} 예정${by}</div>
       <div class="progress"><div style="width:${Math.round(prog * 100)}%"></div></div>
       ${['service', 'vehicles', 'airRoute', 'rename'].includes(p.kind) ? '' : `<div class="pace">투입 속도 ${PACES.map((x) =>
-        `<button class="small ${x === pace ? 'on' : ''}" data-pace="${p.id}" data-v="${x}">${Math.round(x * 100)}%</button>`).join('')}</div>`}</div>`;
+        `<button class="small ${x === pace ? 'on' : ''}" data-pace="${p.id}" data-v="${x}">${Math.round(x * 100)}%</button>`).join('')}</div>`}
+      ${cancelBlocked(p) ? '' : `<div class="actions"><button class="small danger" data-cancel-proj="${p.id}" title="이미 낸 돈은 돌려받지 못하고 남은 사업비만 아낍니다">사업 취소</button></div>`}</div>`;
   };
   const ongoing = building.filter((p) => p.kind === 'osm'), mine = building.filter((p) => p.kind !== 'osm');
   el.innerHTML = `
@@ -2102,11 +2150,25 @@ function renderProjects() {
     <h3 style="margin-top:16px">새로 벌인 사업 (${mine.length})</h3>
     <div class="list">${mine.map(row).join('') || '<p class="hint">진행 중인 사업이 없습니다.</p>'}</div>
     ${pppTableHTML()}
-    <h3 style="margin-top:16px">완공 (${state.projects.length - building.length})</h3>
+    <h3 style="margin-top:16px">완공 (${state.projects.filter((p) => p.status === 'done').length})</h3>
     <div class="list">${done.map((p) => `<div class="item">${projectBounds(p) ? `<button class="t link" data-locate="${p.id}" title="지도에서 보기">${esc(p.label)}</button>` : `<div class="t">${esc(p.label)}</div>`}<div class="m">${p.doneYear}년 완공 · ${formatWon(p.cost)}</div></div>`).join('') || '<p class="hint">아직 없습니다.</p>'}</div>`;
   el.querySelectorAll('[data-locate]').forEach((b) => { b.onclick = () => locateProject(state.projects.find((x) => x.id === b.dataset.locate)); });
   el.querySelectorAll('[data-pace]').forEach((b) => {
     b.onclick = () => { setProjectPace(state, b.dataset.pace, +b.dataset.v); save(state); renderProjects(); renderTop(); };
+  });
+  el.querySelectorAll('[data-cancel-proj]').forEach((b) => {
+    b.onclick = () => {
+      const p = state.projects.find((x) => x.id === b.dataset.cancelProj);
+      if (!p) return;
+      const left = Math.max(0, p.cost - p.paid);
+      const hit = p.cost >= 50000 ? 2 : p.cost >= 10000 ? 1 : 0;
+      if (!confirm(`${p.label}
+
+사업을 취소할까요? 지금까지 낸 ${formatWon(p.paid)}은 돌려받지 못하고, 남은 ${formatWon(left)}을 아낍니다.${hit ? ` 짓다 만 사업이라 지지율이 ${hit} 내려갑니다.` : ''}`)) return;
+      const r = cancelProject(base, state, p.id);
+      if (!r.ok) { alert(r.reason); return; }
+      save(state); refreshLinks(); renderAll();
+    };
   });
 }
 
@@ -2392,14 +2454,15 @@ function renderSettings() {
   $('#save-link').onclick = copyShareLink;
   $('#save-import').onclick = () => $('#save-file').click();
   $('#save-file').onchange = (e) => { const f = e.target.files?.[0]; if (f) importSave(f); e.target.value = ''; };
-  $('#btn-new').onclick = () => {
+  $('#btn-new').onclick = async () => {
     if (!confirm('지금 게임을 지우고 새로 시작할까요?')) return;
     guideOnNewGame();
-    clearSave();
+    await clearSave();
     clearSim();
     const d = $('#difficulty').value;
     state = newGame(d);
     save(state);
+    await flushSave();
     location.reload();
   };
 }
@@ -2492,6 +2555,9 @@ function renderSelection() {
     else alert(`${sc.line || '이 구간'}에 적용할 개량이 없습니다.`);
   });
   el.querySelectorAll('[data-st-diagram]').forEach((b) => { b.onclick = () => openLineDiagram(+b.dataset.stDiagram); });
+  el.querySelectorAll('[data-padd]').forEach((b) => { b.onclick = () => { switchTab('build'); startPointAdd(b.dataset.padd); toast(b.dataset.padd === 'ic' ? '고속도로 위 IC 자리를 누르세요.' : '노선 위 역 자리를 누르세요.'); }; });
+  el.querySelector('#reopen-go')?.addEventListener('click', () => startReopen(selection.id));
+  el.querySelectorAll('[data-xfer]').forEach((b) => { b.onclick = () => startTransfer(selection.id, +b.dataset.xfer); });
   el.querySelector('#devel-ok')?.addEventListener('click', (ev) => commitDevel(+ev.target.dataset.node));
   el.querySelectorAll('[data-st-goto]').forEach((a) => {
     a.onclick = (ev) => { ev.preventDefault(); const nd = +a.dataset.stGoto; flyToNode(nd); select({ type: 'node', id: nd }); };
@@ -4694,6 +4760,8 @@ async function importSave(file) {
   if (dataStamp && st.dataStamp && st.dataStamp !== dataStamp) { alert(`지도 자료가 바뀌기 전에 만든 파일이라 불러올 수 없습니다 (파일 ${st.dataStamp} · 지금 ${dataStamp}).`); return; }
   if (!confirm(`${st.year}년 저장 파일을 불러올까요? 지금 진행은 슬롯이나 파일로 저장하지 않았다면 사라집니다.`)) return;
   save(st);
+  await flushSave();
+  if (saveError()) { alert(`불러온 게임을 저장하지 못했습니다: ${saveError().message || saveError()}`); return; }
   clearSim();
   location.reload();
 }
@@ -4701,7 +4769,7 @@ async function importSave(file) {
 /** 놓은 노선 길이(km)와 완공 사업 수 */
 function builtSummary() {
   const out = { hsr: 0, rail: 0, metro: 0, road: 0, done: 0, upgrades: 0 };
-  const kind = { hsr: 'hsr', tunnelRail: 'hsr', gtx: 'rail', rail: 'rail', metro: 'metro', motorway: 'road', trunk: 'road', tunnelRoad: 'road' };
+  const kind = { hsr: 'hsr', tunnelRail: 'hsr', gtx: 'rail', rail: 'rail', rail1: 'rail', metro: 'metro', motorway: 'road', trunk: 'road', tunnelRoad: 'road' };
   for (const p of state.projects) {
     // 처음부터 이어받은 공사(OSM 공사 중 노선)는 플레이어 사업이 아니므로 세지 않는다
     if (p.status !== 'done' || p.kind === 'osm') continue;
@@ -4763,37 +4831,57 @@ document.addEventListener('click', async (e) => {
 // ------------------------------------------------------------ 저장 슬롯
 
 const SLOTS = 3;
-function slotInfo(n) {
-  try { const v = JSON.parse(localStorage.getItem(`ukt-slot-${n}`) || 'null'); return v; } catch { return null; }
-}
 
 function slotsHTML() {
+  const meta = slotMeta();
+  const backup = state.backupStamp ? `<div class="item opt"><div class="opt-row"><span>지도 자료가 바뀌기 전 저장 <span class="m">이어 할 수 없음</span></span>
+      <span><button class="small" id="backup-dl">파일로 받기</button></span></div></div>` : '';
   return `<div class="list">${Array.from({ length: SLOTS }, (_, k) => {
-    const v = slotInfo(k + 1);
+    const v = meta[k + 1];
     return `<div class="item opt"><div class="opt-row">
-      <span>슬롯 ${k + 1} <span class="m">${v ? `${v.state.year}년 · ${new Date(v.savedAt).toLocaleString('ko-KR')}` : '비어 있음'}</span></span>
+      <span>슬롯 ${k + 1} <span class="m">${v ? `${v.year}년 · ${new Date(v.savedAt).toLocaleString('ko-KR')}` : '비어 있음'}</span></span>
       <span><button class="small" data-slot-save="${k + 1}">저장</button> <button class="small" data-slot-load="${k + 1}" ${v ? '' : 'disabled'}>불러오기</button></span></div></div>`;
-  }).join('')}</div>`;
+  }).join('')}${backup}</div>`;
 }
 
 function bindSlots(el) {
   el.querySelectorAll('[data-slot-save]').forEach((b) => {
-    b.onclick = () => {
+    b.onclick = async () => {
+      const n = b.dataset.slotSave;
+      if (slotMeta()[n] && !confirm(`슬롯 ${n}에 덮어쓸까요?`)) return;
+      b.disabled = true;
       try {
-        localStorage.setItem(`ukt-slot-${b.dataset.slotSave}`, JSON.stringify({ savedAt: Date.now(), state }));
-        state.log.unshift(`${state.year}년 슬롯 ${b.dataset.slotSave}에 저장했습니다.`);
+        await saveSlot(n, state);
+        state.log.unshift(`${state.year}년 슬롯 ${n}에 저장했습니다.`);
+        save(state);
         renderAll();
-      } catch (e) { alert(`저장하지 못했습니다 (브라우저 저장 공간 부족): ${e.message}`); }
+        toast(`슬롯 ${n}에 저장했습니다.`);
+      } catch (e) { alert(`저장하지 못했습니다: ${e?.message || e}. 설정 탭의 '파일로 내보내기'로 저장해 두세요.`); }
+      b.disabled = false;
     };
   });
   el.querySelectorAll('[data-slot-load]').forEach((b) => {
-    b.onclick = () => {
-      const v = slotInfo(b.dataset.slotLoad);
-      if (!v || !confirm(`슬롯 ${b.dataset.slotLoad}(${v.state.year}년)을 불러올까요? 지금 진행은 슬롯에 저장하지 않았다면 사라집니다.`)) return;
-      save(v.state);
+    b.onclick = async () => {
+      const n = b.dataset.slotLoad, v = slotMeta()[n];
+      if (!v || !confirm(`슬롯 ${n}(${v.year}년)을 불러올까요? 지금 진행은 슬롯에 저장하지 않았다면 사라집니다.`)) return;
+      const json = await loadSlot(n);
+      if (!json) { alert('슬롯을 읽지 못했습니다.'); return; }
+      save(JSON.parse(json));
+      await flushSave();
+      if (saveError()) { alert(`불러오지 못했습니다: ${saveError().message || saveError()}`); return; }
       clearSim();
       location.reload();
     };
+  });
+  el.querySelector('#backup-dl')?.addEventListener('click', async () => {
+    const json = await loadBackup(state.backupStamp);
+    if (!json) { alert('예전 저장을 찾지 못했습니다.'); return; }
+    const st = JSON.parse(json);
+    const blob = new Blob([JSON.stringify({ app: 'unified-korea-transport', version: APP_VERSION, savedAt: Date.now(), state: st })], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `통일교통망_${st.year}년_자료${st.dataStamp}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
   });
 }
 
@@ -5158,13 +5246,15 @@ function linkPanel(id) {
       <tr><td>혼잡도 (V/C)</td><td class="${vc > 1 ? 'neg' : ''}">${vc.toFixed(2)}</td></tr>
     </table>
     ${l.mode >= 1 && l.name && !l.ext && !planned ? serviceSection(l) : ''}
+    ${!planned && !busyProj ? reopenHTML(id, l) : ''}
     ${isNew && l.name ? `<h4>노선 이름</h4><div class="name-row"><input type="text" id="line-rename" value="${esc(l.name)}">
       <button class="small" id="line-rename-ok">바꾸기</button></div>` : ''}
     ${planned ? `<p class="hint">진행 중인 사업 구간입니다: ${esc(osmProj?.label || '')} · ${osmProj ? `${osmProj.doneYear}년 개통 예정` : ''}. 사업 탭에서 예산 투입 속도를 바꿀 수 있습니다.</p>`
     : l.ext ? '<p class="hint">국외 거점과 잇는 국경 연결 구간입니다. 개량 대상이 아닙니다.</p>'
     : l.cls === 'ferry' ? '<p class="hint">여객선 항로입니다. 개량 대상이 아닙니다.</p>'
     : busyProj ? `<p class="hint">공사 중: ${esc(busyProj.label)} (${busyProj.doneYear}년 완공)</p>` : `<h4>개량</h4>
-    <div class="actions"><button class="small sec-start" title="두 역·IC를 차례로 눌러 그 사이만 고릅니다">구간 선택 (${l.mode === 0 ? 'IC' : '역'} 두 곳 누르기)</button></div>
+    <div class="actions"><button class="small sec-start" title="두 역·IC를 차례로 눌러 그 사이만 고릅니다">구간 선택 (${l.mode === 0 ? 'IC' : '역'} 두 곳 누르기)</button>
+      ${l.mode >= 1 ? '<button class="small" data-padd="station" title="노선 위 한 점을 눌러 역을 놓습니다">이 노선에 역 신설</button>' : l.cls === 'motorway' ? '<button class="small" data-padd="ic">IC 신설</button>' : ''}</div>
     ${l.mode === 1 ? fundSelect([operatorOf(state, l)]) : ''}
     ${route.length > 1 ? `<label class="name-row"><input type="checkbox" id="whole-route" ${wholeRoute ? 'checked' : ''}>
       <span>같은 이름 노선 전체 (${route.length}개 구간, ${routeKm.toFixed(0)}km)</span></label>` : ''}
@@ -5210,6 +5300,56 @@ function multiPanel(ids) {
         <span>${resolve(u.label, linkAt(base, state, app[0]))} · ${app.length}개 구간 ${len.toFixed(0)}km</span>
         <button class="small ${ok ? 'primary' : ''}" data-mup="${u.id}" data-ids="${JSON.stringify(app)}" ${ok ? '' : 'disabled'}>${formatWon(cost)} · ${u.years}년</button></div></div>`;
     }).join('') || '<p class="hint">고른 구간에 가능한 개량이 없습니다.</p>'}</div>`;
+}
+
+// ------------------------------------------------------------ 여객 재개통 (역이 없거나 거의 없어 아무도 타지 않는 선로)
+
+const REOPEN = { perKm: 30, station: 150, years: 2, minPop: 1500, spacingKm: 4, maxStations: 15 };
+
+/** 노선(같은 이름 구간들) 위 노드 가운데 반경 2km 인구가 많은 곳을 서로 4km 이상 떨어지게 골라 역 자리로 */
+function reopenPlan(id) {
+  const route = sameRoute(id).filter((i) => !(i < base.links.length && linkPending(base, state, i)) && !state.replaced?.[i]);
+  const stations = new Set(effectiveNetwork(base, state).stations);
+  const nodes = new Set();
+  let km = 0, kp = 0;
+  for (const i of route) { const l = linkAt(base, state, i); nodes.add(l.a); nodes.add(l.b); km += l.len; if (l.kp) kp += l.len; }
+  const have = [...nodes].filter((n) => stations.has(n));
+  if (have.length > Math.max(1, km / 15)) return null;   // 역이 이미 넉넉하면 재개통 대상이 아니다
+  const far = (n, list) => list.every((m) => { const a = nodeCoord(n), b = nodeCoord(m); return kmBetween(a[0], a[1], b[0], b[1]) >= REOPEN.spacingKm; });
+  const cand = [...nodes].filter((n) => !stations.has(n)).map((n) => { const c = nodeCoord(n); return { n, pop: c ? popNear(c[0], c[1], 2) : 0 }; })
+    .filter((x) => x.pop >= REOPEN.minPop).sort((a, b) => b.pop - a.pop);
+  const pick = [];
+  for (const x of cand) {
+    if (pick.length >= REOPEN.maxStations) break;
+    if (far(x.n, [...have, ...pick.map((p) => p.n)])) pick.push(x);
+  }
+  if (!pick.length) return null;
+  const f = kp * 2 > km ? KP_COST_FACTOR : 1;
+  const cost = Math.round((REOPEN.perKm * km + REOPEN.station * pick.length) * f);
+  return { route, km, pick, cost, pop: pick.reduce((s, x) => s + x.pop, 0) };
+}
+
+function reopenHTML(id, l) {
+  if (l.mode !== 1 || l.cls === 'hsr' || l.ext) return '';
+  const r = reopenPlan(id);
+  if (!r) return '';
+  const ok = canAfford(state, r.cost, REOPEN.years);
+  return `<h4>여객 재개통</h4>
+    <p class="hint">${esc(l.name || '이 선로')}: 여객역이 거의 없어 이용객이 없습니다. 선로를 손보고(시속 ${REOPEN_SPEED}km까지) 인구가 많은 ${r.pick.length}곳에 역을 열면 여객 열차가 다닙니다.
+      (역 반경 2km 인구 합계 ${fmtPeople(r.pop)}, 노선 ${r.km.toFixed(0)}km)</p>
+    <div class="actions"><button class="small ${ok ? 'primary' : ''}" id="reopen-go" ${ok ? '' : 'disabled'}>재개통 ${formatWon(r.cost)} · ${REOPEN.years}년</button></div>`;
+}
+
+function startReopen(id) {
+  const r = reopenPlan(id);
+  if (!r) return;
+  if (!canAfford(state, r.cost, REOPEN.years)) { alert('예산과 차입 한도가 부족합니다.'); return; }
+  const l = linkAt(base, state, id);
+  const newNames = {};
+  for (const x of r.pick) { const c = nodeCoord(x.n); newNames[x.n] = { name: namer ? namer.suggest(c[0], c[1], 'station') : `${l.name || ''}역`, kind: 'station', auto: true }; }
+  startProject(state, { id: crypto.randomUUID(), kind: 'reopen', links: [], relinks: r.route, stations: r.pick.map((x) => x.n), newNames,
+    cost: r.cost, years: REOPEN.years, fund: fundFor(state, [l]), label: `${l.name || '선로'} 여객 재개통 (역 ${r.pick.length}곳)` });
+  save(state); renderAll();
 }
 
 /** 이름·등급·남북이 같은 링크들 (노선 전체 개량용) */
@@ -5469,7 +5609,63 @@ function stationPanel(id, n) {
     ${near.length ? `<table class="kv">${near.map((x) => `<tr><td><a href="#" data-st-goto="${x.node}">${esc(x.name)}</a>
       <span class="m">${x.lines.map(esc).join(', ') || '노선 정보 없음'}</span></td><td>도보 ${Math.round(x.d * 1000)}m</td></tr>`).join('')}</table>`
       : lines.filter((l) => l.named).length > 1 ? '' : '<p class="hint">400m 안에 갈아탈 다른 역이 없습니다.</p>'}
+    ${transferHTML(id, lines)}
     ${develHTML(id, n)}`;
+}
+
+// ------------------------------------------------------------ 일반철도–도시철도 환승 연결
+
+const TRANSFER = { base: 800, perKm: 1000, years: 2, maxKm: 1.5 };
+
+/**
+ * 역 패널: 일반철도역이면 가까운 도시철도역, 도시철도역이면 가까운 일반철도역과의 환승 연결.
+ * 지으면 도시철도역 근처 사람이 도시철도를 타고 와서 이 철도역에서 갈아탈 수 있다 (모형: 철도 후보 역에 더해짐)
+ */
+function transferHTML(id, lines) {
+  const isRail = lines.some((l) => l.mode === 1), isMetro = lines.some((l) => l.mode === 2);
+  if (!isRail && !isMetro) return '';
+  const c = nodeCoord(id);
+  const mine = (state.transfers || []).filter((t) => t.rail === id || t.metro === id);
+  const linked = new Set(mine.map((t) => (t.rail === id ? t.metro : t.rail)));
+  const cand = [];
+  for (const [node, v] of nodeNames()) {
+    if (v.kind !== 'station' || node === id || typeof node !== 'number' || linked.has(node)) continue;
+    const p = nodeCoord(node);
+    if (!p || Math.abs(p[0] - c[0]) > 0.03 || Math.abs(p[1] - c[1]) > 0.02) continue;
+    const d = kmBetween(c[0], c[1], p[0], p[1]);
+    if (d > TRANSFER.maxKm) continue;
+    const ls = linesAt(node);
+    // 일반철도역에는 도시철도역을, 도시철도역에는 일반철도역을 (둘 다 있는 역은 양쪽)
+    const other = (isRail && ls.some((l) => l.mode === 2)) || (isMetro && ls.some((l) => l.mode === 1));
+    if (other) cand.push({ node, name: v.name, d, ls });
+  }
+  cand.sort((a, b) => a.d - b.d);
+  const cost = (d) => Math.round(TRANSFER.base + TRANSFER.perKm * d);
+  const nm = (n) => esc(nodeNames().get(n)?.name || '역');
+  const rows = mine.map((t) => `<tr><td>${nm(t.rail === id ? t.metro : t.rail)}</td><td>${t.built ? '연결됨' : '공사 중'}</td></tr>`).join('');
+  return `<h4>일반철도–도시철도 환승 연결</h4>
+    <p class="hint">통로·연결선을 놓아 도시철도로 와서 이 역 열차로 갈아타게 합니다. 도시철도역 근처 주민이 이 역을 쓰게 되어 철도 수요가 늡니다.</p>
+    ${rows ? `<table class="kv">${rows}</table>` : ''}
+    <div class="list">${cand.slice(0, 5).map((x) => {
+      const k = cost(x.d), ok = canAfford(state, k, TRANSFER.years);
+      return `<div class="item opt"><div class="opt-row"><span>${esc(x.name)} <span class="m">${x.ls.filter((l) => l.named).map((l) => esc(l.name)).slice(0, 3).join(', ')} · ${Math.round(x.d * 1000)}m</span></span>
+        <button class="small ${ok ? 'primary' : ''}" data-xfer="${x.node}" ${ok ? '' : 'disabled'}>${formatWon(k)} · ${TRANSFER.years}년</button></div></div>`;
+    }).join('') || (rows ? '' : `<p class="hint">${TRANSFER.maxKm}km 안에 이을 ${isRail ? '도시철도' : '일반철도'}역이 없습니다.</p>`)}</div>`;
+}
+
+function startTransfer(id, other) {
+  const isRailHere = linesAt(id).some((l) => l.mode === 1) && linesAt(other).some((l) => l.mode === 2);
+  const rail = isRailHere ? id : other, metro = isRailHere ? other : id;
+  const [a, b] = [nodeCoord(id), nodeCoord(other)];
+  const d = kmBetween(a[0], a[1], b[0], b[1]);
+  const cost = Math.round(TRANSFER.base + TRANSFER.perKm * d);
+  if (!canAfford(state, cost, TRANSFER.years)) { alert('예산과 차입 한도가 부족합니다.'); return; }
+  const nn = nodeNames();
+  const pid = crypto.randomUUID();
+  (state.transfers ||= []).push({ id: pid, rail, metro, built: false });
+  startProject(state, { id: pid, kind: 'transfer', links: [], stations: [], cost, years: TRANSFER.years,
+    label: `환승 연결: ${nn.get(rail)?.name || '철도역'} ↔ ${nn.get(metro)?.name || '도시철도역'}` });
+  save(state); renderAll();
 }
 
 /**

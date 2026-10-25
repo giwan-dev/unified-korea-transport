@@ -28,7 +28,7 @@ function corridorOf(a, b) {
 }
 
 const KIND = {
-  hsr: '고속철도', rail: '선', motorway: '고속도로', trunk: '국도', metro: '도시철도',
+  hsr: '고속철도', rail: '선', rail1: '선', motorway: '고속도로', trunk: '국도', metro: '도시철도',
   tunnelRail: '해저고속철도', tunnelRoad: '해저고속도로',
 };
 

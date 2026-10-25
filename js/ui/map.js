@@ -1,4 +1,4 @@
-// MapLibre 지도와 레이어. 자체 벡터 배경지도(외부 타일 없음), 존 단계구분도, 도로(혼잡도), 철도(교통량), 역·IC 라벨, 그리기 미리보기.
+// MapLibre 지도와 레이어. 자체 벡터 배경지도(위성·음영기복을 고르면 Esri 타일), 존 단계구분도, 도로(혼잡도), 철도(교통량), 역·IC 라벨, 그리기 미리보기.
 
 import { hotspotsFC, warnIcon, HOT_VC } from './traffic.js';
 import { borderLines } from './borders.js';
@@ -560,6 +560,30 @@ function mix(a, b, t) {
 }
 
 /** 지도 보기: 전체 / 도로만 / 철도만 (도시철도 포함, 혼잡도 색) / 항공만 / 아무것도 안 보기 (지표 색칠만) */
+// 배경: 기본(자체 벡터 지도) · 위성 사진 · 지형(음영기복). 위성·지형은 Esri 타일을 육지 면 위, 호수·경계선 아래에 깐다
+export const BASEMAPS = { plain: '기본 지도', sat: '위성 사진', terrain: '지형 (음영기복)' };
+const RASTER = {
+  sat: { tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], maxzoom: 18,
+    attribution: '위성 사진 © Esri, Maxar, Earthstar Geographics' },
+  terrain: { tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}'], maxzoom: 13,
+    attribution: '음영기복 © Esri' },
+};
+export function setBasemap(map, kind) {
+  if (map.getLayer('bg-raster')) map.removeLayer('bg-raster');
+  if (map.getSource('bg-raster')) map.removeSource('bg-raster');
+  const r = RASTER[kind];
+  const sat = kind === 'sat';
+  // 위성 사진 위에서는 호수·강 색과 시군 색칠을 옅게 (사진이 보이게)
+  for (const id of ['bg-lake', 'bg-river']) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', sat ? 'none' : 'visible');
+  if (map.getLayer('zones-fill')) map.setPaintProperty('zones-fill', 'fill-opacity', sat ? 0.3 : 0.55);
+  if (!r) return;
+  map.addSource('bg-raster', { type: 'raster', tiles: r.tiles, tileSize: 256, maxzoom: r.maxzoom, attribution: r.attribution });
+  // 위성 사진은 육지 면 대신 맨 밑에, 음영기복은 시군 색칠 위에 반투명으로 얹어 산줄기가 보이게
+  map.addLayer({ id: 'bg-raster', type: 'raster', source: 'bg-raster',
+    paint: sat ? { 'raster-opacity': 1 } : { 'raster-opacity': 0.4, 'raster-saturation': -0.5, 'raster-contrast': 0.2 } },
+  sat || !map.getLayer('zones-line') ? 'bg-lake' : 'zones-line');
+}
+
 export const LAYER_VIEWS = { all: '모두 보기', road: '도로만', rail: '철도만', air: '항공만', none: '아무것도 안 보기' };
 const ROAD_LAYERS = ['roads', 'roads-minor', 'roads-casing', 'roads-motorway', 'bg-roads', 'ferries'];
 const RAIL_LAYERS = ['rails', 'metro'];
@@ -613,7 +637,7 @@ export function setLayerView(map, view) {
 
 const sw = (color, kind = 'line', extra = '') => `<i class="sw ${kind}" style="--c:${color};${extra}"></i>`;
 
-export function legendHTML(metric, view = 'all') {
+export function legendHTML(metric, view = 'all', basemap = 'plain') {
   const m = METRICS[metric];
   const opts = Object.entries(METRICS).map(([k, v]) => `<option value="${k}" ${k === metric ? 'selected' : ''}>${v.label}</option>`).join('');
   let ramp = '';
@@ -635,7 +659,8 @@ export function legendHTML(metric, view = 'all') {
   if (view === 'none') rows.push('교통망을 숨기고 지표 색칠만 봅니다.');
   if (view !== 'air' && view !== 'none') rows.push(`<i class="sw warn"></i> 혼잡 주의 (V/C &gt; ${HOT_VC})`);
   return `<select id="layerview" title="지도에 그릴 교통망">${Object.entries(LAYER_VIEWS).map(([k, v]) => `<option value="${k}" ${k === view ? 'selected' : ''}>${v}</option>`).join('')}</select>
-    <select id="metric">${opts}</select>${ramp}
+    <select id="metric">${opts}</select>
+    <select id="basemap" title="배경 지도">${Object.entries(BASEMAPS).map(([k, v]) => `<option value="${k}" ${k === basemap ? 'selected' : ''}>배경: ${v}</option>`).join('')}</select>${ramp}
     <div class="lg-more">${(road || view === 'rail') ? vcRamp(view === 'rail' ? '철도 혼잡도 (V/C, 0~10)' : '도로 혼잡도 (V/C, 0~10)') : ''}
     <div class="lg-rows">${rows.map((r) => `<div>${r}</div>`).join('')}</div></div>`;
 }

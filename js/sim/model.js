@@ -677,8 +677,51 @@ export class Model {
    * 접근시간은 인구 가중 평균. 후보역이 없는 소구역(역 반경 밖)은 철도를 쓰지 않는 것으로 보고 뺀다.
    * 소구역 인구비중이 바뀌므로 배정할 때마다 다시 만든다.
    */
+  /**
+   * 일반철도역–도시철도역 환승 연결(플레이어가 지은 것, net.railMetro = [[철도역 노드, 도시철도역 노드]]):
+   * 소구역에서 가까운 도시철도역까지 가서 도시철도로 연결역까지 간 뒤 갈아타는 길을 후보 역에 더한다.
+   * 결과는 subSt·subStAcc를 고친 사본(subStX·subStAccX). 연결이 없으면 원본을 그대로 쓴다.
+   */
+  metroFeed() {
+    const K = P.stationCandidates, M = P.metroCandidates;
+    const pairs = (this.net.railMetro || []).map(([r, m]) => [this.stationOf.get(r), m]).filter(([k, m]) => k != null && m >= 0 && m < this.net.nodes.length);
+    if (!pairs.length || !this.subMetro) { this.subStX = this.subStAccX = null; this._feedKey = null; return; }
+    const key = `${this.accessSig}|${pairs.join(';')}`;
+    if (key === this._feedKey) return;
+    this._feedKey = key;
+    const st = Int32Array.from(this.subSt), acc = Float64Array.from(this.subStAcc);
+    // 연결역(도시철도 쪽)에서 도시철도망 시간: 짝마다 한 번
+    const dists = pairs.map(([, m]) => { this.metroG.shortestPaths(m, this.freeTime); return Float32Array.from(this.metroG.dist); });
+    for (let s = 0; s < this.S; s++) {
+      for (let q = 0; q < pairs.length; q++) {
+        let best = Infinity;
+        for (let k = 0; k < M; k++) {
+          const mn = this.subMetro[s * M + k];
+          if (mn < 0) break;
+          const t = this.subMetroAcc[s * M + k] + dists[q][mn] + P.metroRailTransferMin;
+          if (t < best) best = t;
+        }
+        if (!(best <= P.metroFeedMaxMin)) continue;
+        const r = pairs[q][0];
+        // 같은 역이 이미 후보면 더 짧은 쪽, 아니면 빈 자리나 가장 먼 후보 자리에
+        let slot = -1, empty = -1, worst = -1, wv = -Infinity;
+        for (let k = 0; k < K; k++) {
+          const x = st[s * K + k];
+          if (x === r) { slot = k; break; }
+          if (x < 0) { if (empty < 0) empty = k; continue; }
+          if (acc[s * K + k] > wv) { wv = acc[s * K + k]; worst = k; }
+        }
+        const put = slot >= 0 ? (best < acc[s * K + slot] ? slot : -1) : empty >= 0 ? empty : best < wv ? worst : -1;
+        if (put >= 0) { st[s * K + put] = r; acc[s * K + put] = best; }
+      }
+    }
+    this.subStX = st; this.subStAccX = acc;
+  }
+
   buildRailSets() {
     const K = P.stationCandidates;
+    this.metroFeed();
+    const subSt = this.subStX || this.subSt, subStAcc = this.subStAccX || this.subStAcc;
     const off = new Int32Array(this.Z + 1), st = [], acc = [], w = [], wd = [];
     const DW = this.destW || this.subW;   // 도착 쪽 비중: 인구에 관광지 읍면동을 섞은 것
     for (let z = 0; z < this.Z; z++) {
@@ -688,17 +731,17 @@ export class Model {
         const wo = this.subW[o], wdo = DW[o];
         if (!(wo > 0) && !(wdo > 0)) continue;
         total += wo; totalD += wdo;
-        if (this.subSt[o * K] < 0) continue;
+        if (subSt[o * K] < 0) continue;
         let key = '';
-        for (let a = 0; a < K; a++) key += `${this.subSt[o * K + a]},`;
+        for (let a = 0; a < K; a++) key += `${subSt[o * K + a]},`;
         let e = sets.get(key);
         if (!e) { e = { w: 0, wd: 0, acc: new Float64Array(K), o }; sets.set(key, e); }
         e.w += wo; e.wd += wdo;
         const aw = wo + wdo;   // 접근시간은 출발·도착 비중을 함께 가중
-        for (let a = 0; a < K; a++) e.acc[a] += aw * this.subStAcc[o * K + a];
+        for (let a = 0; a < K; a++) e.acc[a] += aw * subStAcc[o * K + a];
       }
       for (const e of sets.values()) {
-        for (let a = 0; a < K; a++) { st.push(this.subSt[e.o * K + a]); acc.push(e.acc[a] / Math.max(1e-12, e.w + e.wd)); }
+        for (let a = 0; a < K; a++) { st.push(subSt[e.o * K + a]); acc.push(e.acc[a] / Math.max(1e-12, e.w + e.wd)); }
         w.push(total > 0 ? e.w / total : 0);
         wd.push(totalD > 0 ? e.wd / totalD : 0);
       }

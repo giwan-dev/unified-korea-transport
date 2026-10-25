@@ -509,3 +509,7 @@ details > summary.flash { animation: flash 1.4s ease-out; }
 
 .report-goal { margin: 4px 0 8px; padding: 6px 10px; border-radius: 6px; background: var(--chip); font-size: 13px; }
 .report-goal.good { background: #e3f4ea; color: #1b6b3d; }
+
+/* 되돌릴 수 없는 동작 (사업 취소 등) */
+button.danger { color: #b3261e; border-color: #e3b4b0; }
+button.danger:hover:not(:disabled) { background: #fdecea; }

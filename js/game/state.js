@@ -7,11 +7,12 @@ import { serviceLinks } from './services.js';
 import { initRail, operatorOf, OPERATORS, OP_FACTORS, MERGE_MIN_INTEGRATION, EQUITY_STEP } from './operators.js';
 import { MEGA, applyMega, TSR_FREIGHT } from './mega.js';
 import { dueum } from './local.js';
+import { saveAuto, loadAuto, clearAuto } from './savestore.js';
 
-const SAVE_KEY = 'ukt-save-v1';
 export const START_YEAR = 2026;
 export const CONGESTION_VC = 1.0;
 export const CONGESTION_YEARS = 1;
+export const REOPEN_SPEED = 70;   // 여객 재개통 때 손보는 선로 속도 (km/h)
 
 export function newGame(difficulty = 'normal') {
   const d = DIFFICULTY[difficulty];
@@ -45,20 +46,19 @@ export function newGame(difficulty = 'normal') {
   };
 }
 
+/** 자동 저장: 상태를 바로 문자열로 굳히고 IndexedDB에는 뒤에서 쓴다 (새로 고치기 전에는 flushSave를 기다린다) */
 export function save(state) {
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); return true; } catch { return false; }
+  try { saveAuto(JSON.stringify(state)); return true; } catch { return false; }
 }
 
-export function load() {
+export async function load() {
   try {
-    const s = localStorage.getItem(SAVE_KEY);
+    const s = await loadAuto();
     return s ? JSON.parse(s) : null;
   } catch { return null; }
 }
 
-export function clearSave() {
-  try { localStorage.removeItem(SAVE_KEY); } catch { /* 저장소 없음 */ }
-}
+export function clearSave() { return clearAuto(); }
 
 // 도형(geom)을 뺀 기본 링크: 한 번만 만들어 둔다. 해마다·화면마다 3만 개를 펼친 뒤 delete로 지우면 느리고,
 // delete한 객체는 느린 사전 모드가 되어 워커로 보낼 때도 느리다
@@ -103,7 +103,15 @@ export function effectiveNetwork(base, state) {
   links.push(...serviceLinks(state, links));
   const serviceStops = (state.services || []).filter((s) => s.built).map((s) => ({ stops: s.stops, trains: s.trains }));
   const closed = new Set(state.closedStations || []);
-  return { nodes, links, physCount, serviceStops, stations: [...new Set(stations)].filter((n) => !closed.has(n)), airports, airRoutes, airBanned: state.air?.banned || [] };
+  // 일반철도역–도시철도역 환승 연결 (지은 것만)
+  const railMetro = (state.transfers || []).filter((t) => t.built).map((t) => [t.rail, t.metro]);
+  // 새로 놓은 도시철도가 일반철도역에 바로 닿으면 그 역은 저절로 환승역이 된다 (같은 노드)
+  const railSt = new Set(base.stations.map((s) => s[1]));
+  for (const nl of state.newLinks) {
+    if (!nl.built || nl.replaced || nl.mode !== 2) continue;
+    for (const n of [nl.a, nl.b]) if (railSt.has(n) && !railMetro.some(([r, m]) => r === n && m === n)) railMetro.push([n, n]);
+  }
+  return { nodes, links, physCount, serviceStops, railMetro, stations: [...new Set(stations)].filter((n) => !closed.has(n)), airports, airRoutes, airBanned: state.air?.banned || [] };
 }
 
 export function linkAt(base, state, id) {
@@ -214,6 +222,40 @@ export function setProjectPace(state, id, pace) {
   p.pace = pace;
   p.annual = Math.max(1, Math.round(p.baseAnnual * pace));
   p.doneYear = state.year + Math.max(1, Math.ceil(newRemaining / p.annual));
+}
+
+/** 취소할 수 없는 사업: 민자(협약 해지 보상 문제), 차량 구입(이미 편성에 넣었다), 운행 계통·항공 노선 준비(1년짜리) */
+export function cancelBlocked(p) {
+  if (p.status !== 'building') return '진행 중인 사업이 아닙니다.';
+  if (p.fund === 'ppp') return '민자 사업은 협약을 맺어 취소할 수 없습니다.';
+  if (['vehicles', 'service', 'airRoute'].includes(p.kind)) return '이 사업은 취소할 수 없습니다.';
+  return null;
+}
+
+/**
+ * 진행 중인 사업 취소: 이미 낸 돈은 돌려받지 못하고, 앞으로 낼 돈만 아낀다.
+ * 새로 깔던 구간은 폐선 처리(replaced)해서 지도와 계산에서 뺀다 (링크 번호는 그대로 둔다).
+ */
+export function cancelProject(base, state, id) {
+  const p = state.projects.find((x) => x.id === id);
+  const why = p ? cancelBlocked(p) : '사업을 찾지 못했습니다.';
+  if (why) return { ok: false, reason: why };
+  p.status = 'cancelled';
+  p.cancelYear = state.year;
+  if (p.kind !== 'upgrade' && p.kind !== 'osm') {
+    for (const lid of p.links || []) {
+      const nl = lid >= base.links.length ? state.newLinks[lid - base.links.length] : null;
+      if (nl && !nl.built) { nl.replaced = true; nl.cancelled = true; }
+    }
+  }
+  if (p.kind === 'airport') state.newAirports = (state.newAirports || []).filter((a) => a.id !== p.airport || a.built);
+  for (const k of ['devels', 'housing', 'sez', 'transfers']) if (state[k]) state[k] = state[k].filter((x) => x.id !== p.id);
+  if (state.restAreas) state.restAreas = state.restAreas.filter((r) => r.built || !(p.links || []).includes(r.links[0]));
+  // 시민들은 짓다 만 사업을 반기지 않는다: 큰 사업일수록 지지율이 조금 내린다
+  const hit = p.cost >= 50000 ? 2 : p.cost >= 10000 ? 1 : 0;
+  state.approval = Math.max(0, state.approval - hit);
+  state.log.unshift(`${state.year}년 사업 취소: ${p.label} (투입한 ${formatWon(p.paid)}은 돌려받지 못합니다, 남은 ${formatWon(Math.max(0, p.cost - p.paid))} 절감${hit ? `, 지지율 −${hit}` : ''})`);
+  return { ok: true, hit };
 }
 
 // ------------------------------------------------------------ 철도 운영사 (코레일·KPRail)
@@ -790,6 +832,11 @@ function completeProject(base, state, p) {
     if (s) s.built = true;
     return;
   }
+  if (p.kind === 'transfer') {
+    const t = (state.transfers || []).find((x) => x.id === p.id);
+    if (t) t.built = true;
+    return;
+  }
   if (p.kind === 'vehicles' || p.kind === 'devel' || p.kind === 'housing' || p.kind === 'sez') return;   // 역세권 개발·택지지구는 해 넘길 때 main이 정산한다 (settleDevels·settleHousing)
   if (p.kind === 'mega') { applyMega(base, state, p.mega); return; }
   if (p.kind === 'osm') { for (const i of p.links) state.osm.opened[i] = true; return; }   // 계통 차량 추가 구입 (편성 수는 고칠 때 이미 바뀌었다)
@@ -813,6 +860,15 @@ function completeProject(base, state, p) {
     state.happyBonus ||= {};
     state.placeNames[p.key] = p.newName;
     state.happyBonus[p.zone] = (state.happyBonus[p.zone] || 0) + p.bonus;
+    return;
+  }
+  if (p.kind === 'reopen') {
+    // 여객 재개통: 낡은 선로는 시속 70km까지 손보고, 고른 자리에 역을 연다
+    for (const id of p.relinks || []) {
+      const l = linkAt(base, state, id);
+      if (l.speed < REOPEN_SPEED) state.overrides[id] = { ...(state.overrides[id] || {}), speed: REOPEN_SPEED };
+    }
+    for (const s of p.stations) if (!state.newStations.includes(s)) state.newStations.push(s);
     return;
   }
   if (p.kind === 'upgrade') {

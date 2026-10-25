@@ -77,6 +77,8 @@ export const P = {
   metroTrainsPerDay: 500,     // 양방향
   metroPaxPerTrain: 1000,
   transferMin: 6,             // 도시철도역 ↔ 버스 환승
+  metroRailTransferMin: 12,   // 환승 연결을 지은 도시철도역 ↔ 일반철도역 갈아타기 (도시철도 기다림 + 걷기)
+  metroFeedMaxMin: 45,        // 도시철도로 연결역까지 가는 길은 이보다 길면 후보로 치지 않는다
   transitBaseFare: 1500,      // 원
   transitFarePerKm: 100,      // 10km 초과분
   transitASC: 10,

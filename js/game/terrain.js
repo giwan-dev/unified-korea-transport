@@ -32,7 +32,7 @@ const RULES = {
 };
 export function terrainRule(type) {
   // 도시철도·대심도 광역급행철도·해저터널은 땅 밑이라 지형을 보지 않는다
-  return { hsr: RULES.hsr, rail: RULES.conv, motorway: RULES.motorway, trunk: RULES.road }[type] || null;
+  return { hsr: RULES.hsr, rail: RULES.conv, rail1: RULES.conv, motorway: RULES.motorway, trunk: RULES.road }[type] || null;
 }
 
 /** 공사비 배율: 평지만 지나면 평균 단가보다 싸고(0.85), 터널·깎기·교량·바다 위 구간 비율만큼 비싸진다 */
