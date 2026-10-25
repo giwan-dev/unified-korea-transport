@@ -28,7 +28,7 @@ import { appraise, appraisalHTML, regionOf as appraisalRegion, opexFor } from '.
 import { extendWorld, urbanLanes } from './game/world.js';
 import { autoLineName, cityStem, makeForeignTest } from './game/lines.js';
 import { saveSim, loadSim, clearSim } from './game/simstore.js';
-import { SERVICE_KINDS, TRAIN_TYPES, OPERATING, lineStations, planService, railPath, tripsPerDay, setCost, canRun, defaultTrainType, serviceBuyCost, startService, updateService, removeService, seedServices, openWaitingServices } from './game/services.js';
+import { SERVICE_KINDS, TRAIN_TYPES, OPERATING, EXISTING_SERVICES, lineStations, planService, railPath, tripsPerDay, setCost, canRun, defaultTrainType, serviceBuyCost, startService, updateService, removeService, seedServices, openWaitingServices, refreshExistingServices } from './game/services.js';
 import { showLineDiagram, stopLineDiagram } from './ui/linediagram.js';
 import { trainBrand, autoBrand } from './game/trainnames.js';
 import { seedInterKoreaAir, airlinesHTML } from './game/airlines.js';
@@ -173,6 +173,8 @@ async function init() {
   seedInterKoreaAir(state);
   initRail(state);
   seedServices(state, base);
+  // 예전 저장의 1호선·4호선 기본 계통을 직통 계통으로 (선로 자료가 바뀌었다)
+  if (refreshExistingServices(state, effectiveNetwork(base, state), base.stations).length) state.log.unshift(`${state.year}년: 1호선 계통을 서울역–청량리 직통(신창–소요산, 인천–광운대)으로 바꿨습니다`);
   initLocal(state);
   // 예전 저장: 승격한 도시를 '함흥시' 이름 그대로 광역 단체로 썼다 (직함이 '함흥시도지사'로 나왔다) → 함흥광역시로 옮긴다
   for (const c of state.local.independent || []) {
@@ -1067,6 +1069,10 @@ function bindMap() {
     const pt = map.queryRenderedFeatures(box, { layers: ['points'] })[0];
     if (pt) return select({ type: 'node', id: pt.properties.node });
     const ln = map.queryRenderedFeatures(box, { layers: ['rails', 'metro', 'roads', 'roads-minor', 'ferries', 'ext-links', 'links-building'] })[0];
+    // 지도에 그린 운행 계통을 누르면 그 계통 고치기 (밑 선로는 편집 창의 '이 자리 선로 보기'로)
+    const sv = showServices && !e.originalEvent?.shiftKey && map.getLayer('services-line') ? map.queryRenderedFeatures([[e.point.x - 8, e.point.y - 8], [e.point.x + 8, e.point.y + 8]], { layers: ['services-line'] })[0] : null;   // 계통 선은 옆으로 비켜 그려 칸을 넓게
+    const svc = sv && state.services.find((x) => x.id === sv.properties.id);
+    if (svc) { openServiceEditor(svc.line, svc.cls, svc.id); if (svcEdit && ln) svcEdit.underLink = ln.properties.id; renderSelection(); return; }
     const cl = !ln && map.getLayer('closed-line') ? map.queryRenderedFeatures(box, { layers: ['closed-line'] })[0] : null;
     if (cl) return select({ type: 'closed', id: cl.properties.id });
     if (ln && e.originalEvent?.shiftKey) return toggleMulti(ln.properties.id);
@@ -3097,6 +3103,7 @@ function servicePanel() {
     <div class="name-row"><span class="kind">노선 색</span><input type="color" id="svc-color" value="${esc(e.color)}">
       <span class="m">지도에 이 색으로 그립니다</span></div>
     <p class="hint"><b>지도에서 역을 누르면</b> 정차역을 넣고 뺍니다. 계통 밖의 역을 누르면 그 역까지 경로를 늘려 잇습니다.</p>
+    ${e.underLink != null ? '<div class="actions"><button class="small" id="svc-under">이 자리 선로(구간) 보기</button></div>' : ''}
     <div class="name-row"><span class="kind">등급</span><select id="svc-kind">${Object.entries(SERVICE_KINDS)
       .map(([k, v]) => `<option value="${k}" ${k === e.kind ? 'selected' : ''}>${v.label}</option>`).join('')}</select>
       <span class="m">정차 방식·요금</span></div>
@@ -3145,6 +3152,7 @@ function bindService(el) {
     save(state); refreshLinks(); renderAll();
     toast('비전철 구간 전철화를 시작했습니다. 완공되면 이 계통에 전동차를 고를 수 있습니다.');
   });
+  el.querySelector('#svc-under')?.addEventListener('click', () => { const id = e.underLink; select({ type: 'link', id, section: sectionOf(id) }); });
   el.querySelector('#svc-color').oninput = (ev) => { e.color = ev.target.value; drawServiceEdit(); };
   drawServiceEdit();
   el.querySelector('#svc-kind').onchange = (ev) => {
@@ -5762,7 +5770,10 @@ const SVC_COLORS = ['#e4572e', '#2e86de', '#20a35a', '#9b59b6', '#f0a202', '#d63
 let showServices = true;
 try { showServices = localStorage.getItem('ukt-svc-lines') !== '0'; } catch { /* 기본은 켬 */ }
 
-function svcColor(s, k) { return s.color || SVC_COLORS[Math.max(0, k) % SVC_COLORS.length]; }
+function svcColor(s, k) {
+  // 예전 저장의 기본 계통은 색이 없다: 실제 노선도 색으로
+  return s.color || (s.existing && EXISTING_SERVICES.find((x) => x.name === s.name)?.color) || SVC_COLORS[Math.max(0, k) % SVC_COLORS.length];
+}
 
 /** 새 계통 색: 아직 안 쓴 색부터 */
 function nextSvcColor() {

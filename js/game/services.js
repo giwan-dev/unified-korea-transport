@@ -281,30 +281,31 @@ export function serviceLinks(state, links) {
  * 게임 시작 때 이미 다니는 광역 계통 (실제로 운행 중인데 선로 이름만으로는 드러나지 않는 것).
  * 대경선(대구권 광역철도): 2024년 12월 개통, 경부선 선로를 쓰는 구미–경산 광역 전철.
  */
+/** 노선 색은 실제 노선도 색 (지도에 계통 색으로 그린다) */
 export const EXISTING_SERVICES = [
-  { name: '대경선', kind: 'commuter', type: 'commuter', sets: 6, lines: ['경부선'],
+  { name: '대경선', color: '#0b2a6b', kind: 'commuter', type: 'commuter', sets: 6, lines: ['경부선'],
     stops: ['구미', '사곡', '북삼', '왜관', '서대구', '대구', '동대구', '경산'] },
   // 코레일 선로를 함께 쓰는 수도권·지방 광역 전철: 두 끝 역 사이 모든 역에 선다 (from·to)
   // 1호선: 경부·경인선 전철이 서울역–청량리 지하 구간(서울 지하철 1호선)을 지나 경원선으로 직통한다
-  { name: '수도권 전철 1호선 (천안–소요산)', kind: 'commuter', type: 'commuter', sets: 48, lines: ['경부선', '서울 지하철 1호선', '경원선'], from: '천안', to: '소요산' },
-  { name: '수도권 전철 1호선 (인천–광운대)', kind: 'commuter', type: 'commuter', sets: 26, lines: ['경인선', '경부선', '서울 지하철 1호선', '경원선'], from: '인천', to: '광운대' },
-  { name: '경의·중앙선', kind: 'commuter', type: 'commuter', sets: 22, lines: ['경의선', '용산선', '경원선', '중앙선'], from: '문산', to: '용문' },
-  { name: '수인·분당선', kind: 'commuter', type: 'commuter', sets: 26, lines: ['분당선', '수인선'], from: '왕십리', to: '인천' },
-  { name: '경춘선', kind: 'commuter', type: 'commuter', sets: 12, lines: ['경춘선'], from: '상봉', to: '춘천' },
+  { name: '수도권 전철 1호선 (신창–소요산)', color: '#0052a4', kind: 'commuter', type: 'commuter', sets: 54, lines: ['장항선', '경부선', '서울 지하철 1호선', '경원선'], from: '신창', to: '소요산' },
+  { name: '수도권 전철 1호선 (인천–광운대)', color: '#0052a4', kind: 'commuter', type: 'commuter', sets: 26, lines: ['경인선', '경부선', '서울 지하철 1호선', '경원선'], from: '인천', to: '광운대' },
+  { name: '경의·중앙선', color: '#77c4a3', kind: 'commuter', type: 'commuter', sets: 22, lines: ['경의선', '용산선', '경원선', '중앙선'], from: '문산', to: '용문' },
+  { name: '수인·분당선', color: '#f5a200', kind: 'commuter', type: 'commuter', sets: 26, lines: ['분당선', '수인선'], from: '왕십리', to: '인천' },
+  { name: '경춘선', color: '#0c8e72', kind: 'commuter', type: 'commuter', sets: 12, lines: ['경춘선'], from: '상봉', to: '춘천' },
   // 과천선·안산선(4호선)과 일산선(3호선)은 도시철도 열차가 직통하므로 도시철도 노선으로 바꿨다 (pipeline/through_metro.py)
-  { name: '경강선', kind: 'commuter', type: 'commuter', sets: 8, lines: ['경강선'], from: '이매', to: '여주' },
-  { name: '동해선 광역전철', kind: 'commuter', type: 'commuter', sets: 10, lines: ['동해선'], from: '부전', to: '태화강' },
-  { name: '서해선 광역 (대곡–원시)', kind: 'commuter', type: 'commuter', sets: 10, lines: ['서해선'], from: '대곡', to: '원시' },
-  { name: '서해선 일반 (서화성–홍성)', kind: 'local', type: 'intercity', sets: 6, lines: ['서해선'], from: '서화성', to: '홍성' },
-  { name: '중부내륙선 KTX-이음 (판교–문경)', kind: 'express', type: 'semi', sets: 6, lines: ['경강선', '중부내륙선'], from: '판교', to: '문경' },
+  { name: '경강선', color: '#003da5', kind: 'commuter', type: 'commuter', sets: 8, lines: ['경강선'], from: '이매', to: '여주' },
+  { name: '동해선 광역전철', color: '#0054a6', kind: 'commuter', type: 'commuter', sets: 10, lines: ['동해선'], from: '부전', to: '태화강' },
+  { name: '서해선 광역 (대곡–원시)', color: '#8fc31f', kind: 'commuter', type: 'commuter', sets: 10, lines: ['서해선'], from: '대곡', to: '원시' },
+  { name: '서해선 일반 (서화성–홍성)', color: '#8fc31f', kind: 'local', type: 'intercity', sets: 6, lines: ['서해선'], from: '서화성', to: '홍성' },
+  { name: '중부내륙선 KTX-이음 (판교–문경)', color: '#3b5bab', kind: 'express', type: 'semi', sets: 6, lines: ['경강선', '중부내륙선'], from: '판교', to: '문경' },
   // GTX-A: 수서–동탄은 수서평택고속선 선로를 함께 쓴다 (2024.3 개통). 운정–서울은 2024.12 개통
-  { name: 'GTX-A (수서–동탄)', kind: 'express', type: 'intercity', sets: 6, lines: ['수도권광역급행철도에이선', '수서평택고속선'], stops: ['수서', '성남', '구성', '동탄'] },
-  { name: 'GTX-A (운정–서울)', kind: 'express', type: 'intercity', sets: 8, lines: ['수도권광역급행철도에이선'], stops: ['운정', '킨텍스', '대곡', '연신내', '서울'] },
+  { name: 'GTX-A (수서–동탄)', color: '#9a6292', kind: 'express', type: 'intercity', sets: 6, lines: ['수도권광역급행철도에이선', '수서평택고속선'], stops: ['수서', '성남', '구성', '동탄'] },
+  { name: 'GTX-A (운정–서울)', color: '#9a6292', kind: 'express', type: 'intercity', sets: 8, lines: ['수도권광역급행철도에이선'], stops: ['운정', '킨텍스', '대곡', '연신내', '서울'] },
   // 선로가 열리면(원시–서화성 연결, OSM 개통 예정 2030) 그해부터 다니는 계통
-  { name: '서해선 광역 직통 (대곡–서화성)', kind: 'commuter', type: 'commuter', sets: 12, lines: ['서해선'], from: '대곡', to: '서화성', wait: true },
-  { name: '서해선 직통 (대곡–홍성)', kind: 'express', type: 'intercity', sets: 6, lines: ['서해선'], from: '대곡', to: '홍성', wait: true },
+  { name: '서해선 광역 직통 (대곡–서화성)', color: '#8fc31f', kind: 'commuter', type: 'commuter', sets: 12, lines: ['서해선'], from: '대곡', to: '서화성', wait: true },
+  { name: '서해선 직통 (대곡–홍성)', color: '#8fc31f', kind: 'express', type: 'intercity', sets: 6, lines: ['서해선'], from: '대곡', to: '홍성', wait: true },
   // 서울–삼성–수서 구간이 열리면 GTX-A 전 구간 직통
-  { name: 'GTX-A (운정–동탄)', kind: 'express', type: 'intercity', sets: 16, lines: ['수도권광역급행철도에이선', '수서평택고속선'], stops: ['운정', '킨텍스', '대곡', '연신내', '서울', '삼성', '수서', '성남', '구성', '동탄'], wait: true },
+  { name: 'GTX-A (운정–동탄)', color: '#9a6292', kind: 'express', type: 'intercity', sets: 16, lines: ['수도권광역급행철도에이선', '수서평택고속선'], stops: ['운정', '킨텍스', '대곡', '연신내', '서울', '삼성', '수서', '성남', '구성', '동탄'], wait: true },
 ];
 
 /** 계통 하나를 지금 선로로 짠다. strict면 정해진 노선 선로만으로 이어질 때만 (다른 노선으로 돌아가면 null) */
@@ -333,7 +334,7 @@ function existingService(s, links, stations, stationSet, strict) {
   if (!plan) return null;
   // 기다리는 계통은 제 노선 선로가 다 열려야 다닌다 (다른 노선으로 돌아가는 길로 먼저 다니지 않게)
   if (strict && plan.segs.some((sg) => sg.via.some((i) => links[i].name && !s.lines.includes(links[i].name) && !links[i].name.endsWith(' 환승')))) return null;
-  return { name: s.name, kind: s.kind, line: s.lines[0], lines: s.lines, cls: 'conv', stops, type: s.type, sets: s.sets,
+  return { name: s.name, color: s.color, kind: s.kind, line: s.lines[0], lines: s.lines, cls: 'conv', stops, type: s.type, sets: s.sets,
     runMin: plan.runMin, km: plan.km, segs: plan.segs, id: `svc-${s.name}`, trains: tripsPerDay(s.sets, plan.runMin), built: true, existing: true };
 }
 
@@ -349,6 +350,29 @@ export function seedServices(state, base, operator = 'korail') {
     if (svc) (state.services ||= []).push({ ...svc, fund: operator });
     else if (s.wait) (state.waitingServices ||= []).push(s.name);
   }
+}
+
+/** 예전 기본 계통 → 새 기본 계통 (1호선 서울역–청량리 직통, 4호선 도시철도화) */
+const REPLACED_SERVICES = {
+  '수도권 전철 1호선 (경부)': '수도권 전철 1호선 (신창–소요산)', '수도권 전철 1호선 (경원)': '수도권 전철 1호선 (신창–소요산)',
+  '수도권 전철 1호선 (천안–소요산)': '수도권 전철 1호선 (신창–소요산)',
+  '수도권 전철 1호선 (경인)': '수도권 전철 1호선 (인천–광운대)', '수도권 전철 4호선 (과천·안산)': null,
+};
+
+/** 예전 저장의 기본 계통을 지금 기본 계통으로 바꾼다 (플레이어가 짠 계통은 그대로). 바꾼 이름 목록을 돌려준다 */
+export function refreshExistingServices(state, net, stations) {
+  const old = (state.services || []).filter((s) => s.existing && s.name in REPLACED_SERVICES);
+  if (!old.length) return [];
+  const stationSet = new Set(stations.map((s) => s[1]));
+  const want = new Set(old.map((s) => REPLACED_SERVICES[s.name]).filter(Boolean));
+  state.services = state.services.filter((s) => !old.includes(s));
+  for (const name of want) {
+    if (state.services.some((s) => s.name === name)) continue;
+    const def = EXISTING_SERVICES.find((x) => x.name === name);
+    const svc = def && existingService(def, net.links, stations, stationSet, false);
+    if (svc) state.services.push({ ...svc, fund: old[0].fund || 'korail' });
+  }
+  return old.map((s) => s.name);
 }
 
 /** 기다리는 계통 가운데 선로가 열린 것을 운행 시작한다. 시작한 계통 이름 목록을 돌려준다 */
