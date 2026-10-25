@@ -8,6 +8,13 @@ export const APPRAISAL = {
   rate: 0.045,            // 사회적 할인율
   years: 30,              // 운영 기간
   daysPerYear: 365,
+  // 모형이 보지 않는 몫을 실제 예타 규모로 되돌리는 계수 (강북횡단선·서울–양평 고속도로·GTX-C 등의 실제 예타 B/C에 맞춤)
+  demandScale: 2.0,       // 모형 통행은 시군구 사이 통행(하루 약 3,800만)뿐이다: 같은 시군구 안·짧은 통행까지 치면 실제는 약 2배
+  growth: 0.01,           // 개통 뒤 해마다 늘어나는 교통량 (편익이 그만큼 커진다)
+  freightTime: 0.4,       // 도로 사업: 화물차 시간가치 몫 (여객 시간 편익의 40%를 더한다)
+  // 사업 종류별 보정: 도시철도 편익은 대부분 같은 구 안의 짧은 통행에서 나오는데 모형은 그 통행을 보지 않는다(×2).
+  // 광역급행철도는 모형이 높은 운임(일반 철도의 약 2배)과 대심도 역까지 내려가는 시간(약 5분)을 보지 않아 수요가 부푼다(×0.2)
+  typeFactor: { metro: 2.0, gtx: 0.2 },
   vocPerVehKm: 160,       // 차량운행비 (원/대·km, 화물차 포함 평균)
   accidentPerVehKm: 60,   // 교통사고 비용 (원/대·km)
   // 연 운영·유지관리비 (억원/km·년, 또는 사업비 대비 비율)
@@ -26,6 +33,21 @@ export const ROAD_COST = {
 };
 
 /**
+ * 혼잡 완화로 줄어드는 하루 차량운행비 (원): 사업 전 교통량을 그대로 두고 구간 속도만 바뀐 만큼 (사업 전 구간끼리만)
+ * @param {ArrayLike<number>} vol 사업 전 구간 교통량  @param {ArrayLike<number>} spB 사업 전 속도  @param {ArrayLike<number>} spA 사업 뒤 속도
+ */
+export function roadSpeedSaving(vol, spB, spA, links) {
+  let voc = 0;
+  const n = Math.min(vol.length, spB.length, spA.length, links.length);
+  for (let k = 0; k < n; k++) {
+    const l = links[k];
+    if (!l || l.mode !== 0 || !(vol[k] > 0) || !(spB[k] > 0) || !(spA[k] > 0)) continue;
+    voc += vol[k] * l.len * (ROAD_COST.voc(spB[k]) - ROAD_COST.voc(spA[k]));
+  }
+  return { voc };
+}
+
+/**
  * 도로 구간들의 하루 차량운행비·사고 비용 (원): 구간 교통량 × 길이 × 그 속도의 운행비·그 등급의 사고 비용
  * @param {ArrayLike<number>} vol 구간 교통량 (대/일)  @param {ArrayLike<number>} speed 구간 속도 (km/h)  @param {object[]} links 망 구간
  */
@@ -42,10 +64,10 @@ export function roadUserCost(vol, speed, links) {
   return { voc, acc };
 }
 
-/** 현재가치 계수: 착공 후 years년 공사, 그 뒤 운영 기간 동안 해마다 1 */
-function annuityAfter(start, n, r) {
+/** 현재가치 계수: 착공 후 years년 공사, 그 뒤 운영 기간 동안 해마다 1 (g: 해마다 늘어나는 비율) */
+function annuityAfter(start, n, r, g = 0) {
   let s = 0;
-  for (let t = start; t < start + n; t++) s += 1 / (1 + r) ** t;
+  for (let t = start; t < start + n; t++) s += (1 + g) ** (t - start) / (1 + r) ** t;
   return s;
 }
 
@@ -61,13 +83,16 @@ function annuityAfter(start, n, r) {
 export function appraise(o) {
   const A = APPRAISAL, r = A.rate, d = A.daysPerYear;
   // 연 편익 (억원): 원 → 억원
-  const time = (o.benefit.timeMin * P.vot * d) / 1e8;
+  // 여객 시간 편익 × 실제 통행 규모, 도로 사업은 화물차 시간 편익을 더한다
+  const road = o.policy?.mode === 0;
+  const time = (o.benefit.timeMin * P.vot * d * A.demandScale * (road ? 1 + A.freightTime : 1)) / 1e8;
   // 구간별(속도·등급별) 비용 차이가 있으면 그것으로, 없으면(옛 미리보기) 주행거리 차이 × 평균 단가로
-  const voc = o.benefit.vocWon != null ? (o.benefit.vocWon * d) / 1e8 : (-o.benefit.dVkt * A.vocPerVehKm * d) / 1e8;
-  const acc = o.benefit.accWon != null ? (o.benefit.accWon * d) / 1e8 : (-o.benefit.dVkt * A.accidentPerVehKm * d) / 1e8;
-  const annualB = time + voc + acc;
+  const voc = A.demandScale * (o.benefit.vocWon != null ? (o.benefit.vocWon * d) / 1e8 : (-o.benefit.dVkt * A.vocPerVehKm * d) / 1e8);
+  const acc = A.demandScale * (o.benefit.accWon != null ? (o.benefit.accWon * d) / 1e8 : (-o.benefit.dVkt * A.accidentPerVehKm * d) / 1e8);
+  const tf = A.typeFactor[o.type] ?? 1;
+  const annualB = (time + voc + acc) * tf;
   const fOp = annuityAfter(o.years, A.years, r);
-  const pvB = annualB * fOp;
+  const pvB = annualB * annuityAfter(o.years, A.years, r, A.growth);   // 편익은 교통량과 함께 해마다 는다
   const pvCap = (o.cost / o.years) * annuityAfter(0, o.years, r);
   const pvOp = o.opex * fOp;
   const pvC = pvCap + pvOp;
@@ -89,7 +114,7 @@ export function appraise(o) {
   const balance = clamp(0.5 + (1 - rel) * 0.5, 0.2, 0.9);
   const w = o.region.capital ? A.weights.capital : A.weights.region;
   const ahp = w.econ * econ + w.policy * policy + w.balance * balance;
-  return { time, voc, acc, annualB, pvB, pvCap, pvOp, pvC, bc, noBenefit: pvB <= 0, npv: pvB - pvC, econ, policy, items, balance, w, ahp, ok: ahp >= 0.5, rel };
+  return { time: time * tf, voc: voc * tf, acc: acc * tf, annualB, pvB, pvCap, pvOp, pvC, bc, noBenefit: pvB <= 0, npv: pvB - pvC, econ, policy, items, balance, w, ahp, ok: ahp >= 0.5, rel };
 }
 
 /** 사업이 놓이는 지역: 존들의 평균 소득과 수도권 여부 */
@@ -134,5 +159,5 @@ export function appraisalHTML(a, fmt) {
       ${row(`지역균형발전 <span class="m">(소득 남측 평균의 ${Math.round(a.rel * 100)}%)</span>`, a.w.balance ? `${n2(a.w.balance)} · ${n2(a.balance)}` : '<span class="m">수도권 사업 (보지 않음)</span>')}
       ${row('<b>AHP 종합</b>', `<b class="${a.ok ? 'pos' : 'neg'}">${n2(a.ahp)} · ${a.ok ? '시행 타당' : '시행 부적절'}</b>`)}
     </table>
-    <p class="hint">할인율 ${(APPRAISAL.rate * 100).toFixed(1)}% · 운영 ${APPRAISAL.years}년 · 하루 편익 × ${APPRAISAL.daysPerYear}일. 편익은 지금 교통량을 그대로 두고 지금 망(대조)과 다 지은 망(처리)으로 수단·경로를 다시 구한 차이이며(바뀐 구간만 교통량을 다시 정함), 이용자 편익은 반분법(rule of half)으로 셉니다. 차량운행비·사고 편익은 기존 통행 기준이며, 사업으로 새로 생긴 통행이 달린 거리는 비용으로 치지 않습니다. AHP 0.5 이상이면 시행이 타당하다고 봅니다.</p>`;
+    <p class="hint">할인율 ${(APPRAISAL.rate * 100).toFixed(1)}% · 운영 ${APPRAISAL.years}년 · 하루 편익 × ${APPRAISAL.daysPerYear}일. 편익은 지금 교통량을 그대로 두고 지금 망(대조)과 다 지은 망(처리)으로 수단·경로를 다시 구한 차이이며(바뀐 구간만 교통량을 다시 정함), 이용자 편익은 반분법(rule of half)으로 셉니다. 차량운행비·사고 편익은 기존 통행 기준이며, 사업으로 새로 생긴 통행이 달린 거리는 비용으로 치지 않습니다. 모형은 시군구 사이 통행만 다루므로 편익에 실제 통행 규모(×${APPRAISAL.demandScale})를 곱하고, 개통 뒤 교통량이 해마다 ${(APPRAISAL.growth * 100).toFixed(0)}% 는다고 보며, 도로 사업은 화물차 시간 편익(여객의 ${Math.round(APPRAISAL.freightTime * 100)}%)을 더합니다. 도시철도는 모형이 보지 않는 구 안 짧은 통행 몫(×${APPRAISAL.typeFactor.metro}), 광역급행철도는 높은 운임·대심도 접근 시간 몫(×${APPRAISAL.typeFactor.gtx})을 반영합니다. AHP 0.5 이상이면 시행이 타당하다고 봅니다.</p>`;
 }

@@ -81,7 +81,7 @@ export const NEW_BUILDS = {
   motorway: { mode: 0, label: '고속도로 신설 (4차로)', perKm: 450, years: 5, attrs: { cls: 'motorway', lanes: 4, speed: 100, paved: 1 } },
   trunk: { mode: 0, label: '국도 신설 (4차로)', perKm: 180, years: 3, attrs: { cls: 'trunk', lanes: 4, speed: 70, paved: 1 } },
   hsr: { mode: 1, label: '고속철도 신설', perKm: 850, years: 6, attrs: { cls: 'hsr', tracks: 2, speed: 250, power: 'AC' } },
-  gtx: { mode: 1, label: '광역급행철도 신설 (대심도)', perKm: 1100, years: 6, attrs: { cls: 'conv', tracks: 2, speed: 180, power: 'AC' } },
+  gtx: { mode: 1, label: '광역급행철도 신설 (대심도)', perKm: 1100, years: 6, attrs: { cls: 'conv', tracks: 2, speed: 120, power: 'AC' } },   // 최고 180km/h, 역마다 서고 가감속하므로 평균(표정) 속도로
   rail: { mode: 1, label: '일반철도 신설 (복선전철)', perKm: 400, years: 5, attrs: { cls: 'conv', tracks: 2, speed: 150, power: 'AC' } },
   // 단선 비전철: 싸고 빨리 짓지만 열차를 많이 못 다니고 느리다. 나중에 구간을 눌러 복선화·전철화할 수 있다
   rail1: { mode: 1, label: '일반철도 신설 (단선 비전철)', perKm: 200, years: 4, attrs: { cls: 'conv', tracks: 1, speed: 120, power: 'none' } },

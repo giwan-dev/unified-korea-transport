@@ -4944,7 +4944,7 @@ function previewAppraisal(benefit, res, touched, extra, clone) {
   const kpN = links.filter((l) => l.kp).length;
   const border = links.some((l) => { const a = nodeAt(l.a), b = nodeAt(l.b); return a && b && isKP(a[1], a[0]) !== isKP(b[1], b[0]); }) || !!extra.border;
   const a = appraise({
-    benefit, cost, years, opex: extra.opex ?? opexFor(kind, { cls, km, cost }),
+    benefit, cost, years, type: extra.type ?? p.type, opex: extra.opex ?? opexFor(kind, { cls, km, cost }),
     policy: { plan: !!(extra.plan || p.plan), congB: res.congB, congA: res.congA, dRail: res.dRail, mode, border, kp: kpN * 2 > links.length, cost },
     region,
   });

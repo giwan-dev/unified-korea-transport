@@ -1,5 +1,5 @@
 // 시뮬레이션은 메인 스레드를 막지 않도록 워커에서 돈다.
-import { roadUserCost } from '../game/appraisal.js';
+import { roadSpeedSaving, ROAD_COST } from '../game/appraisal.js';
 import { Model } from './model.js';
 import { P } from './params.js';
 
@@ -221,7 +221,7 @@ async function handle(msg) {
         const ev = model.evalAux, n = r.vol.length;
         const vol = new Float32Array(n), vc = new Float32Array(n);
         for (let k = 0; k < n; k++) { vol[k] = ev[k] + (model.metroLocal?.[k] || 0); vc[k] = model.capacity[k] > 0 ? vol[k] / model.capacity[k] : 0; }
-        const out = { totals, vol, vc, speed: r.speed, svcVol: r.svcVol, odT: model.odT.slice(), odTime: model.odTime.slice(), airIds: model.airports.map((a) => a.id), airPax: Float64Array.from(model.airPax) };
+        const out = { totals, vol, volEq: r.vol, vc, speed: r.speed, svcVol: r.svcVol, odT: model.odT.slice(), odTime: model.odTime.slice(), airIds: model.airports.map((a) => a.id), airPax: Float64Array.from(model.airPax) };
         model.setNetwork(lastNet);
         model.importBaseline(saved.json, saved.bin);
         tick(`${label} 되돌림`, t0);
@@ -255,12 +255,17 @@ async function handle(msg) {
       const vB = before.totals.vkt || 0, vA = after.totals.vkt || 0, tB = before.totals.trips || 0, tA = after.totals.trips || 0;
       const induced = tA - tB;
       const dVkt = (vA - vB) - (tA > 0 ? (induced * vA) / tA : 0);
-      // 차량운행비·사고: 구간마다 속도·등급별 단가로 (막힌 일반도로 → 빠른 고속도로로 옮기면 조금 돌아도 줄어든다).
-      // 처리 쪽은 유발 통행 몫을 빼서 기존 통행 기준으로 본다
-      const cB = roadUserCost(before.vol, before.speed, lastNet.links), cA = roadUserCost(after.vol, after.speed, msg.net.links);
+      // 차량운행비·사고 (고정 수요, 예타식): ① 혼잡 완화 몫 = 사업 전 교통량 × 구간 속도가 바뀐 만큼의 운행비 차이,
+      // ② 수단 전환 몫 = 철도 등으로 옮겨 가 도로에서 빠진 차량의 주행거리 × 운행비·사고비.
+      // (교통량 차이로 재면 미리보기가 사업 주변만 다시 배정하는 탓에 새 도로 교통량만 더해져 운행비가 크게 늘어 보인다)
       const keep = tA > 0 ? 1 - induced / tA : 1;
-      const benefit = { timeMin, dVkt, dVktRaw: vA - vB, inducedTrips: induced, vocWon: cB.voc - cA.voc * keep, accWon: cB.acc - cA.acc * keep };
-      const strip = ({ odT, odTime, ...rest }) => rest;
+      const decong = roadSpeedSaving(before.volEq, before.speed, after.speed, lastNet.links);
+      const carsB = (before.totals.road || 0) / P.personsPerCar, carsA = (after.totals.road || 0) * keep / P.personsPerCar;
+      const tripKm = carsB > 0 ? vB / (carsB * (1 + P.freightPCUShare)) : 0;
+      const shiftVkm = (carsB - carsA) * tripKm;   // 도로에서 빠진 차량 주행거리 (대·km/일)
+      const benefit = { timeMin, dVkt, dVktRaw: vA - vB, inducedTrips: induced,
+        vocWon: decong.voc + shiftVkm * ROAD_COST.voc(50), accWon: shiftVkm * ROAD_COST.accident.trunk };
+      const strip = ({ odT, odTime, volEq, ...rest }) => rest;
       post('preview', { id: msg.id, before: strip(before), after: strip(after), benefit, years, timing: tm });
     } else if (msg.type === 'probe') {
       // 개발용: 모형 상태 요약 (미리보기 뒤 상태가 그대로 돌아오는지 본다)
