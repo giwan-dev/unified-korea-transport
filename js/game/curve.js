@@ -39,10 +39,13 @@ export function smoothSegments(pts, stepKm = 1) {
 export function tangentCurve(p1, p2, t1, t2, { lead1 = null, lead2 = null, p0 = null, p3 = null, n = 24 } = {}) {
   const a = lead1?.length ? lead1[lead1.length - 1] : p1, b = lead2?.length ? lead2[lead2.length - 1] : p2;
   const chord = Math.hypot(b[0] - a[0], b[1] - a[1]);
-  const S = Math.min(chord * 0.25, 2 / 111);
+  // 접선이 반대 끝 쪽과 어긋날수록 곧게 나가는 거리를 줄인다 (어긋난 채 멀리 곧게 나가면 크게 돌아 S자가 된다)
+  const along = (t, from, to) => { if (!t) return 1; const v = [to[0] - from[0], to[1] - from[1]], l = Math.hypot(...v) || 1; return Math.max(0, (t[0] * v[0] + t[1] * v[1]) / l); };
+  const S0 = Math.min(chord * 0.25, 2 / 111);
+  const S1 = S0 * along(t1, a, b) ** 2, S2 = S0 * along(t2, b, a) ** 2;
   const unit = (u, v) => { const d = Math.hypot(v[0] - u[0], v[1] - u[1]) || 1; return [(v[0] - u[0]) / d, (v[1] - u[1]) / d]; };
-  const q1 = t1 ? [a[0] + t1[0] * S, a[1] + t1[1] * S] : a;
-  const q2 = t2 ? [b[0] + t2[0] * S, b[1] + t2[1] * S] : b;
+  const q1 = t1 ? [a[0] + t1[0] * S1, a[1] + t1[1] * S1] : a;
+  const q2 = t2 ? [b[0] + t2[0] * S2, b[1] + t2[1] * S2] : b;
   const L = Math.hypot(q2[0] - q1[0], q2[1] - q1[1]) / 2.5;
   const d1 = t1 || unit(p0 || reflect(p2, p1), p2), d2 = t2 ? [-t2[0], -t2[1]] : unit(p1, p3 || reflect(p1, p2));
   const c1 = [q1[0] + d1[0] * L, q1[1] + d1[1] * L], c2 = [q2[0] - d2[0] * L, q2[1] - d2[1] * L];

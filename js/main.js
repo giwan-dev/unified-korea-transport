@@ -1621,9 +1621,13 @@ function terrainAlign() {
     if (!tan) return null;
     const d = kmBetween(p.lon, p.lat, other.lon, other.lat);
     if (d < 1.5) return null;
-    const L = Math.min(4, Math.max(0.5, d * 0.25)) / 111;
     const ck = Math.cos((p.lat * Math.PI) / 180);
     const e = tan[0] * ck, nn = tan[1], m = Math.hypot(e, nn) || 1;   // 경위도 방향 → 실제 거리 L(도)만큼
+    // 접선이 상대 끝 쪽과 어긋날수록 곧게 나가는 거리를 줄인다 (75° 넘게 어긋나면 두지 않는다: 크게 돌아 S자가 생긴다)
+    const ox = (other.lon - p.lon) * ck, oy = other.lat - p.lat, ol = Math.hypot(ox, oy) || 1;
+    const cos = (e * ox + nn * oy) / (m * ol);
+    if (cos < 0.26) return null;
+    const L = Math.min(4, Math.max(0.5, d * 0.25)) * cos * cos / 111;
     return { node: null, lon: p.lon + (e / m) * L / ck, lat: p.lat + (nn / m) * L, split: null, via: true };
   };
   const out = [];
