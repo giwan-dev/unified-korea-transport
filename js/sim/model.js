@@ -881,7 +881,7 @@ export class Model {
     return {
       integration, iters, offset, fresh, freshOffset: offsetOverride ?? offset,
       aux: new Float64Array(L.length),
-      stOD: new Float64Array(this.stationNode.length ** 2),
+      stOD: new Float32Array(this.stationNode.length ** 2),   // 역×역 통행 (32비트로 충분하다: 보조 워커마다 한 벌씩이라 메모리를 아낀다)
       airOD: new Float64Array(A * A), latentOD: new Float64Array(A * A),
       totals: null, D: null,
       odT: new Float32Array(this.Z * this.Z), odTime: new Float32Array(this.Z * this.Z),

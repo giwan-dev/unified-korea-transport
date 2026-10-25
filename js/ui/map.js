@@ -213,14 +213,25 @@ function enableRoads(map) {
   let index = null;
   const loaded = new Map();
   const update = async () => {
-    if (map.getZoom() < 8.5) return;
+    if (map.getZoom() < 8.5) {   // 멀리 축소하면 3차 도로는 안 보이므로 받아 둔 파일도 비운다
+      if (loaded.size) { loaded.clear(); map.getSource('osmroads')?.setData({ type: 'FeatureCollection', features: [] }); }
+      return;
+    }
     if (!index) index = await fetch('data/base/roads/index.json').then((r) => (r.ok ? r.json() : [])).catch(() => []);
     const b = map.getBounds();
     // 3차 도로 파일(minzoom 12)은 많이 확대했을 때만 받는다
     // 간선(c 0~3) 파일은 계산망과 겹치므로 받지 않고 3차 도로 파일(minzoom 있음)만 받는다
     const need = index.filter(({ bbox: [x0, y0, x1, y1], file, minzoom }) => minzoom && !loaded.has(file) && map.getZoom() >= minzoom
       && x1 >= b.getWest() && x0 <= b.getEast() && y1 >= b.getSouth() && y0 <= b.getNorth());
-    if (!need.length) return;
+    // 화면에서 멀어진 파일은 버린다: 전국을 둘러보면 받은 도로 파일(모두 40MB 넘게)이 쌓여 메모리를 크게 먹는다
+    const padX = (b.getEast() - b.getWest()) * 0.5, padY = (b.getNorth() - b.getSouth()) * 0.5;
+    let dropped = 0;
+    for (const e of index) {
+      if (!loaded.has(e.file)) continue;
+      const [x0, y0, x1, y1] = e.bbox;
+      if (x1 < b.getWest() - padX || x0 > b.getEast() + padX || y1 < b.getSouth() - padY || y0 > b.getNorth() + padY) { loaded.delete(e.file); dropped++; }
+    }
+    if (!need.length && !dropped) return;
     await Promise.all(need.map(async (e) => {
       loaded.set(e.file, []);
       loaded.set(e.file, (await fetch(`data/base/roads/${e.file}`).then((r) => r.json())).features);

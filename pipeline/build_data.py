@@ -2709,6 +2709,8 @@ def write_outputs(zones, net, places):
     sys.path.insert(0, str(Path(__file__).parent))
     import netpack
     netpack.write(net, OUT / "network.bin", OUT / "network.meta.json")
+    import join_stations   # 역 바로 위를 지나가는데 이어지지 않은 노선을 그 역에서 잇는다 (안변–강원선)
+    join_stations.main()
     import fix_station_nodes   # 역 노드를 철도 DB의 역(승강장) 자리로, 선로를 따라 옮긴다
     fix_station_nodes.main()
     import smooth_rails   # 철도·도시철도 도형의 갈고리·지그재그를 다듬고 나란한 선로를 한 선에 겹친다 (노드·길이는 그대로)
