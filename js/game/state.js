@@ -132,11 +132,13 @@ export function effectiveNetwork(base, state) {
   const closed = new Set(state.closedStations || []);
   // 일반철도역–도시철도역 환승 연결 (지은 것만)
   const railMetro = baseTransfers(base).concat((state.transfers || []).filter((t) => t.built).map((t) => [t.rail, t.metro]));
-  // 새로 놓은 도시철도가 일반철도역에 바로 닿으면 그 역은 저절로 환승역이 된다 (같은 노드)
+  // 새로 놓은 도시철도가 일반철도역에, 새 일반철도가 도시철도역에 바로 닿으면 그 역은 저절로 환승역이 된다 (같은 노드)
   const railSt = new Set(base.stations.map((s) => s[1]));
+  const metroSt = new Set((base.metro_stations || []).map((s) => s[1]));
   for (const nl of state.newLinks) {
-    if (!nl.built || nl.replaced || nl.mode !== 2) continue;
-    for (const n of [nl.a, nl.b]) if (railSt.has(n) && !railMetro.some(([r, m]) => r === n && m === n)) railMetro.push([n, n]);
+    if (!nl.built || nl.replaced || (nl.mode !== 1 && nl.mode !== 2)) continue;
+    const other = nl.mode === 2 ? railSt : metroSt;
+    for (const n of [nl.a, nl.b]) if (other.has(n) && !railMetro.some(([r, m]) => r === n && m === n)) railMetro.push([n, n]);
   }
   return { nodes, links, physCount, serviceStops, railMetro, stations: [...new Set(stations)].filter((n) => !closed.has(n)), airports, airRoutes, airBanned: state.air?.banned || [] };
 }

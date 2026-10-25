@@ -184,6 +184,10 @@ def main():
     # 게임은 존 속성만 받는다 (도형은 data/admin/sgg.geojson과 같은 순서)
     (OUT / "zones.json").write_text(
         json.dumps([f["properties"] for f in fc["features"]], ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    # 이웃 소구역이 경계를 함께 쓰도록 한꺼번에 단순화한다 (하나씩 단순화하면 사이에 틈이 벌어진다)
+    geoms = shapely.coverage_simplify([f.pop("_geom") for f in sub_feats], 0.0007)
+    for f, g in zip(sub_feats, geoms):
+        f["geometry"] = mapping(shapely.set_precision(g, 0.00001))
     (OUT / "subzones.geojson").write_text(
         json.dumps({"type": "FeatureCollection", "features": sub_feats}, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8")
@@ -308,9 +312,7 @@ def split_kmeans(p, cx, cy, w, res, sub0, metro=False):
 
 
 def sub_feature(sid, zone, name, geom):
-    g = shapely.set_precision(geom.simplify(0.001, preserve_topology=True), 0.0005)
-    return {"type": "Feature", "id": sid, "properties": {"id": sid, "zone": zone, "name": name},
-            "geometry": mapping(g)}
+    return {"type": "Feature", "id": sid, "properties": {"id": sid, "zone": zone, "name": name}, "_geom": geom}
 
 
 if __name__ == "__main__":

@@ -2709,6 +2709,8 @@ def write_outputs(zones, net, places):
     sys.path.insert(0, str(Path(__file__).parent))
     import netpack
     netpack.write(net, OUT / "network.bin", OUT / "network.meta.json")
+    import smooth_rails   # 철도·도시철도 도형의 갈고리·지그재그를 다듬는다 (노드·길이는 그대로)
+    smooth_rails.main()
     (OUT / "network.json").unlink(missing_ok=True)
     (OUT / "places.json").write_text(json.dumps(places, ensure_ascii=False, separators=(",", ":")),
                                      encoding="utf-8")

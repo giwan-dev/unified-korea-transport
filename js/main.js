@@ -3222,16 +3222,29 @@ function resolveWaypoint([name, lon, lat], mode, motorwayEnd = false) {
     });
     if (best != null) return best;
   }
-  const lists = mode === 2 ? [base.metro_stations || [], base.stations] : mode === 1 ? [base.stations, base.metro_stations || []] : [];
-  for (const list of lists) {
-    let best = null, bd = 6;
+  // 이름이 같은 기존 역: 같은 종류 철도는 6km 안, 다른 종류(일반철도↔도시철도)는 1km 안이면 그 역에 바로 붙는다.
+  // 다른 종류 역에 붙으면 같은 노드라 저절로 환승역이 된다 (예전에는 그 옆에 같은 이름 역을 하나 더 만들었다: 신분당선 용산 등)
+  const lists = mode === 2 ? [[base.metro_stations || [], 6], [base.stations, 1]] : mode === 1 ? [[base.stations, 6], [base.metro_stations || [], 1]] : [];
+  for (const [list, maxKm] of lists) {
+    let best = null, bd = maxKm;
     for (const [nm, node] of list) {
       if (nm !== name && nm !== `${name}역` && nm.replace(/역$/, '') !== name) continue;
       const c = nodeCoord(node);
       const d = kmBetween(lon, lat, c[0], c[1]);
       if (d < bd) { bd = d; best = node; }
     }
-    if (best != null && nodesOfMode(mode).has?.(best) !== false) return best;
+    if (best != null) return best;
+  }
+  // 이름은 달라도 기존 역 바로 그 자리(150m 안)면 그 역이다 (CTX 정부대전청사 = 대전 1호선 정부청사 등)
+  if (mode >= 1) {
+    let best = null, bd = 0.15;
+    for (const [list] of lists) for (const [, node] of list) {
+      const c = nodeCoord(node);
+      if (!c || Math.abs(c[1] - lat) > 0.01) continue;
+      const d = kmBetween(lon, lat, c[0], c[1]);
+      if (d < bd) { bd = d; best = node; }
+    }
+    if (best != null) return best;
   }
   // 이름이 같은 역이 없으면 새 역이다: 그 자리(250m 안)의 노드에만 붙인다.
   // 예전에는 1.5km 안의 아무 역에나 붙여, 서부선의 연희·명지대 등이 홍대입구·증산으로 바뀌어 노선이 엉뚱하게 그려졌다
