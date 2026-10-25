@@ -95,6 +95,23 @@ export class Model {
     return { json: { meta, sizes: { L, ZZ, NS, AA }, totals, snapshot: this.snapshot(), access }, bin: all.buffer };
   }
 
+  /**
+   * 지금 망의 역세권 계산 결과 (보조 워커에 넘긴다): 보조 워커는 같은 망을 받으면 이것을 그대로 써서
+   * 소구역마다 접속 노드·후보 역을 다시 고르는 무거운 계산(해마다 수 초 × 워커 수)을 건너뛴다
+   */
+  accessPack() {
+    const arrays = {};
+    for (const [k] of ACCESS_ARRAYS) arrays[k] = this[k].slice();
+    return { sig: this.accessSig, arrays, stations: Int32Array.from(this.stationNode), metroLocal: this.metroLocal ? Float32Array.from(this.metroLocal) : null };
+  }
+
+  /** accessPack을 다음 setNetwork 때 쓰도록 받아 둔다 */
+  useAccessPack(pack) {
+    if (!pack) return;
+    this.accessPreload = { sig: pack.sig, arrays: pack.arrays, stations: pack.stations };
+    this.metroLocalPreset = pack.metroLocal;
+  }
+
   /** exportBaseline에 담긴 역세권 계산 결과를 다음 setNetwork 때 쓰도록 받아 둔다 (buildAccess가 서명을 맞춰 본다) */
   preloadAccess(json, buf) {
     const a = json.access;
@@ -228,11 +245,16 @@ export class Model {
     if (sig !== this.netSig || !this.transit) {
       this.buildAccess();
       this.buildTransit();
-      this.metroLocal = this.metroLocalLoads();
+      // 받은 계산 결과(보조 워커)가 이 망 크기면 그대로 쓴다
+      const pre = this.metroLocalPreset;
+      this.metroLocalPreset = null;
+      this.metroLocal = pre && pre.length === L.length ? pre : this.metroLocalLoads();
       this.netSig = sig;
     } else {
       this.buildTransit();
     }
+    this.metroLocalPreset = null;   // 쓰지 않은 받은 결과는 버린다 (다음 망에 잘못 쓰지 않게)
+    this.accessPreload = null;
     this.airRail = null;   // 공항역 철도 시간은 망이 바뀌면 다시 구한다
     this.buildAir();
     // 역별 운행 계통 열차 수 (시간표가 정해진 역은 그만큼 자주 열차가 온다)

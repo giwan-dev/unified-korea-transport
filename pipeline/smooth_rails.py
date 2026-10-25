@@ -28,6 +28,7 @@ HOOK_M, HOOK_DEG = 250.0, 100.0     # 거의 되돌아가는 갈고리
 JIT_M, JIT_DEG = 40.0, 45.0          # 선에서 조금 벗어난 잔 떨림
 ZIG_M, ZIG_DEG, ZIG_DEV = 350.0, 25.0, 80.0
 ZIG_TOL_M = 15.0
+HOOK_END_M = 500.0                  # 노선 끝(역·분기 노드) 바로 옆에서 되돌아가는 갈고리 (동북선 미아사거리처럼 노드가 선로에서 비켜난 곳)
 
 
 def _xy(p, lat0):
@@ -81,7 +82,8 @@ def smooth_part(part, zig=True):
         # 1) 갈고리
         for k in range(1, len(pts) - 1):
             ang, dev = _turn(pts[k - 1], pts[k], pts[k + 1])
-            if (abs(ang) >= HOOK_DEG and dev <= HOOK_M) or (abs(ang) >= JIT_DEG and dev <= JIT_M):
+            end_hook = zig and k in (1, len(pts) - 2) and abs(ang) >= HOOK_DEG and dev <= HOOK_END_M   # 철도만 (도로 IC 고리는 그대로)
+            if (abs(ang) >= HOOK_DEG and dev <= HOOK_M) or (abs(ang) >= JIT_DEG and dev <= JIT_M) or end_hook:
                 del pts[k]
                 fixed += 1
                 changed = True
@@ -277,6 +279,93 @@ def straighten_nodes(nodes, links):
     return moved
 
 
+BRANCH_KM, BRANCH_DEG = 0.8, 25.0
+
+
+def tangent_branches(nodes, links):
+    """철도 분기점에서 지선이 본선과 수직으로 만나면(남포 인근 등), 지선 첫 BRANCH_KM을 본선 방향으로 나가다 휘어
+    원래 선로에 합류하는 곡선으로 다시 그린다 (그림만: 길이·연결은 그대로). 고친 지선 수를 돌려준다"""
+    from collections import defaultdict
+    adj = defaultdict(list)
+    for i, l in enumerate(links):
+        if l["mode"] in (1, 2) and None not in l["geom"] and len(l["geom"]) >= 2 and l["a"] != l["b"]:
+            adj[l["a"]].append(i)
+            adj[l["b"]].append(i)
+    fixed = 0
+    for n, ls in adj.items():
+        if len(ls) < 3:
+            continue
+        c = (float(nodes[n][0]), float(nodes[n][1]))
+        lat0 = c[1]
+        P = lambda q: _xy(q, lat0)
+        cx = P(c)
+        out = {i: (links[i]["geom"] if links[i]["a"] == n else links[i]["geom"][::-1]) for i in ls}
+
+        def heading(g):
+            for q in g[1:]:
+                x, y = P(q)
+                d = math.hypot(x - cx[0], y - cx[1])
+                if d > 100:
+                    return ((x - cx[0]) / d, (y - cx[1]) / d)
+            return None
+        hd = {i: heading(out[i]) for i in ls}
+        ls2 = [i for i in ls if hd[i]]
+        if len(ls2) < 3:
+            continue
+        # 곧게 이어지는 본선 쌍: 나가는 방향이 가장 반대인 두 구간 (같은 수단끼리)
+        best, bc = None, 0.0
+        for a in range(len(ls2)):
+            for b in range(a + 1, len(ls2)):
+                i, j = ls2[a], ls2[b]
+                if links[i]["mode"] != links[j]["mode"]:
+                    continue
+                cos = hd[i][0] * hd[j][0] + hd[i][1] * hd[j][1]
+                if cos < bc:
+                    bc, best = cos, (i, j)
+        if not best or bc > -0.85:
+            continue
+        for k in ls2:
+            if k in best or links[k]["mode"] != links[best[0]]["mode"]:
+                continue
+            h = hd[k]
+            m = max((hd[best[0]], hd[best[1]]), key=lambda v: v[0] * h[0] + v[1] * h[1])
+            ang = math.degrees(math.acos(max(-1, min(1, m[0] * h[0] + m[1] * h[1]))))
+            if ang < BRANCH_DEG or ang > 120:
+                continue
+            g = [P(q) for q in out[k]]
+            total = sum(math.hypot(g[t + 1][0] - g[t][0], g[t + 1][1] - g[t][1]) for t in range(len(g) - 1))
+            D = min(BRANCH_KM * 1000, total * 0.4)
+            if D < 200:
+                continue
+            # 지선 위 D 지점(Q)과 그 자리 방향
+            acc, Q, tq, cut = 0.0, None, None, None
+            for t in range(len(g) - 1):
+                seg = math.hypot(g[t + 1][0] - g[t][0], g[t + 1][1] - g[t][1])
+                if acc + seg >= D and seg > 0:
+                    u = (D - acc) / seg
+                    Q = (g[t][0] + (g[t + 1][0] - g[t][0]) * u, g[t][1] + (g[t + 1][1] - g[t][1]) * u)
+                    tq = ((g[t + 1][0] - g[t][0]) / seg, (g[t + 1][1] - g[t][1]) / seg)
+                    cut = t + 1
+                    break
+                acc += seg
+            if Q is None:
+                continue
+            L = D / 2.5
+            p1 = (cx[0] + m[0] * L, cx[1] + m[1] * L)
+            p2 = (Q[0] - tq[0] * L, Q[1] - tq[1] * L)
+            curve = []
+            for s_ in range(13):
+                t_ = s_ / 12
+                u_ = 1 - t_
+                curve.append((u_ ** 3 * cx[0] + 3 * u_ * u_ * t_ * p1[0] + 3 * u_ * t_ * t_ * p2[0] + t_ ** 3 * Q[0],
+                              u_ ** 3 * cx[1] + 3 * u_ * u_ * t_ * p1[1] + 3 * u_ * t_ * t_ * p2[1] + t_ ** 3 * Q[1]))
+            kx = 111320 * math.cos(math.radians(lat0))
+            newg = [out[k][0]] + [(x / kx, y / 110570) for x, y in curve[1:]] + out[k][cut:]
+            links[k]["geom"] = newg if links[k]["a"] == n else newg[::-1]
+            fixed += 1
+    return fixed
+
+
 def write_net(data, meta, nodes, links):
     """노드 좌표·링크 길이·도형을 network.bin에 다시 쓴다 (나머지 열은 그대로)"""
     meta_path, bin_path = data / "network.meta.json", data / "network.bin"
@@ -320,8 +409,10 @@ def main():
             links += 1
             l["geom"] = g
     print("fixed", total, "vertices on", links, "rail/metro/main-road links")
-    print("straightened", straighten_nodes(nodes, net["links"]), "nodes onto their through line")
+    if "--geom-only" not in sys.argv:   # 노드를 옮기지 않고 그림용 선형만 고칠 때 (기준선을 다시 계산하지 않아도 된다)
+        print("straightened", straighten_nodes(nodes, net["links"]), "nodes onto their through line")
     print("bundled", bundle(net["links"]), "links onto parallel lines")
+    print("tangent branches", tangent_branches(nodes, net["links"]), "branch links")
     if check:
         return
     write_net(data, meta, nodes, net["links"])

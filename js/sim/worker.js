@@ -22,14 +22,19 @@ async function makePool() {
     await Promise.all(ports.map((p) => call(p, { type: 'init', zones: inputs.zones, grid: inputs.grid }, 120000)));
     return {
       size: ports.length, netSent: null,
+      // 망을 보낼 때는 주 워커가 그 망으로 구한 역세권 결과도 함께 보낸다 (보조 워커가 다시 계산하지 않게).
+      // 그래서 sync·preNet은 늘 주 워커가 같은 망을 setNetwork한 뒤에 부른다
       async sync(net, snapshot, groups) {
-        await Promise.all(ports.map((p) => call(p, { type: 'sync', net: this.netSent === net ? null : net, snapshot, groups }, 60000)));
+        const send = this.netSent !== net;
+        const access = send ? model.accessPack() : null;
+        await Promise.all(ports.map((p) => call(p, { type: 'sync', net: send ? net : null, access, snapshot, groups }, 60000)));
         this.netSent = net;
       },
       // 망만 먼저 보내 보조 워커가 망을 짜게 한다 (주 워커가 경제·인구를 갱신하는 동안 함께)
       async preNet(net) {
         if (this.netSent === net) return;
-        await Promise.all(ports.map((p) => call(p, { type: 'sync', net, snapshot: null }, 60000)));
+        const access = model.accessPack();
+        await Promise.all(ports.map((p) => call(p, { type: 'sync', net, access, snapshot: null }, 60000)));
         this.netSent = net;
       },
       run: (mk) => Promise.all(ports.map((p, k) => call(p, mk(k), 120000))),
@@ -144,9 +149,9 @@ async function handle(msg) {
       }
     } else if (msg.type === 'step') {
       wmark('step received');
-      const pre = pool ? pool.preNet(msg.net).catch(() => {}) : null;   // 보조 워커 망 짜기를 함께 돌린다
       model.setNetwork(msg.net);
       wmark(model.netRebuilt ? 'network set (full rebuild)' : 'network set');
+      const pre = pool ? pool.preNet(msg.net).catch(() => {}) : null;   // 보조 워커 망 짜기(역세권은 받아 씀)를 경제·인구 갱신과 함께
       lastNet = msg.net;
       // 지난 1년의 교통 조건으로 경제·인구를 갱신한 뒤 새 해의 통행을 배정한다 (완공된 역세권 개발 인구를 먼저 옮긴다)
       if (msg.ctx.dev?.length) model.applyDevelopments(msg.ctx.dev);

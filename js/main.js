@@ -2026,7 +2026,37 @@ function renderVisible() {
   }
 }
 
+/**
+ * 오른쪽 패널을 다시 그려도 보던 자리를 지킨다: 패널마다 스크롤 위치와, 펼쳐 둔 접는 묶음(details, 제목으로 짝짓는다).
+ * 제안 수락·개량 착공처럼 패널 안 단추를 누른 뒤 목록이 닫히거나 맨 위로 튀지 않게
+ */
+function keepPanels(fn) {
+  const side = document.getElementById('side');
+  if (!side) return fn();
+  const boxes = [...side.querySelectorAll('#selection, .panel')].map((e) => [e, e.scrollTop]);
+  const det = new Map();
+  for (const d of side.querySelectorAll('details')) {
+    const k = `${d.closest('[data-panel], #selection')?.dataset.panel || 'sel'}|${d.querySelector(':scope > summary')?.textContent.replace(/[\d,.]+/g, '#').trim()}`;
+    det.set(k, d.open);
+  }
+  fn();
+  // 소제목 접기(foldSections)는 MutationObserver로 조금 뒤에 붙으므로, 그 뒤에 한 번 더 맞춘다
+  const restore = () => {
+  for (const d of side.querySelectorAll('details')) {
+    const k = `${d.closest('[data-panel], #selection')?.dataset.panel || 'sel'}|${d.querySelector(':scope > summary')?.textContent.replace(/[\d,.]+/g, '#').trim()}`;
+    if (det.has(k) && d.open !== det.get(k)) d.open = det.get(k);
+  }
+  for (const [e, t] of boxes) if (t) e.scrollTop = t;
+  };
+  restore();
+  queueMicrotask(restore);
+}
+
 function renderAll() {
+  keepPanels(renderAllPanels);
+}
+
+function renderAllPanels() {
   stalePanels.clear();
   renderRegions();
   if (map) setHousing(map, state.housing || []);   // 다 지은 택지지구는 배경 지도에 시가지로
@@ -2698,13 +2728,12 @@ function renderSelection() {
   if (selection.type === 'service') bindFund(el, renderSelection);
   el.querySelector('#line-diagram')?.addEventListener('click', () => openLineDiagram(selection.id));
   el.querySelector('#st-start')?.addEventListener('click', () => startStraighten(selection.id));
+  el.querySelectorAll('[data-st-start]').forEach((b) => { b.onclick = () => startStraighten(selection.id); });
   el.querySelectorAll('.sec-start').forEach((b) => { b.onclick = () => startSection(selection.id); });
   el.querySelector('#sec-straight')?.addEventListener('click', () => {
+    // 고른 구간의 양 끝 역으로 바로 직선화를 연다 (보통 시작과 같은 상태로: 사이 역 처리 메뉴가 되게)
     const sc = selection.section;
-    straight = { line: sc.line, cls: sc.cls, picks: [sc.A, sc.B], plan: null };
-    straight.plan = planStraighten();
-    drawStraighten();
-    select({ type: 'straighten' });
+    startStraighten(selection.ids?.[0] ?? sc.via?.[0], { line: sc.line, cls: sc.cls, picks: [sc.A, sc.B] });
   });
   el.querySelector('#sec-prev')?.addEventListener('click', () => {
     const sc = selection.section, b0 = el.querySelector('[data-mup]');
@@ -4001,12 +4030,13 @@ function partyValue(i, level) {
 
 let straight = null;   // {line, cls, picks: [역 노드], plan}
 
-function startStraighten(linkId) {
-  const l = linkAt(base, state, linkId);
+function startStraighten(linkId, preset = null) {
+  const l = linkId != null ? linkAt(base, state, linkId) : null;
   cancelDraft();
-  straight = { line: l.name, cls: l.cls, picks: [], plan: null, modes: new Map() };
+  straight = { line: preset?.line ?? l?.name, cls: preset?.cls ?? l?.cls, picks: preset?.picks ? [...preset.picks] : [], plan: null, modes: new Map() };
   warmPreview();
   map.getCanvas().style.cursor = 'crosshair';
+  if (straight.picks.length === 2) { straight.plan = planStraighten(); drawStraighten(); }
   select({ type: 'straighten' });
 }
 
@@ -5619,7 +5649,8 @@ function linkPanel(id) {
     : l.cls === 'ferry' ? '<p class="hint">여객선 항로입니다. 개량 대상이 아닙니다.</p>'
     : busyProj ? `<p class="hint">공사 중: ${esc(busyProj.label)} (${busyProj.doneYear}년 완공)</p>` : `<h4>개량</h4>
     <div class="actions"><button class="small sec-start" title="두 역·IC를 차례로 눌러 그 사이만 고릅니다">구간 선택 (${l.mode === 0 ? 'IC' : '역'} 두 곳 누르기)</button>
-      ${l.mode >= 1 ? '<button class="small" data-padd="station" title="노선 위 한 점을 눌러 역을 놓습니다">이 노선에 역 신설</button>' : l.cls === 'motorway' ? '<button class="small" data-padd="ic">IC 신설</button>' : ''}</div>
+      ${l.mode >= 1 ? '<button class="small" data-padd="station" title="노선 위 한 점을 눌러 역을 놓습니다">이 노선에 역 신설</button>' : l.cls === 'motorway' ? '<button class="small" data-padd="ic">IC 신설</button>' : ''}
+      ${l.mode === 1 ? '<button class="small" data-st-start title="두 역 사이를 단순한 곡선으로 새로 놓고 옛 구간은 폐선합니다. 사이 역은 눌러서 자동·제자리 유지·폐역을 고릅니다">구간 직선화</button>' : ''}</div>
     ${l.mode === 1 ? fundSelect([operatorOf(state, l)]) : ''}
     ${route.length > 1 ? `<label class="name-row"><input type="checkbox" id="whole-route" ${wholeRoute ? 'checked' : ''}>
       <span>같은 이름 노선 전체 (${route.length}개 구간, ${routeKm.toFixed(0)}km)</span></label>` : ''}
