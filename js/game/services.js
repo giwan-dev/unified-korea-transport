@@ -285,13 +285,13 @@ export const EXISTING_SERVICES = [
   { name: '대경선', kind: 'commuter', type: 'commuter', sets: 6, lines: ['경부선'],
     stops: ['구미', '사곡', '북삼', '왜관', '서대구', '대구', '동대구', '경산'] },
   // 코레일 선로를 함께 쓰는 수도권·지방 광역 전철: 두 끝 역 사이 모든 역에 선다 (from·to)
-  { name: '수도권 전철 1호선 (경부)', kind: 'commuter', type: 'commuter', sets: 30, lines: ['경부선'], from: '서울', to: '천안' },
-  { name: '수도권 전철 1호선 (경인)', kind: 'commuter', type: 'commuter', sets: 24, lines: ['경인선'], from: '구로', to: '인천' },
-  { name: '수도권 전철 1호선 (경원)', kind: 'commuter', type: 'commuter', sets: 20, lines: ['경원선'], from: '청량리', to: '소요산' },
+  // 1호선: 경부·경인선 전철이 서울역–청량리 지하 구간(서울 지하철 1호선)을 지나 경원선으로 직통한다
+  { name: '수도권 전철 1호선 (천안–소요산)', kind: 'commuter', type: 'commuter', sets: 48, lines: ['경부선', '서울 지하철 1호선', '경원선'], from: '천안', to: '소요산' },
+  { name: '수도권 전철 1호선 (인천–광운대)', kind: 'commuter', type: 'commuter', sets: 26, lines: ['경인선', '경부선', '서울 지하철 1호선', '경원선'], from: '인천', to: '광운대' },
   { name: '경의·중앙선', kind: 'commuter', type: 'commuter', sets: 22, lines: ['경의선', '용산선', '경원선', '중앙선'], from: '문산', to: '용문' },
   { name: '수인·분당선', kind: 'commuter', type: 'commuter', sets: 26, lines: ['분당선', '수인선'], from: '왕십리', to: '인천' },
   { name: '경춘선', kind: 'commuter', type: 'commuter', sets: 12, lines: ['경춘선'], from: '상봉', to: '춘천' },
-  { name: '수도권 전철 4호선 (과천·안산)', kind: 'commuter', type: 'commuter', sets: 16, lines: ['과천선', '안산선'], from: '선바위', to: '오이도' },
+  // 과천선·안산선(4호선)과 일산선(3호선)은 도시철도 열차가 직통하므로 도시철도 노선으로 바꿨다 (pipeline/through_metro.py)
   { name: '경강선', kind: 'commuter', type: 'commuter', sets: 8, lines: ['경강선'], from: '이매', to: '여주' },
   { name: '동해선 광역전철', kind: 'commuter', type: 'commuter', sets: 10, lines: ['동해선'], from: '부전', to: '태화강' },
   { name: '서해선 광역 (대곡–원시)', kind: 'commuter', type: 'commuter', sets: 10, lines: ['서해선'], from: '대곡', to: '원시' },
