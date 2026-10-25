@@ -136,8 +136,8 @@ export function regionOf(state, z) {
   const L = initLocal(state);
   const o = adminOverride(state, z);
   const prov = o?.province || z.province || z.name, side = o?.side || z.country;
-  // 독립(승격)한 도시는 그 자체가 광역 단체
-  for (const c of L.independent) if (prov === c || z.city === c || z.name === c) return c;
+  // 독립(승격)한 도시는 그 자체가 광역 단체 (함흥시 → 함흥광역시)
+  for (const c of L.independent) if (prov === c || z.city === c || z.name === c) return metroName(c);
   const A = L.admin || {};
   let r = prov;
   if (L.historic && !(A.jagang === 'keep' && side === 'KP' && ['자강도', '량강도', '양강도'].includes(prov))) {
@@ -146,11 +146,21 @@ export function regionOf(state, z) {
   return A.dueum === 'apply' && side === 'KP' ? dueum(r) : r;
 }
 
+/** 승격한 도시의 광역 단체 이름: 옛 직할시(평양·남포)는 그대로, 나머지 시는 ○○광역시 */
+export function metroName(c) { return isMetroCity(c) ? c : c.replace(/시$/, '광역시'); }
+
 export function isMetroCity(name) { return /(특별시|광역시|직할시|특별자치시)$/.test(name) || ['평양시', '남포시', '라선시', '개성시'].includes(name); }
 
 export function governorTitle(region) {
-  if (isMetroCity(region) || /광역시$/.test(region)) return `${region.replace(/(특별시|광역시|특별자치시)$/, '')}시장`;
+  // 특별시·광역시·특별자치시장은 단체 이름 그대로 (함흥광역시장), 옛 직할시는 ○○시장
+  if (isMetroCity(region)) return `${region}장`;
   return `${region.replace(/(특별자치도|도)$/, '')}도지사`;
+}
+
+/** 시군 단체장 직함: 광역시로 승격한 도시 전체인 시군은 그 광역시의 구청장 (함흥시 → 함흥광역시 구청장) */
+export function countyTitle(name, region) {
+  if (/광역시$/.test(region) && name.replace(/시$/, '') === region.replace(/광역시$/, '')) return `${region} 구청장`;
+  return mayorTitle(name);
 }
 
 export function mayorTitle(name) {

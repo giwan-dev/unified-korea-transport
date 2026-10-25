@@ -72,6 +72,12 @@ export async function migrateState(old, { base, zones }) {
     if (id >= N0) return N1 + (id - N0);   // 게임에서 새로 만든 노드: 번호만 밀린다
     if (nodeMemo.has(id)) return nodeMemo.get(id);
     const x = ref.xy[2 * id], y = ref.xy[2 * id + 1], md = ref.modes[id];
+    // 같은 번호의 노드가 같은 수단이고 1.5km 안이면 그 노드다: 데이터를 고칠 때 노드 번호는 두고 자리만 옮긴다
+    // (역 노드를 승강장 자리로 수백 m 옮긴 뒤 '가장 가까운 노드'로 찾으면 옆 분기점 등으로 잘못 짝지어진다)
+    if (id < N1 && (!md || (modes1[id] & md)) && Math.hypot((xy1[2 * id] - x) * 88, (xy1[2 * id + 1] - y) * 111) < 1.5) {
+      nodeMemo.set(id, id);
+      return id;
+    }
     let n = g1.near(x, y, 0.004, (i) => !md || (modes1[i] & md));
     if (n < 0) n = g1.near(x, y, 0.012);
     nodeMemo.set(id, n);
@@ -87,6 +93,9 @@ export async function migrateState(old, { base, zones }) {
     if (id >= L0) return L1 + (id - L0);
     if (linkMemo.has(id)) return linkMemo.get(id);
     const a = mN(ref.ab[3 * id]), b = mN(ref.ab[3 * id + 1]);
+    // 같은 번호의 링크가 같은 수단이고 끝 노드 하나 이상이 같으면 그 링크다 (역에서 나눈 링크는 앞쪽이 같은 번호로 남는다)
+    const same = id < L1 ? base.links[id] : null;
+    if (same && same.mode === ref.ab[3 * id + 2] && (same.a === a || same.b === b || same.a === b || same.b === a)) { linkMemo.set(id, id); return id; }
     const r = a >= 0 && b >= 0 ? linkIdx.get(`${Math.min(a, b)}-${Math.max(a, b)}-${ref.ab[3 * id + 2]}`) ?? -1 : -1;
     linkMemo.set(id, r);
     return r;

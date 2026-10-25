@@ -914,6 +914,7 @@ function completeProject(base, state, p) {
       else state.newLinks[id - base.links.length].replaced = true;
     }
     if (p.stationMap) (state.closedStations ||= []).push(...Object.keys(p.stationMap).map(Number));
+    if (p.dropStations?.length) (state.closedStations ||= []).push(...p.dropStations);   // 직선화 때 폐역으로 고른 역
     for (const r of state.restAreas || []) if (p.links.includes(r.links[0])) r.built = true;
     for (const s of p.stations) if (!state.newStations.includes(s)) state.newStations.push(s);
   }
