@@ -1,4 +1,5 @@
 // 시뮬레이션은 메인 스레드를 막지 않도록 워커에서 돈다.
+import { roadUserCost } from '../game/appraisal.js';
 import { Model } from './model.js';
 import { P } from './params.js';
 
@@ -249,7 +250,16 @@ async function handle(msg) {
         if (!isFinite(tb) || !isFinite(ta) || !(before.odT[k] + after.odT[k] > 0)) continue;
         timeMin += 0.5 * (before.odT[k] + after.odT[k]) * (tb - ta);
       }
-      const benefit = { timeMin, dVkt: (after.totals.vkt || 0) - (before.totals.vkt || 0) };
+      // 차량운행비·사고 편익은 기존 통행 기준(고정 수요): 사업으로 새로 생긴 통행(유발 통행)이 달린 거리는 빼고 본다.
+      // 유발 통행의 편익은 위 반분법 시간 편익에 이미 들어 있어, 그 주행거리를 비용으로 또 치면 도로 사업 B/C가 음수가 된다
+      const vB = before.totals.vkt || 0, vA = after.totals.vkt || 0, tB = before.totals.trips || 0, tA = after.totals.trips || 0;
+      const induced = tA - tB;
+      const dVkt = (vA - vB) - (tA > 0 ? (induced * vA) / tA : 0);
+      // 차량운행비·사고: 구간마다 속도·등급별 단가로 (막힌 일반도로 → 빠른 고속도로로 옮기면 조금 돌아도 줄어든다).
+      // 처리 쪽은 유발 통행 몫을 빼서 기존 통행 기준으로 본다
+      const cB = roadUserCost(before.vol, before.speed, lastNet.links), cA = roadUserCost(after.vol, after.speed, msg.net.links);
+      const keep = tA > 0 ? 1 - induced / tA : 1;
+      const benefit = { timeMin, dVkt, dVktRaw: vA - vB, inducedTrips: induced, vocWon: cB.voc - cA.voc * keep, accWon: cB.acc - cA.acc * keep };
       const strip = ({ odT, odTime, ...rest }) => rest;
       post('preview', { id: msg.id, before: strip(before), after: strip(after), benefit, years, timing: tm });
     } else if (msg.type === 'probe') {

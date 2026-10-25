@@ -244,7 +244,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { planStraighten: () => planStraighten(), namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
@@ -4003,12 +4003,13 @@ let straight = null;   // {line, cls, picks: [역 노드], plan}
 function startStraighten(linkId) {
   const l = linkAt(base, state, linkId);
   cancelDraft();
-  straight = { line: l.name, cls: l.cls, picks: [], plan: null };
+  straight = { line: l.name, cls: l.cls, picks: [], plan: null, modes: new Map() };
   map.getCanvas().style.cursor = 'crosshair';
   select({ type: 'straighten' });
 }
 
 function endStraighten() {
+  document.querySelector('.st-menu')?.remove();
   straight = null;
   map.getCanvas().style.cursor = '';
   map.getSource('draft').setData({ type: 'FeatureCollection', features: [] });
@@ -4017,6 +4018,17 @@ function endStraighten() {
 
 /** 노선 위의 역 가운데 누른 곳에서 가장 가까운 역 (화면 30px 안) */
 function straightenClick(ll) {
+  // 두 역을 고른 뒤에는 사이의 역을 누르면 처리(자동·제자리 유지·폐역)를 고르는 메뉴를 띄운다
+  if (straight.plan) {
+    const p0 = map.project(ll);
+    let hit = null, hd = 24;
+    for (const m of straight.plan.mids) {
+      const q = map.project(nodeCoord(m.node));
+      const d = Math.hypot(q.x - p0.x, q.y - p0.y);
+      if (d < hd) { hd = d; hit = m; }
+    }
+    if (hit) { straightMenu(hit, p0); return; }
+  }
   // 같은 노선의 역을 고르고, 둘째 역은 이어진 다른 노선의 역도 고를 수 있다 (평부선–경의선처럼 남북 연결 구간)
   const stSet = railStationSet();
   const stations = new Set();
@@ -4032,11 +4044,36 @@ function straightenClick(ll) {
     if (d < bd) { bd = d; best = n; }
   }
   if (best == null) return;
-  if (straight.picks.length >= 2) straight.picks = [];
+  if (straight.picks.length >= 2) { straight.picks = []; straight.modes = new Map(); }
   if (!straight.picks.includes(best)) straight.picks.push(best);
   straight.plan = straight.picks.length === 2 ? planStraighten() : null;
   drawStraighten();
   renderSelection();
+}
+
+const ST_MODES = [['auto', '자동 (새 선로 위로 옮김)'], ['pin', '제자리 유지 (접선으로 지나감)'], ['drop', '폐역']];
+
+/** 직선화 사이 역의 처리 메뉴: 누른 역 곁에 띄운다 */
+function straightMenu(m, pt) {
+  document.querySelector('.st-menu')?.remove();
+  const el = document.createElement('div');
+  el.className = 'st-menu';
+  const cur = straight.modes.get(m.node) || 'auto';
+  el.innerHTML = `<div class="t">${esc(m.name)}</div>${ST_MODES.map(([k, label]) => `<button class="small ${k === cur ? 'on' : ''}" data-st-mode="${k}">${label}</button>`).join('')}`;
+  const box = map.getContainer().getBoundingClientRect();
+  Object.assign(el.style, { left: `${Math.min(box.left + pt.x + 12, window.innerWidth - 220)}px`, top: `${Math.min(box.top + pt.y + 12, window.innerHeight - 140)}px` });
+  document.body.appendChild(el);
+  const close = () => { el.remove(); document.removeEventListener('mousedown', outside, true); };
+  const outside = (e) => { if (!el.contains(e.target)) close(); };
+  setTimeout(() => document.addEventListener('mousedown', outside, true), 0);
+  el.querySelectorAll('[data-st-mode]').forEach((b) => {
+    b.onclick = () => {
+      if (b.dataset.stMode === 'auto') straight.modes.delete(m.node); else straight.modes.set(m.node, b.dataset.stMode);
+      close();
+      straight.plan = planStraighten();
+      drawStraighten(); renderSelection();
+    };
+  });
 }
 
 /** 옛 경로를 따라 이은 좌표 (A에서 B 방향) */
@@ -4071,19 +4108,7 @@ function planStraighten() {
   const oldMin = via.reduce((s, i) => s + (net.links[i].len / net.links[i].speed) * 60, 0);
   const path = pathCoords(net.links, via, A);
   const pa = nodeCoord(A), pb = nodeCoord(B);
-  const chord = kmBetween(pa[0], pa[1], pb[0], pb[1]);
-  // 옛 경로의 길이 가운데 점과 직선에서 가장 먼 거리
-  let acc = 0, mid = path[0], half = polylineKm(path) / 2, dev = 0;
-  for (let k = 1; k < path.length; k++) {
-    const d = kmBetween(path[k - 1][0], path[k - 1][1], path[k][0], path[k][1]);
-    if (acc < half && acc + d >= half) mid = path[k];
-    acc += d;
-  }
-  const m0 = [(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2];
-  for (const q of path) dev = Math.max(dev, distToSegKm(q, pa, pb));
-  // 후보 선형: 한 번 휜 곡선(휨 0.6·0.3) → 직선 → 옛 경로를 따라 다듬은 선. 옛 경로보다 짧고 바다를 지나지 않는 첫 후보를 쓴다
   const N = 200;
-  const cTip = [2 * mid[0] - m0[0], 2 * mid[1] - m0[1]];
   // 양 끝에서 이어지는 바깥 선로(직선화하지 않는 쪽)의 접선: 새 선형이 그 방향으로 들어오고 나간다
   const viaSet = new Set(via);
   const outer = allLinks().map((_, i) => (viaSet.has(i) || state.replaced?.[i] ? null : linkAt(base, state, i)));
@@ -4091,70 +4116,117 @@ function planStraighten() {
   const chordDir = unitDir(pa, pb);
   const tA = branchTangent(trackHeadings(outer, nodeCoord, { node: A, lon: pa[0], lat: pa[1] }, okRail), chordDir);
   const tB = branchTangent(trackHeadings(outer, nodeCoord, { node: B, lon: pb[0], lat: pb[1] }, okRail), chordDir);
-  const bezier = (bow) => {
-    const c = [m0[0] + bow * (cTip[0] - m0[0]), m0[1] + bow * (cTip[1] - m0[1])];
-    // 2차 곡선을 3차로 올린 뒤, 끝 접선이 있으면 제어점 방향만 기존 선로 쪽으로 돌린다 (길이는 그대로)
-    const ctl = (p, q, t, sgn) => {
-      const v = [(2 / 3) * (q[0] - p[0]), (2 / 3) * (q[1] - p[1])];
-      if (!t) return [p[0] + v[0], p[1] + v[1]];
-      const ck = Math.cos((p[1] * Math.PI) / 180);
-      const len = Math.max(Math.hypot(v[0] * ck, v[1]), (chord / 3) / 111);
-      return [p[0] + (sgn * t[0] * len) / ck, p[1] + sgn * t[1] * len];
-    };
-    const c1 = ctl(pa, c, tA, 1), c2 = ctl(pb, c, tB, -1);
-    return Array.from({ length: N + 1 }, (_, k) => {
-      const t = k / N, u = 1 - t;
-      return [u ** 3 * pa[0] + 3 * u * u * t * c1[0] + 3 * u * t * t * c2[0] + t ** 3 * pb[0], u ** 3 * pa[1] + 3 * u * u * t * c1[1] + 3 * u * t * t * c2[1] + t ** 3 * pb[1]];
-    });
-  };
-  const smoothPath = () => {
-    // 옛 경로를 약 1km 간격으로 솎은 뒤 두 번 다듬는다 (작은 굽이만 편다)
-    const pts = [path[0]];
-    let acc = 0;
-    for (let k = 1; k < path.length; k++) {
-      acc += kmBetween(path[k - 1][0], path[k - 1][1], path[k][0], path[k][1]);
-      if (acc >= 1) { pts.push(path[k]); acc = 0; }
-    }
-    pts.push(path[path.length - 1]);
-    let q = pts;
-    for (let it = 0; it < 2; it++) {
-      const r = [q[0]];
-      for (let k = 0; k + 1 < q.length; k++) {
-        r.push([0.75 * q[k][0] + 0.25 * q[k + 1][0], 0.75 * q[k][1] + 0.25 * q[k + 1][1]], [0.25 * q[k][0] + 0.75 * q[k + 1][0], 0.25 * q[k][1] + 0.75 * q[k + 1][1]]);
-      }
-      r.push(q[q.length - 1]);
-      q = r;
-    }
-    return q;
-  };
-  // 어느 후보든 길이를 따라 고르게 N+1개 점으로 다시 찍는다 (곡률·역 위치 계산이 점 번호를 쓴다)
-  const resample = (c) => {
+  // 어느 후보든 길이를 따라 고르게 n+1개 점으로 다시 찍는다 (곡률·역 위치 계산이 점 번호를 쓴다)
+  const resample = (c, n = N) => {
     const cum = [0];
     for (let k = 1; k < c.length; k++) cum.push(cum[k - 1] + kmBetween(c[k - 1][0], c[k - 1][1], c[k][0], c[k][1]));
     const total = cum[cum.length - 1] || 1e-9, out = [];
     let j = 0;
-    for (let k = 0; k <= N; k++) {
-      const d = (total * k) / N;
+    for (let k = 0; k <= n; k++) {
+      const d = (total * k) / n;
       while (j + 1 < cum.length - 1 && cum[j + 1] < d) j++;
       const t = Math.min(1, Math.max(0, (d - cum[j]) / Math.max(1e-9, cum[j + 1] - cum[j])));
       out.push([c[j][0] + t * (c[j + 1][0] - c[j][0]), c[j][1] + t * (c[j + 1][1] - c[j][1])]);
     }
     return out;
   };
-  const cands = [];
-  if (dev > 0.08 * chord) cands.push(['한 번 휜 곡선', bezier(0.6)], ['완만하게 휜 곡선', bezier(0.3)]);
-  cands.push(['직선', bezier(0)], ['옛 경로를 따라 다듬은 선형', resample(smoothPath())]);
   const offLand = (c) => { let n = 0; for (let k = 0; k < c.length; k += 4) if (!onLand(c[k][0], c[k][1])) n++; return n / Math.ceil(c.length / 4); };
-  let shape = null, curve = null, seaShare = 0;
-  for (const [label, c] of cands) {
-    const km = polylineKm(c) * 1.02, sea = offLand(c);
-    if (sea <= 0.02 && (km < oldKm * 0.98 || label.startsWith('옛'))) { shape = label; curve = c; seaShare = sea; break; }
+  // 옛 경로에서 점 q에 가장 가까운 점 번호
+  const nearestIdx = (q) => { let bk = 0, bd = Infinity; path.forEach((p, k) => { const d = kmBetween(q[0], q[1], p[0], p[1]); if (d < bd) { bd = d; bk = k; } }); return bk; };
+
+  /**
+   * 두 닻(역) 사이 한 토막: 옛 경로가 두 점을 잇는 직선에서 많이 벗어나지 않으면 직선, 아니면 옛 경로 가운데를 향해 한 번 휜 곡선.
+   * 끝 접선(ta: u에서 떠나는 방향, tb: v로 들어오는 방향, [동, 북])이 있으면 그 방향으로 나가고 들어온다
+   */
+  const segCurve = (pu, pv, ta, tb, sub) => {
+    const chord = kmBetween(pu[0], pu[1], pv[0], pv[1]);
+    const subKm = polylineKm(sub);
+    let acc = 0, mid = sub[0], dev = 0;
+    for (let k = 1; k < sub.length; k++) {
+      const d = kmBetween(sub[k - 1][0], sub[k - 1][1], sub[k][0], sub[k][1]);
+      if (acc < subKm / 2 && acc + d >= subKm / 2) mid = sub[k];
+      acc += d;
+    }
+    const m0 = [(pu[0] + pv[0]) / 2, (pu[1] + pv[1]) / 2];
+    for (const q of sub) dev = Math.max(dev, distToSegKm(q, pu, pv));
+    const cTip = [2 * mid[0] - m0[0], 2 * mid[1] - m0[1]];
+    const bezier = (bow) => {
+      const c = [m0[0] + bow * (cTip[0] - m0[0]), m0[1] + bow * (cTip[1] - m0[1])];
+      // 2차 곡선을 3차로 올린 뒤, 끝 접선이 있으면 제어점 방향만 기존 선로 쪽으로 돌린다 (길이는 그대로)
+      const ctl = (p, q, t, sgn) => {
+        const v = [(2 / 3) * (q[0] - p[0]), (2 / 3) * (q[1] - p[1])];
+        if (!t) return [p[0] + v[0], p[1] + v[1]];
+        const ck = Math.cos((p[1] * Math.PI) / 180);
+        const len = Math.max(Math.hypot(v[0] * ck, v[1]), (chord / 3) / 111);
+        return [p[0] + (sgn * t[0] * len) / ck, p[1] + sgn * t[1] * len];
+      };
+      const c1 = ctl(pu, c, ta, 1), c2 = ctl(pv, c, tb, -1);
+      return Array.from({ length: N + 1 }, (_, k) => {
+        const t = k / N, u = 1 - t;
+        return [u ** 3 * pu[0] + 3 * u * u * t * c1[0] + 3 * u * t * t * c2[0] + t ** 3 * pv[0], u ** 3 * pu[1] + 3 * u * u * t * c1[1] + 3 * u * t * t * c2[1] + t ** 3 * pv[1]];
+      });
+    };
+    const smoothSub = () => {
+      // 옛 경로를 약 1km 간격으로 솎은 뒤 두 번 다듬는다 (작은 굽이만 편다)
+      const pts = [sub[0]];
+      let a2 = 0;
+      for (let k = 1; k < sub.length; k++) {
+        a2 += kmBetween(sub[k - 1][0], sub[k - 1][1], sub[k][0], sub[k][1]);
+        if (a2 >= 1) { pts.push(sub[k]); a2 = 0; }
+      }
+      pts.push(sub[sub.length - 1]);
+      let q = pts;
+      for (let it = 0; it < 2; it++) {
+        const r = [q[0]];
+        for (let k = 0; k + 1 < q.length; k++) r.push([0.75 * q[k][0] + 0.25 * q[k + 1][0], 0.75 * q[k][1] + 0.25 * q[k + 1][1]], [0.25 * q[k][0] + 0.75 * q[k + 1][0], 0.25 * q[k][1] + 0.75 * q[k + 1][1]]);
+        r.push(q[q.length - 1]);
+        q = r;
+      }
+      return q;
+    };
+    const cands = [];
+    if (dev > 0.08 * chord) cands.push(['한 번 휜 곡선', bezier(0.6)], ['완만하게 휜 곡선', bezier(0.3)]);
+    cands.push(['직선', bezier(0)], ['옛 경로를 따라 다듬은 선형', resample(sub.length > 1 ? smoothSub() : [pu, pv])]);
+    for (const [label, c] of cands) {
+      const km = polylineKm(c) * 1.02;
+      if (offLand(c) <= 0.02 && (km < subKm * 0.98 || label.startsWith('옛'))) return { label, curve: c, subKm };
+    }
+    return { label: cands[cands.length - 1][0], curve: cands[cands.length - 1][1], subKm };
+  };
+
+  // 사이의 역: 옛 경로 순서대로. 사용자가 고른 처리(자동: 새 선로 위로 · 제자리 유지 · 폐역)
+  const stSet = railStationSet(), riders = stationRiders();
+  const mids = [];
+  let node = A;
+  for (const i of via) { const l = net.links[i]; node = l.a === node ? l.b : l.a; if (node !== B && stSet.has(node)) mids.push(node); }
+  const modeOf = (n) => straight.modes?.get(n) || 'auto';
+  // 제자리 유지 역에서 토막을 나눈다: 그 역의 옛 선로 진행 방향(접선)으로 들어가고 나온다
+  const anchors = [{ node: A, pos: pa, k: 0, tIn: null, tOut: tA }];
+  for (const n of mids) {
+    if (modeOf(n) !== 'pin') continue;
+    const c = nodeCoord(n), k = nearestIdx(c);
+    if (k <= anchors[anchors.length - 1].k) continue;
+    const p0 = path[Math.max(0, k - 1)], p1 = path[Math.min(path.length - 1, k + 1)];
+    const t = unitDir(p0, p1);
+    anchors.push({ node: n, pos: c, k, tIn: t, tOut: t });
   }
-  if (!curve) { shape = cands[cands.length - 1][0]; curve = cands[cands.length - 1][1]; seaShare = offLand(curve); }
-  const ctrl = shape.includes('휜');
-  const smoothed = shape.startsWith('옛');
+  anchors.push({ node: B, pos: pb, k: path.length - 1, tIn: tB, tOut: null });
+  const segs = [];
+  for (let s = 0; s + 1 < anchors.length; s++) {
+    const u = anchors[s], v = anchors[s + 1];
+    const sub = path.slice(u.k, v.k + 1);
+    if (sub.length < 2) sub.push(v.pos);
+    sub[0] = u.pos; sub[sub.length - 1] = v.pos;
+    segs.push(segCurve(u.pos, v.pos, u.tOut, v.tIn, sub));
+  }
+  const joined = segs.flatMap((sg, i) => (i ? sg.curve.slice(1) : sg.curve));
+  const curve = resample(joined);
+  const shape = segs.length === 1 ? segs[0].label : `${segs.length}토막 (${[...new Set(segs.map((sg) => sg.label))].join('·')})`;
+  const seaShare = offLand(curve);
+  const ctrl = segs.some((sg) => sg.label.includes('휜'));
+  const smoothed = segs.every((sg) => sg.label.startsWith('옛'));
   // 옛 경로를 다듬은 선형은 옛 선로보다 길어지지 않는다 (작은 굽이만 편다)
-  const newKm = smoothed ? Math.min(polylineKm(curve), oldKm * 0.99) : polylineKm(curve) * 1.02;
+  const newKm = segs.reduce((acc, sg) => acc + (sg.label.startsWith('옛') ? Math.min(polylineKm(sg.curve), sg.subKm * 0.99) : polylineKm(sg.curve) * 1.02), 0);
   // 곡선 반경으로 낼 수 있는 속도 (v ≈ 4.7 √R, R은 m)
   let minR = Infinity;
   for (let k = 1; k < N; k++) {
@@ -4167,30 +4239,31 @@ function planStraighten() {
   const oldSpeed = Math.max(...via.map((i) => net.links[i].speed));
   let speed = Math.round(Math.min(vmax, isFinite(minR) ? 4.7 * Math.sqrt(minR) : vmax) / 10) * 10;
   if (smoothed) speed = Math.max(speed, Math.min(vmax, oldSpeed + 20));   // 다듬은 만큼은 옛 선로보다 빠르다
-  // 사이의 역: 옛 경로 순서대로, 새 선형 위 가장 가까운 자리로
-  const stSet = railStationSet(), riders = stationRiders();
-  const mids = [];
-  let node = A;
-  for (const i of via) { const l = net.links[i]; node = l.a === node ? l.b : l.a; if (node !== B && stSet.has(node)) mids.push(node); }
-  const proj = mids.map((n) => {
+  const nn = nodeNames();
+  const proj = mids.filter((n) => modeOf(n) !== 'drop').map((n) => {
     const c = nodeCoord(n);
     let bk = 0, bdd = Infinity;
     curve.forEach((q, k) => { const d = kmBetween(c[0], c[1], q[0], q[1]); if (d < bdd) { bdd = d; bk = k; } });
-    return { node: n, name: nodeNames().get(n)?.name || '', t: bk / N, pos: curve[bk], moveKm: bdd, riders: riders.get(n) || 0 };
+    const pin = modeOf(n) === 'pin';
+    return { node: n, name: nn.get(n)?.name || '', t: bk / N, pos: pin ? c : curve[bk], moveKm: pin ? 0 : bdd, riders: riders.get(n) || 0, pin };
   }).filter((x) => x.t > 0.01 && x.t < 0.99).sort((x, y) => x.t - y.t);
   const gap = straight.cls === 'hsr' ? 5 : 1.5;
   const kept = [];
   for (const s of proj) {
     const prev = kept[kept.length - 1];
-    if (prev && kmBetween(prev.pos[0], prev.pos[1], s.pos[0], s.pos[1]) < gap) {
-      if (s.riders > prev.riders) { s.merged = [...(prev.merged || []), prev]; kept[kept.length - 1] = s; } else (prev.merged ||= []).push(s);
+    if (prev && kmBetween(prev.pos[0], prev.pos[1], s.pos[0], s.pos[1]) < gap && !(prev.pin && s.pin)) {
+      // 너무 가까운 두 역은 하나로: 제자리 유지 역이 남고, 아니면 이용객이 많은 쪽이 남는다
+      const sWins = s.pin || (!prev.pin && s.riders > prev.riders);
+      if (sWins) { s.merged = [...(prev.merged || []), prev]; kept[kept.length - 1] = s; } else (prev.merged ||= []).push(s);
     } else kept.push(s);
   }
+  const dropped = mids.filter((n) => modeOf(n) === 'drop').map((n) => ({ node: n, name: nn.get(n)?.name || '' }));
+  const midList = mids.map((n) => ({ node: n, name: nn.get(n)?.name || '', mode: modeOf(n) }));
   const spec = NEW_BUILDS[straight.cls === 'hsr' ? 'hsr' : 'rail'];
   const kp = isKP(pa[1], pa[0]) && isKP(pb[1], pb[0]);
   const cost = Math.round(newKm * spec.perKm * (kp ? KP_COST_FACTOR : 1) + kept.length * MID_COST.rail);
   const newMin = (newKm / speed) * 60 + kept.length * P.railDwellMin;
-  return { A, B, via, oldKm, oldMin, newKm, newMin, speed, curve, kept, cost, years: spec.years, ctrl, shape, seaShare, tA, tB };
+  return { A, B, via, oldKm, oldMin, newKm, newMin, speed, curve, kept, dropped, mids: midList, cost, years: spec.years, ctrl, shape, seaShare, tA, tB };
 }
 
 /** 한반도 육지(시군구 경계) 안인지: 직선화 선형이 바다로 나가지 않게 */
@@ -4236,6 +4309,7 @@ function drawStraighten() {
   if (pl) {
     f.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: pl.curve } });
     for (const s of pl.kept) f.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: s.pos } });
+    for (const d of pl.dropped || []) f.push({ type: 'Feature', properties: { dropped: true }, geometry: { type: 'Point', coordinates: nodeCoord(d.node) } });
   }
   map.getSource('draft').setData({ type: 'FeatureCollection', features: f });
 }
@@ -4259,8 +4333,10 @@ function straightenPanel() {
       <tr><td>주행 시간 (정차 포함)</td><td>${fmtMin(pl.oldMin)} → <b>${fmtMin(pl.newMin)}</b></td></tr>
       <tr><td>사업비 · 공기</td><td>${formatWon(pl.cost)} · ${pl.years}년</td></tr>
     </table>
-    <h4>옮기는 역 (${pl.kept.length})</h4>
-    <div class="m">${pl.kept.map((k) => `${esc(k.name)} ${Math.round(k.moveKm * 1000).toLocaleString()}m 이동`).join(' · ') || '사이에 역이 없습니다.'}</div>
+    <h4>사이의 역 (${pl.mids.length})</h4>
+    <div class="m">${pl.kept.map((k) => `${esc(k.name)} ${k.pin ? '제자리' : `${Math.round(k.moveKm * 1000).toLocaleString()}m 이동`}`).join(' · ') || '사이에 남는 역이 없습니다.'}</div>
+    ${pl.dropped.length ? `<div class="m" style="margin-top:4px">폐역: ${pl.dropped.map((d) => esc(d.name)).join(' · ')}</div>` : ''}
+    <p class="hint">지도에서 사이의 역을 누르면 그 역을 자동(새 선로 위로)·제자리 유지(옛 자리에서 옛 선로 방향으로 지나감)·폐역 가운데 고를 수 있습니다.</p>
     ${merged.length ? `<div class="m" style="margin-top:4px">합치는 역: ${merged.join(' · ')}</div>` : ''}
     <p class="hint">완공되면 옛 구간 ${pl.via.length}개는 폐선하고, 역 이름과 운행 계통의 정차역은 새 자리로 이어집니다.</p>
     ${fundSelect([operatorOf(state, { mode: 1, kp: isKP(nodeCoord(pl.A)[1], nodeCoord(pl.A)[0]) ? 1 : 0 })])}
@@ -4278,9 +4354,22 @@ function bindStraighten(el) {
 
 /** 직선화 선로의 점: 양 끝 역과 옮긴 역. 양 끝은 바깥 선로 접선으로 들어오고 나간다 */
 function straightPoints(pl) {
-  const pts = [{ node: pl.A, lon: nodeCoord(pl.A)[0], lat: nodeCoord(pl.A)[1] },
-    ...pl.kept.map((k) => ({ node: null, lon: k.pos[0], lat: k.pos[1] })),
-    { node: pl.B, lon: nodeCoord(pl.B)[0], lat: nodeCoord(pl.B)[1] }];
+  // 역(양 끝·남는 역) 사이에 곡선을 따라 약 1.5km마다 선형 점: 지은 선로가 미리보기 곡선(제자리 역의 접선 포함) 그대로 간다
+  const N = pl.curve.length - 1;
+  const at = (pos) => { let bk = 0, bd = Infinity; pl.curve.forEach((q, k) => { const d = kmBetween(pos[0], pos[1], q[0], q[1]); if (d < bd) { bd = d; bk = k; } }); return bk; };
+  const stops = [{ node: pl.A, k: 0, pos: nodeCoord(pl.A) }, ...pl.kept.map((s) => ({ node: null, k: at(s.pos), pos: s.pos, st: s })), { node: pl.B, k: N, pos: nodeCoord(pl.B) }];
+  const pts = [];
+  stops.forEach((s, i) => {
+    pts.push({ node: s.node, lon: s.pos[0], lat: s.pos[1], station: !!s.st, ref: s.st });
+    const nx = stops[i + 1];
+    if (!nx) return;
+    const km = polylineKm(pl.curve.slice(s.k, nx.k + 1));
+    const n = Math.floor(km / 1.5);
+    for (let j = 1; j <= n; j++) {
+      const k = Math.round(s.k + ((nx.k - s.k) * j) / (n + 1));
+      if (k > s.k && k < nx.k) pts.push({ node: null, lon: pl.curve[k][0], lat: pl.curve[k][1], via: true });
+    }
+  });
   // curve.js의 tan은 경위도 단위 벡터이고 '그 점에서 새 선로가 떠나는 방향'이다: 끝점은 들어오는 방향을 뒤집는다
   const deg = ([e, n], lat, sgn) => { const v = [(sgn * e) / Math.cos((lat * Math.PI) / 180), sgn * n], d = Math.hypot(v[0], v[1]) || 1; return [v[0] / d, v[1] / d]; };
   if (pl.tA) pts[0].tan = deg(pl.tA, pts[0].lat, 1);
@@ -4293,7 +4382,7 @@ function commitStraighten() {
   if (!pl) return;
   const pts = straightPoints(pl);
   const names = {};
-  pl.kept.forEach((k, i) => { names[i + 1] = { name: k.name, kind: 'station', auto: false }; });
+  pts.forEach((q, i) => { if (q.station) names[i] = { name: q.ref.name, kind: 'station', auto: false }; });
   const r = startNewBuild(base, state, { type: straight.cls === 'hsr' ? 'hsr' : 'rail', points: pts, names, lineName: straight.line,
     extendOf: null, extraCost: pl.kept.length * MID_COST.rail });
   if (!r.ok) { alert(r.reason); return; }
@@ -4308,6 +4397,7 @@ function commitStraighten() {
   // 완공 때 폐선할 옛 구간과 역 옮기기 (옛 역 → 새 역, 합친 역은 남는 역으로)
   const newStations = p.stations;
   p.retire = pl.via;
+  p.dropStations = (pl.dropped || []).map((d) => d.node);   // 폐역: 완공 때 운행 계통 정차역에서 뺀다
   p.stationMap = {};
   pl.kept.forEach((k, i) => {
     p.stationMap[k.node] = newStations[i];
@@ -4325,12 +4415,13 @@ function afterStraighten(done) {
   const projs = done.filter((p) => p.retire);
   if (!projs.length) return;
   const map_ = Object.assign({}, ...projs.map((p) => p.stationMap));
+  const drop = new Set(projs.flatMap((p) => p.dropStations || []));
   const retired = new Set(projs.flatMap((p) => p.retire));
   const links = effectiveNetwork(base, state).links;
   for (const s of state.services || []) {
-    const touches = s.segs.some((sg) => sg.via.some((i) => retired.has(i))) || s.stops.some((n) => map_[n] != null);
+    const touches = s.segs.some((sg) => sg.via.some((i) => retired.has(i))) || s.stops.some((n) => map_[n] != null || drop.has(n));
     if (!touches) continue;
-    s.stops = [...new Set(s.stops.map((n) => map_[n] ?? n))];
+    s.stops = [...new Set(s.stops.filter((n) => !drop.has(n)).map((n) => map_[n] ?? n))];
     const plan = planService(links, railStationSet(), s.stops, s.kind, new Set(s.lines || [s.line]), s.type);
     if (plan) { s.segs = plan.segs; s.runMin = plan.runMin; s.km = plan.km; s.trains = tripsPerDay(s.sets, plan.runMin); }
   }
