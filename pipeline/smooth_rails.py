@@ -1,4 +1,4 @@
-"""철도·도시철도 선형 다듬기: 지그재그·갈고리 꼭짓점을 없앤다.
+"""철도·도시철도·간선도로 선형 다듬기: 지그재그·갈고리 꼭짓점과 본선에서 비켜난 노드를 바로잡는다.
 
 OSM 선로는 복선·여러 선로가 나란히 있어, 구간마다 다른 선로를 고르거나 역 노드(승강장 자리)로 꺾여 들어가면
 그림에서 수십~수백 m씩 좌우로 흔들린다 (경의선 수색–DMC–가좌처럼). 노드 위치·연결·길이는 그대로 두고
@@ -68,7 +68,7 @@ def _dp(pts, tol):
     return [p for p, k in zip(pts, keep) if k]
 
 
-def smooth_part(part):
+def smooth_part(part, zig=True):
     """한 줄(경위도 점 목록)을 다듬는다. 양 끝은 그대로. (새 점 목록, 고친 곳 수)"""
     if len(part) < 3:
         return part, 0
@@ -89,7 +89,7 @@ def smooth_part(part):
         if changed:
             continue
         # 2) 지그재그: k, k+1에서 반대로 꺾이고 둘 사이가 짧으면 가운데 한 점으로
-        for k in range(1, len(pts) - 2):
+        for k in (range(1, len(pts) - 2) if zig else ()):
             a1, d1 = _turn(pts[k - 1], pts[k], pts[k + 1])
             a2, d2 = _turn(pts[k], pts[k + 1], pts[k + 2])
             seg = math.hypot(pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1])
@@ -106,7 +106,7 @@ def smooth_part(part):
     return out, fixed
 
 
-def smooth_geom(geom):
+def smooth_geom(geom, zig=True):
     """None 구분자가 있는 도형 전체"""
     parts, cur = [], []
     for p in geom:
@@ -117,7 +117,7 @@ def smooth_geom(geom):
     parts.append(cur)
     out, fixed = [], 0
     for i, part in enumerate(parts):
-        sp, f = smooth_part(part)
+        sp, f = smooth_part(part, zig)
         fixed += f
         if i:
             out.append(None)
@@ -207,45 +207,124 @@ def bundle(links):
     return moved
 
 
+NODE_DEV_M, NODE_DEG, NODE_SKIP_M = 200.0, 35.0, 25.0
+
+
+def straighten_nodes(nodes, links):
+    """같은 이름 노선이 지나가는 노드(IC·역·분기)가 본선에서 옆으로 비켜나 있어 선이 갈고리처럼 꺾이면 노드를 본선 위로 옮긴다.
+
+    강변북로·내부순환로의 IC 노드가 램프 쪽에 놓여 본선이 IC마다 옆으로 갔다 돌아오던 것처럼, 노드에서 NODE_DEG 넘게 꺾이고
+    노드가 앞뒤 점을 잇는 선에서 NODE_DEV_M 안에 있으면, 노드를 그 선 위로 내리고 노드에 닿은 링크 끝을 모두 새 자리로 옮긴다.
+    노드 바로 옆(NODE_SKIP_M 안)의 꼭짓점은 갈고리의 일부로 보고 함께 뺀다. 링크 길이·연결은 그대로. 옮긴 노드 수를 돌려준다
+    """
+    from collections import defaultdict
+    adj = defaultdict(list)
+    for i, l in enumerate(links):
+        if None in l["geom"] or len(l["geom"]) < 2 or l["a"] == l["b"]:
+            continue
+        adj[l["a"]].append(i)
+        adj[l["b"]].append(i)
+    moved = 0
+    for n, ls in adj.items():
+        # 같은 수단·같은 이름으로 이 노드를 지나는 두 링크 (정확히 둘일 때만: 갈림목은 건드리지 않는다)
+        groups = defaultdict(list)
+        for i in ls:
+            if links[i]["name"]:
+                groups[(links[i]["mode"], links[i]["name"])].append(i)
+        pair = [g for g in groups.values() if len(g) == 2]
+        if len(pair) != 1:
+            continue
+        i1, i2 = pair[0]
+        c = (float(nodes[n][0]), float(nodes[n][1]))
+        lat0 = c[1]
+        out1 = links[i1]["geom"] if links[i1]["a"] == n else links[i1]["geom"][::-1]
+        out2 = links[i2]["geom"] if links[i2]["a"] == n else links[i2]["geom"][::-1]
+        P = lambda q: _xy(q, lat0)
+        cx = P(c)
+
+        def first_far(g):
+            for k in range(1, len(g)):
+                q = P(g[k])
+                if math.hypot(q[0] - cx[0], q[1] - cx[1]) > NODE_SKIP_M:
+                    return k
+            return None
+        k1, k2 = first_far(out1), first_far(out2)
+        if k1 is None or k2 is None:
+            continue
+        a, b = P(out1[k1]), P(out2[k2])
+        ang, dev = _turn(a, cx, b)
+        if abs(ang) < NODE_DEG or dev > NODE_DEV_M:
+            continue
+        wx, wy = b[0] - a[0], b[1] - a[1]
+        L = wx * wx + wy * wy
+        if L == 0:
+            continue
+        t = max(0.05, min(0.95, ((cx[0] - a[0]) * wx + (cx[1] - a[1]) * wy) / L))
+        kx = 111320 * math.cos(math.radians(lat0))
+        new = ((a[0] + wx * t) / kx, (a[1] + wy * t) / 110570)
+        nodes[n] = new
+        for i in ls:
+            l = links[i]
+            g = l["geom"] if l["a"] == n else l["geom"][::-1]
+            if i == i1:
+                g = [new] + g[k1:]
+            elif i == i2:
+                g = [new] + g[k2:]
+            else:
+                g = [new] + g[1:]
+            l["geom"] = g if l["a"] == n else g[::-1]
+        moved += 1
+    return moved
+
+
+def write_net(data, meta, nodes, links):
+    """노드 좌표·링크 길이·도형을 network.bin에 다시 쓴다 (나머지 열은 그대로)"""
+    meta_path, bin_path = data / "network.meta.json", data / "network.bin"
+    buf = bytearray(bin_path.read_bytes())
+    N, L = meta["nodes"], meta["links"]
+    buf[0:N * 8] = np.round(np.asarray(nodes, dtype=np.float64) * netpack.SCALE).astype("<i4").tobytes()
+    off_len = N * 8 + L * 4 * 2
+    buf[off_len:off_len + L * 4] = np.array([l["len"] for l in links], "<f4").tobytes()
+    off = 0
+    for size in [N * 2 * 4, L * 4, L * 4, L * 4, L * 2, L * 2, L * 2] + [L] * 7 + ([L * 2] if meta.get("hasOpen") else []):
+        off += size
+        off += (-off) % 4
+    counts = np.array([len(l["geom"]) for l in links], "<u4")
+    raw = np.array([(math.nan, math.nan) if p is None else p for l in links for p in l["geom"]], dtype=np.float64).ravel() * netpack.SCALE
+    verts = netpack.encode_verts(raw)
+    out = bytes(buf[:off]) + counts.tobytes()
+    out += b"\0" * ((-len(out)) % 4)
+    out += verts.tobytes()
+    out += b"\0" * ((-len(out)) % 4)
+    bin_path.write_bytes(out)
+    meta["verts"], meta["vertBytes"] = int(len(raw) // 2), int(len(verts))
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    print("network.bin", round(len(out) / 1e6, 2), "MB")
+
+
 def main():
     check = "--check" in sys.argv
     data = ROOT / "data"
-    _, links_, meta = netread.read(data)
+    nodes, links_, meta = netread.read(data)
+    nodes = [tuple(map(float, q)) for q in nodes]
     net = {"links": links_}
     for l in links_:   # NaN 구분자 → None
         l["geom"] = [None if x != x else (x, y) for x, y in l["geom"]]
     total = links = 0
     for l in net["links"]:
-        if l["mode"] not in (1, 2):
+        if l["mode"] not in (1, 2) and l["cls"] not in ("motorway", "trunk", "primary"):
             continue
-        g, f = smooth_geom(l["geom"])
+        g, f = smooth_geom(l["geom"], zig=l["mode"] != 0)   # 도로는 산길 굽이를 펴지 않게 지그재그 규칙을 빼고
         if f:
             total += f
             links += 1
             l["geom"] = g
-    print("fixed", total, "vertices on", links, "rail/metro links")
+    print("fixed", total, "vertices on", links, "rail/metro/main-road links")
+    print("straightened", straighten_nodes(nodes, net["links"]), "nodes onto their through line")
     print("bundled", bundle(net["links"]), "links onto parallel lines")
     if check:
         return
-    # 노드·링크 속성은 그대로 두고 꼭짓점 수·꼭짓점 바이트열만 다시 쓴다
-    meta_path, bin_path = data / "network.meta.json", data / "network.bin"
-    buf = bin_path.read_bytes()
-    N, L = meta["nodes"], meta["links"]
-    off = 0
-    for size in [N * 2 * 4, L * 4, L * 4, L * 4, L * 2, L * 2, L * 2] + [L] * 7 + ([L * 2] if meta.get("hasOpen") else []):
-        off += size
-        off += (-off) % 4
-    counts = np.array([len(l["geom"]) for l in net["links"]], "<u4")
-    raw = np.array([(math.nan, math.nan) if p is None else p for l in net["links"] for p in l["geom"]], dtype=np.float64).ravel() * netpack.SCALE
-    verts = netpack.encode_verts(raw)
-    out = bytearray(buf[:off]) + counts.tobytes()
-    out += b"\0" * ((-len(out)) % 4)
-    out += verts.tobytes()
-    out += b"\0" * ((-len(out)) % 4)
-    bin_path.write_bytes(bytes(out))
-    meta["verts"], meta["vertBytes"] = int(len(raw) // 2), int(len(verts))
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print("network.bin", round(len(out) / 1e6, 2), "MB")
+    write_net(data, meta, nodes, net["links"])
 
 
 if __name__ == "__main__":

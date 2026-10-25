@@ -20,7 +20,7 @@ import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.j
 import { kmBetween, routeKey } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
 import { helperPorts } from './sim/pool.js';
-import { smoothSegments, polylineKm, splineLine } from './game/curve.js';
+import { smoothSegments, polylineKm, splineLine, tangentCurve } from './game/curve.js';
 import { loadTerrain, terrainReady, terrainRoute, terrainProfile, terrainRule, terrainCostFactor } from './game/terrain.js';
 import { trackHeadings, branchTangent, unitDir } from './game/branch.js';
 import { stationCost, startStationAdd, nearestLocalRoad, icCost, startICAdd } from './game/points.js';
@@ -56,6 +56,7 @@ import { LANG, t, startI18n, setLang } from './i18n.js';
 startI18n();
 { const ll = document.querySelector('#ld-lang'); if (ll) { ll.textContent = LANG === 'en' ? '한국어' : 'English'; ll.addEventListener('click', (e) => { e.preventDefault(); setLang(LANG === 'en' ? 'ko' : 'en'); }); } }
 import { buildReport, reportHTML, downloadReportImage, TIME_PAIRS, GOALS } from './ui/report.js';
+import { openGazette } from './ui/gazette.js';
 
 const APP_VERSION = 'Alpha 0.1';
 const BUG_MAIL = 'evrgrn0528@gmail.com';
@@ -1458,7 +1459,7 @@ function withTangents(points, mode) {
   const out = points.map((p) => ({ ...p }));
   for (const [i, j] of [[0, 1], [out.length - 1, out.length - 2]]) {
     const p = out[i], q = out[j];
-    delete p.tan;
+    delete p.tan; delete p.lead;
     if (p.node == null && p.split == null) continue;
     // 노드에 붙었으면 그 노드에서 뻗는 방향, 선로 중간(아직 자르기 전)이면 그 자리의 선로 앞뒤 방향
     const dirs = p.node != null ? nodeDirs(p.node, mode) : splitDirs(p, mode);
@@ -1468,9 +1469,104 @@ function withTangents(points, mode) {
     let best = null, bd = -2;
     for (const d of cands) { const dot = (d[0] * to[0] + d[1] * to[1]) / tl; if (dot > bd) { bd = dot; best = d; } }
     // 다음 점과 아주 반대(120° 넘게)일 때만 접선을 놓는다 (그 밖에는 늘 기존 선로 방향으로 나가고 들어온다)
-    if (best && bd > -0.5) p.tan = best;
+    if (best && bd > -0.5) {
+      p.tan = best;
+      if (p.node != null && mode >= 1) Object.assign(p, branchClear(p, q, best, mode));
+    }
   }
   return out;
+}
+
+/** 노드 n에서 dir 쪽으로 뻗은 같은 수단 선로를 따라간 점들 (노드부터, 곧게 이어지는 다음 구간까지 maxKm) */
+function trackFrom(n, mode, dir, maxKm = 4) {
+  const pts = [nodeCoord(n)];
+  let node = n, d = dir, km = 0;
+  const seen = new Set();
+  while (km < maxKm) {
+    const c = nodeCoord(node);
+    let pick = null, bc = 0.9;
+    linksAt(node).forEach(([l, i]) => {
+      if (seen.has(i) || l.ext || linkAt(base, state, i).mode !== mode || / 환승$/.test(l.name || '')) return;
+      const g = [];
+      for (let k = 0; k + 1 < (l.geom || []).length; k += 2) if (l.geom[k] === l.geom[k]) g.push([l.geom[k], l.geom[k + 1]]);
+      if (g.length < 2) return;
+      if (kmBetween(c[0], c[1], g[0][0], g[0][1]) > kmBetween(c[0], c[1], g[g.length - 1][0], g[g.length - 1][1])) g.reverse();
+      const q = g.find((v) => kmBetween(c[0], c[1], v[0], v[1]) > 0.05) || g[g.length - 1];
+      const w = [q[0] - c[0], q[1] - c[1]], wl = Math.hypot(...w) || 1;
+      const cos = (w[0] * d[0] + w[1] * d[1]) / wl;
+      if (cos > bc) { bc = cos; pick = { i, g, other: l.a === node ? l.b : l.a }; }
+    });
+    if (!pick) break;
+    seen.add(pick.i);
+    for (const v of pick.g.slice(1)) {
+      const u = pts[pts.length - 1];
+      km += kmBetween(u[0], u[1], v[0], v[1]);
+      pts.push(v);
+      if (km >= maxKm) break;
+    }
+    const u = pts[pts.length - 2], v = pts[pts.length - 1];
+    const vl = Math.hypot(v[0] - u[0], v[1] - u[1]) || 1;
+    d = [(v[0] - u[0]) / vl, (v[1] - u[1]) / vl];
+    node = pick.other;
+  }
+  return pts;
+}
+
+/** 노드에 닿은 링크들 [[링크, 번호]] (새로 놓은 링크까지, 링크 수가 바뀌면 다시 만든다) */
+let adjCache = null;
+function linksAt(n) {
+  const count = base.links.length + state.newLinks.length;
+  if (!adjCache || adjCache.count !== count) {
+    const all = allLinks(), m = new Map();
+    all.forEach((l, i) => { for (const x of [l.a, l.b]) { if (!m.has(x)) m.set(x, []); m.get(x).push([l, i]); } });
+    adjCache = { count, m };
+  }
+  return adjCache.m.get(n) || [];
+}
+
+/** 선 ab와 cd가 서로 가로지르는가 */
+function segCross(a, b, c, d) {
+  const o = (p, q, r) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+  const d1 = o(c, d, a), d2 = o(c, d, b), d3 = o(a, b, c), d4 = o(a, b, d);
+  return d1 * d2 < 0 && d3 * d4 < 0;
+}
+
+/**
+ * 접선 방향으로 나가도 기존 선로를 평면으로 가로지르면(다음 점이 선로 반대편이면 곧 굽어 넘어간다),
+ * 그 선로를 따라 나란히 가다가 가로지르지 않고 빠질 수 있는 자리(200m씩, 최대 3km)에서 갈라진다.
+ * @returns {{tan:number[], lead?:number[][]}} 갈라지는 자리의 접선과, 노드에서 그 자리까지 선로를 따른 점들
+ */
+function branchClear(p, q, tan, mode) {
+  const tracks = nodeDirs(p.node, mode).map((d) => trackFrom(p.node, mode, d, 4));
+  const along = trackFrom(p.node, mode, tan, 3);
+  const crosses = (lead, t) => {
+    const curve = tangentCurve([p.lon, p.lat], [q.lon, q.lat], t, null, { lead1: lead, n: 30 });
+    const from = Math.max(0, (lead?.length || 1) - 1) + 2;
+    for (let k = from; k + 1 < curve.length; k++) {
+      for (const tr of tracks) for (let m = 0; m + 1 < tr.length; m++) if (segCross(curve[k], curve[k + 1], tr[m], tr[m + 1])) return true;
+    }
+    return false;
+  };
+  if (!crosses(null, tan)) return { tan };
+  const total = kmBetween(p.lon, p.lat, q.lon, q.lat);
+  // 선로를 200m 간격으로 따라가며 갈라질 자리를 찾는다
+  const lead = [along[0]];
+  let s = 0;
+  for (let m = 1; m < along.length; m++) {
+    const u = along[m - 1], v = along[m];
+    const seg = kmBetween(u[0], u[1], v[0], v[1]);
+    const steps = Math.max(1, Math.ceil(seg / 0.2));
+    const l = Math.hypot(v[0] - u[0], v[1] - u[1]) || 1;
+    const t = [(v[0] - u[0]) / l, (v[1] - u[1]) / l];
+    for (let k = 1; k <= steps; k++) {
+      const w = [u[0] + (v[0] - u[0]) * (k / steps), u[1] + (v[1] - u[1]) * (k / steps)];
+      s += seg / steps;
+      lead.push(w);
+      if (s > Math.min(3, total * 0.5)) return { tan };
+      if (!crosses(lead, t)) return { tan: t, lead: lead.slice() };
+    }
+  }
+  return { tan };
 }
 
 /** 선로 중간 한 점에서 선로가 뻗는 두 방향 (경위도 단위 벡터) */
@@ -1660,6 +1756,7 @@ async function commitDraft() {
     addContract(proj, pp, lineName || NEW_BUILDS[draft.type].label);
   }
   draft.points.forEach((p) => { p.reserved = false; });
+  const builtProj = state.projects[state.projects.length - 1];
   draft = null;
   endDraftView();
   map.getCanvas().style.cursor = '';
@@ -1669,7 +1766,9 @@ async function commitDraft() {
   refreshPoints();
   save(state);
   renderAll();
+  refreshClosed();   // 복원 계획을 벌이면 같은 노선의 폐선 표시도 지운다
   switchTab('projects');
+  showGazette(builtProj, { fromBuild: true });
 }
 
 function addFeatureStatesAfterRebuild() { refreshLinks(); }
@@ -2161,7 +2260,8 @@ function renderProjects() {
       <div class="progress"><div style="width:${Math.round(prog * 100)}%"></div></div>
       ${['service', 'vehicles', 'airRoute', 'rename'].includes(p.kind) ? '' : `<div class="pace">투입 속도 ${PACES.map((x) =>
         `<button class="small ${x === pace ? 'on' : ''}" data-pace="${p.id}" data-v="${x}">${Math.round(x * 100)}%</button>`).join('')}</div>`}
-      ${cancelBlocked(p) ? '' : `<div class="actions"><button class="small danger" data-cancel-proj="${p.id}" title="이미 낸 돈은 돌려받지 못하고 남은 사업비만 아낍니다">사업 취소</button></div>`}</div>`;
+      <div class="actions">${p.kind === 'new' ? `<button class="small" data-gazette="${p.id}" title="이 사업의 기본계획 고시문 (노선도·정거장 계획·위치도)">계획 고시문</button>` : ''}
+        ${cancelBlocked(p) ? '' : `<button class="small danger" data-cancel-proj="${p.id}" title="이미 낸 돈은 돌려받지 못하고 남은 사업비만 아낍니다">사업 취소</button>`}</div></div>`;
   };
   const ongoing = building.filter((p) => p.kind === 'osm'), mine = building.filter((p) => p.kind !== 'osm');
   el.innerHTML = `
@@ -2173,8 +2273,9 @@ function renderProjects() {
     <div class="list">${mine.map(row).join('') || '<p class="hint">진행 중인 사업이 없습니다.</p>'}</div>
     ${pppTableHTML()}
     <h3 style="margin-top:16px">완공 (${state.projects.filter((p) => p.status === 'done').length})</h3>
-    <div class="list">${done.map((p) => `<div class="item">${projectBounds(p) ? `<button class="t link" data-locate="${p.id}" title="지도에서 보기">${esc(p.label)}</button>` : `<div class="t">${esc(p.label)}</div>`}<div class="m">${p.doneYear}년 완공 · ${formatWon(p.cost)}</div></div>`).join('') || '<p class="hint">아직 없습니다.</p>'}</div>`;
+    <div class="list">${done.map((p) => `<div class="item">${projectBounds(p) ? `<button class="t link" data-locate="${p.id}" title="지도에서 보기">${esc(p.label)}</button>` : `<div class="t">${esc(p.label)}</div>`}<div class="m">${p.doneYear}년 완공 · ${formatWon(p.cost)}${p.kind === 'new' ? ` · <button class="t link" data-gazette="${p.id}">고시문</button>` : ''}</div></div>`).join('') || '<p class="hint">아직 없습니다.</p>'}</div>`;
   el.querySelectorAll('[data-locate]').forEach((b) => { b.onclick = () => locateProject(state.projects.find((x) => x.id === b.dataset.locate)); });
+  el.querySelectorAll('[data-gazette]').forEach((b) => { b.onclick = () => showGazette(state.projects.find((x) => x.id === b.dataset.gazette)); });
   el.querySelectorAll('[data-pace]').forEach((b) => {
     b.onclick = () => { setProjectPace(state, b.dataset.pace, +b.dataset.v); save(state); renderProjects(); renderTop(); };
   });
@@ -3371,7 +3472,7 @@ function fillPlanICs(type) {
 
 function plansHTML() {
   if (!plans.length) return '';
-  const started = new Set(state.projects.map((p) => p.plan).filter(Boolean));
+  const started = new Set([...state.projects.filter((p) => p.status !== 'cancelled').map((p) => p.plan).filter(Boolean), ...plansTakenByClosed()]);
   const groups = [...new Set(plans.map((p) => p.group))];
   return `<h4>계획 사업</h4>
     <p class="hint">국가·광역 교통계획(제4·5차 국가철도망 구축계획, 제3차 국가도로망 종합계획 등)에 나온 노선입니다. 계획 이름을 누르면 지도에 그 노선이 점선으로 보이고, 그 선이나 "열기"를 누르면 경유지가 찍힌 채로 그리기가 열립니다. 사업비를 확인한 뒤 착공합니다 (경로는 고칠 수 있습니다).</p>
@@ -5348,7 +5449,21 @@ const CLOSED_REUSE = 0.7;   // 옛 노반·터널·교량 자리를 다시 쓰�
 
 /** 재개통 사업을 벌인(공사 중·완공) 폐선은 지도에서 뺀다 */
 function closedTaken() {
-  return new Set(state.projects.filter((p) => p.closedLine != null && p.status !== 'cancelled').map((p) => p.closedLine));
+  const out = new Set(state.projects.filter((p) => p.closedLine != null && p.status !== 'cancelled').map((p) => p.closedLine));
+  // 같은 노선의 복원 계획(plans.json closedLine)을 벌였으면 그 폐선도 이미 벌인 사업이다 (금강산선 복원 = 금강산선 재개통)
+  for (const p of state.projects) {
+    if (p.status === 'cancelled' || !p.plan) continue;
+    const name = plans.find((x) => x.id === p.plan)?.closedLine;
+    if (name) closedLines.forEach((c) => { if (c.name === name) out.add(c.id); });
+  }
+  return out;
+}
+
+/** 폐선 재개통과 같은 사업인 복원 계획 id들 (그 폐선을 이미 재개통했으면 계획 목록에서도 벌인 것으로) */
+function plansTakenByClosed() {
+  const names = new Set(state.projects.filter((p) => p.closedLine != null && p.status !== 'cancelled')
+    .map((p) => closedLines.find((c) => c.id === p.closedLine)?.name).filter(Boolean));
+  return plans.filter((x) => x.closedLine && names.has(x.closedLine)).map((x) => x.id);
 }
 
 function refreshClosed() {
@@ -5446,10 +5561,12 @@ function startClosedReopen(id, type) {
   });
   const segFactor = points.slice(1).map(() => CLOSED_REUSE);
   const n0 = state.projects.length;
-  const r = startNewBuild(base, state, { type, points, names, lineName: c.name, title: `${c.label} 재개통`, segFactor });
+  // 양 끝은 기존 선로에 접선으로 붙는다 (옛 선형이 지금 역에 비스듬히 들어오던 것: 토해선–개풍 등)
+  const r = startNewBuild(base, state, { type, points: withTangents(points, NEW_BUILDS[type].mode), names, lineName: c.name, title: `${c.label} 재개통`, segFactor });
   if (!r.ok) { alert(r.reason); return; }
   if (state.projects.length > n0) state.projects[state.projects.length - 1].closedLine = id;
   save(state); refreshClosed(); refreshLinks(); renderAll(); switchTab('projects');
+  if (state.projects.length > n0) showGazette(state.projects[state.projects.length - 1], { fromBuild: true });
 }
 
 // ------------------------------------------------------------ 여객 재개통 (역이 없거나 거의 없어 아무도 타지 않는 선로)
@@ -5685,6 +5802,168 @@ function linesAt(node) {
     out.set(key, e);
   });
   return [...out.values()];
+}
+
+// ------------------------------------------------------------ 착공 고시문 (계획안 공문서)
+
+const GZ_COLOR = { hsr: '#1f5fd1', gtx: '#0c7d8c', rail: '#7b3fa0', rail1: '#7b3fa0', metro: '#1a9a6c', motorway: '#2e7d4f', trunk: '#3f8f5a', tunnelRoad: '#2e7d4f', tunnelRail: '#1f5fd1' };
+const GZ_AUTO = 'ukt-gazette-auto';
+
+function gazetteAuto() {
+  try { return localStorage.getItem(GZ_AUTO) !== '0'; } catch { return true; }
+}
+
+/** 기존 노선 짧은 이름 (환승 표시용) */
+function shortLine(name) {
+  return String(name || '').replace(/^(서울 지하철|수도권 전철|부산 도시철도|대구 도시철도|광주 도시철도|대전 도시철도|인천 도시철도)\s*/, '')
+    .replace(/^수도권광역급행철도\s*/, 'GTX-').replace(/인천국제공항선/, '공항철도').slice(0, 7);
+}
+
+/** 사업(새 노선)의 고시문 자료. 새 노선 사업이 아니면 null */
+function gazetteData(p) {
+  if (!p || p.kind !== 'new' || !(p.links || []).length) return null;
+  const spec = NEW_BUILDS[p.type];
+  if (!spec) return null;
+  const mine = new Set(p.links);
+  const ls = p.links.map((id) => linkAt(base, state, id)).filter(Boolean);
+  if (!ls.length) return null;
+  const rail = spec.mode >= 1;
+  const lineName = ls[0].name || p.label.replace(/\s*\(.*$/, '');
+  const color = GZ_COLOR[p.type] || '#7b3fa0';
+  // 노선을 따라 노드 차례와 누적 거리
+  const cum = new Map([[ls[0].a, 0]]);
+  const order = [ls[0].a];
+  const path = [];
+  let km = 0;
+  for (const l of ls) {
+    const g = [];
+    for (let k = 0; k + 1 < (l.geom || []).length; k += 2) if (l.geom[k] === l.geom[k]) g.push([l.geom[k], l.geom[k + 1]]);
+    const A = nodeCoord(l.a);
+    if (g.length && A && kmBetween(A[0], A[1], g[0][0], g[0][1]) > kmBetween(A[0], A[1], g[g.length - 1][0], g[g.length - 1][1])) g.reverse();
+    path.push(...(path.length ? g.slice(1) : g));
+    km += l.len || 0;
+    cum.set(l.b, km);
+    order.push(l.b);
+  }
+  const names = nodeNames();
+  // 새 정거장과, 노선이 지나는 기존 역(환승역)
+  const stSet = new Set(effectiveNetwork(base, state).stations);
+  const stops = rail ? order.filter((n) => (p.stations || []).includes(n) || stSet.has(n))
+    : order.filter((n, i) => i === 0 || i === order.length - 1 || names.get(n));
+  const code0 = 101;
+  const stations = stops.map((n, i) => {
+    const c = nodeCoord(n);
+    const zi = zoneAtPoint(c[0], c[1]);
+    const zf = zonesFC.features[zi]?.properties || {};
+    const others = rail ? linesAt(n).filter((x) => !mine.has(x.link) && x.name !== lineName) : [];
+    const transfers = others.map((x) => {
+      const raw = allLinks()[x.link];
+      const col = raw?.colour || (x.cls === 'hsr' ? '#1f5fd1' : x.mode === 2 ? '#1a9a6c' : '#7b3fa0');
+      return { name: x.name, short: shortLine(x.name), color: col };
+    });
+    return {
+      node: n, name: names.get(n)?.name || (rail ? `${code0 + i}정거장` : `${i + 1}`), code: rail ? String(code0 + i) : '', km: cum.get(n) || 0,
+      lon: c[0], lat: c[1], transfers, isNew: n >= base.nodes.length, place: [zf.province, zoneProps[zi]?.name].filter(Boolean).join(' '),
+    };
+  });
+  if (!stations.length) return null;
+  const first = stations[0], last = stations[stations.length - 1];
+  // 위치도 범위와 둘레 (시군구 경계, 기존 철도·간선도로, 시군구 이름)
+  const xs = path.map((q) => q[0]), ys = path.map((q) => q[1]);
+  let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const padX = Math.max((x1 - x0) * 0.12, 0.02), padY = Math.max((y1 - y0) * 0.12, 0.016);
+  x0 -= padX; x1 += padX; y0 -= padY; y1 += padY;
+  const inBox = ([x, y]) => x > x0 && x < x1 && y > y0 && y < y1;
+  const boundaries = [];
+  for (const f of zonesFC.features) {
+    const g = f.geometry;
+    const polys = g?.type === 'Polygon' ? [g.coordinates] : g?.type === 'MultiPolygon' ? g.coordinates : [];
+    for (const poly of polys) if (poly[0].some(inBox)) boundaries.push(poly[0]);
+  }
+  const lines = [];
+  allLinks().forEach((l, i) => {
+    if (mine.has(i) || l.ext || state.replaced?.[i]) return;
+    const e = linkAt(base, state, i);
+    if (e.mode === 0 && !['motorway', 'trunk'].includes(e.cls)) return;
+    const g = [];
+    for (let k = 0; k + 1 < (l.geom || []).length; k += 2) if (l.geom[k] === l.geom[k]) g.push([l.geom[k], l.geom[k + 1]]);
+    if (g.length < 2 || !g.some(inBox)) return;
+    const col = e.mode === 0 ? '#d9c9a3' : l.colour || (e.cls === 'hsr' ? '#7fa0de' : e.mode === 2 ? '#8cc9ad' : '#b9a3cc');
+    lines.push({ pts: g, color: col, w: e.mode === 0 ? 1.6 : 2 });
+  });
+  const labels = zoneProps.map((z) => (z.ext || !inBox([z.cx, z.cy]) ? null : { name: z.name, at: [z.cx, z.cy] })).filter(Boolean);
+  // 고시 번호·날짜 (사업마다 고정)
+  const h = [...p.id].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) >>> 0, 7);
+  const seq = 100 + state.projects.indexOf(p) + 1;
+  const date = `${p.startYear}. ${1 + (h % 12)}. ${1 + ((h >> 4) % 28)}.`;
+  const kp = ls.every((l) => l.kp);
+  const kindWord = p.type === 'metro' ? '도시철도' : p.type === 'hsr' ? '고속철도' : p.type === 'gtx' ? '광역급행철도' : rail ? '철도' : '도로';
+  const reopen = p.closedLine != null || !!plans.find((x) => x.id === p.plan)?.closedLine;
+  const title = reopen ? `「${lineName} 재개통 사업」 기본계획 고시`
+    : p.type === 'metro' ? `「${lineName} 도시철도 건설사업」 기본계획 승인 고시`
+      : rail ? `「${lineName} ${p.extension ? '연장 ' : ''}건설사업」 기본계획 고시` : `「${lineName} 건설사업」 도로구역 결정 고시`;
+  const law = p.type === 'metro' ? '「도시철도법」' : rail ? '「철도의 건설 및 철도시설 유지관리에 관한 법률」' : '「도로법」';
+  const lead = rail
+    ? `${law}에 따라 ${lineName} 건설사업의 기본계획을 다음과 같이 수립하였으므로 이를 고시합니다.`
+    : `${law}에 따라 ${lineName} 건설사업의 도로구역을 다음과 같이 결정하였으므로 이를 고시합니다.`;
+  const total = p.cost;
+  const fr = (k, r) => [k, formatWon(Math.round(total * r)), `${Math.round(r * 100)}%`];
+  const sum = ['계', formatWon(total), '100%'];
+  const funding = p.fund === 'ppp' ? [fr('정부 보조', p.govShare || 0), fr('민간 투자', 1 - (p.govShare || 0)), sum]
+    : p.fund && p.fund !== 'gov' ? [['운영사 자체 재원', formatWon(total), '100%'], sum]
+      : p.type === 'metro' ? [fr('국비', 0.6), fr('지방비', 0.4), sum]
+        : p.type === 'motorway' || p.type === 'tunnelRoad' ? [fr('국비', 0.5), fr('한국도로공사', 0.5), sum]
+          : kp ? [fr('국비 (남북 통합 특별회계)', 1), sum] : [fr('국비', 1), sum];
+  const stopWord = rail ? '정거장' : 'IC·JCT';
+  const transferCount = new Set(stations.flatMap((s) => s.transfers.map((x) => x.name))).size;
+  const catch1 = rail ? Math.round(stations.reduce((acc, s) => acc + popWithin(s.lon, s.lat, 1), 0)) : 0;
+  const effects = rail ? [
+    `${first.name}–${last.name} ${km.toFixed(1)}km 구간에 ${stations.length}개 정거장을 놓아 철도 서비스 소외 지역을 해소`,
+    `정거장 반경 1km 안 인구 약 ${(catch1 / 10000).toFixed(1)}만 명에게 철도 접근성 제공`,
+    transferCount ? `기존 ${transferCount}개 노선과 환승 연계로 광역 철도망 효율 향상` : '기존 철도망과의 연계 수송 체계 구축',
+    kp ? '남북 철도망 통합과 북측 지역 균형 발전에 기여' : '도로 혼잡 완화와 온실가스 감축',
+  ] : [
+    `${first.name}–${last.name} ${km.toFixed(1)}km 구간 신설로 지역 간 통행 시간 단축`,
+    `${stations.length}개 나들목·분기점으로 주변 간선도로와 연결`,
+    '기존 도로의 상습 정체 완화와 물류 비용 절감',
+  ];
+  const org = '통일한국 국토교통부';
+  const tracks = spec.attrs?.tracks === 1 ? '단선' : '복선';
+  const electric = spec.attrs?.power && spec.attrs.power !== 'none' ? '전철' : '';
+  const overview = [
+    ['사 업 명', esc(`${lineName} ${reopen ? '재개통' : p.extension ? '연장' : '건설'}사업`)],
+    ['사업 구간', esc(`${first.name} ~ ${last.name} (${first.place} ~ ${last.place})`)],
+    ['사업 규모', esc(`연장 ${km.toFixed(1)}km, ${stopWord} ${stations.length}개소${rail ? `, ${tracks}${electric}` : ''}`)],
+    ['설계 속도', esc(`${spec.attrs?.speed || '-'}km/h`)],
+    ['총사업비', esc(formatWon(p.cost))],
+    ['사업 기간', esc(`${p.startYear}년 ~ ${p.doneYear}년 (${p.years}년)`)],
+    ['사업 방식', esc(p.fund === 'ppp' ? `민간투자사업 (정부 보조 ${Math.round((p.govShare || 0) * 100)}%)` : p.fund && p.fund !== 'gov' ? '운영사 자체 사업' : '재정사업')],
+    ['사업 시행자', esc(rail ? (p.type === 'metro' ? (first.place.split(' ')[0] || '해당 광역자치단체') : '국가철도공단')
+      : p.type === 'motorway' || p.type === 'tunnelRoad' ? '한국도로공사' : '지방국토관리청')],
+  ];
+  const offices = [...new Set(stations.map((s) => s.place.split(' ').slice(-1)[0]).filter(Boolean))].slice(0, 6).join('·');
+  return {
+    org, orgSub: rail ? '철도국 · 철도건설과' : '도로국 · 도로건설과', docNo: `국토교통부 고시 제${p.startYear}-${seq}호`, title, lead, date,
+    signer: '국토교통부장관', sealText: '국토교통부|장관인', lineName, color, stations, path, bbox: [[x0, y0], [x1, y1]],
+    context: { boundaries, lines, labels }, overview, funding, stopWord,
+    schedule: [
+      ['기본계획 고시', `${p.startYear}년`, '본 고시'],
+      ['기본·실시설계', `${p.startYear}년`, '설계·인허가 병행'],
+      ['착공', `${p.startYear}년`, `${kindWord} 공사 착수`],
+      [rail ? '개통 목표' : '준공 목표', `${p.doneYear}년`, `공사 기간 ${p.years}년`],
+    ],
+    effects,
+    inspect: `관계 도서는 ${org} ${rail ? '철도국' : '도로국'}과 ${offices || '관할'} 등 관할 시·군·구청에 갖추어 두고 일반에게 보입니다.`,
+  };
+}
+
+/** 고시문 창. fromBuild: 착공 직후 저절로 여는 경우 ('착공할 때마다 열기'를 끄면 안 연다) */
+function showGazette(p, { fromBuild = false } = {}) {
+  if (fromBuild && !gazetteAuto()) return false;
+  const doc = gazetteData(p);
+  if (!doc) return false;
+  openGazette(doc, { auto: gazetteAuto(), onAuto: (on) => { try { localStorage.setItem(GZ_AUTO, on ? '1' : '0'); } catch { /* 저장 못 해도 이번 창은 그대로 */ } } });
+  return true;
 }
 
 /** 반경 km 안의 인구 (1km 인구 격자) */
