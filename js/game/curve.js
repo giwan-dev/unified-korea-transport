@@ -82,6 +82,80 @@ export function splineLine(pts, before = null, after = null, stepKm = 0.12) {
   return out;
 }
 
+/**
+ * 지형 따라 잡은 꺾인 선형을 곡선반경 rMinKm 아래로 꺾이지 않는 원곡선 선형으로 바꾼다.
+ * 1) 펴기: 꼭짓점마다 넣을 수 있는 가장 큰 원곡선 반경(옆 변의 절반까지 쓰는 원) = (짧은 변/2) / tan(꺾인 각/2)을 어림해,
+ *    모자라면 그 점을 양 옆 점의 가운데 쪽으로 당긴다. 고정점(kind 1·2)은 움직이지 않고, 모자라면 옆 점을 고정점을 지나는 직선 쪽으로 당긴다.
+ * 2) 원곡선: 역·IC(kind 2)가 아닌 꼭짓점은 그 반경의 원호 점들로 바꾼다. 곡선이 꼭짓점을 지나며 꺾이면(Catmull-Rom은 점에서 곡률이 몰린다)
+ *    반경이 커도 급해 보이므로, 꼭짓점을 지나지 않고 원호로 돌아 나가게 한다. 접선 이끎 점(kind 1)도 원호로: 접선 위에서 갈라진다
+ * ok(lon, lat)가 false인 자리(바다)로는 옮기지 않는다
+ * @param {{lon:number, lat:number}[]} pts 선형 점
+ * @param {number[]} kind 점마다 0 움직일 수 있음 · 1 움직이지 않지만 원호로 바꿀 수 있음 · 2 그대로 (역·IC)
+ * @param {(p:{lon:number, lat:number}) => object} mk 원호 점 객체를 만드는 함수
+ * @returns {{lon:number, lat:number}[]}
+ */
+export function easeCurves(pts, kind, rMinKm, mk, ok = null) {
+  if (pts.length < 3 || !(rMinKm > 0)) return pts;
+  const ck = Math.cos((pts.reduce((s, p) => s + p.lat, 0) / pts.length) * Math.PI / 180);
+  let P = pts.map((p) => [p.lon * ck * 111.32, p.lat * 111.32]);   // km 평면
+  const back = (q) => [q[0] / (ck * 111.32), q[1] / 111.32];
+  // 변 i→i+1에서 꼭짓점 i가 쓸 수 있는 몫: 양 끝 모두 원호면 절반, 상대가 끝 역이면 거의 다
+  const share = (i, j) => (kind[j] === 2 && (j === 0 || j === P.length - 1) ? 0.9 : 0.5);
+  const turn = (i) => {
+    const a = P[i - 1], b = P[i], c = P[i + 1];
+    const s1 = Math.hypot(b[0] - a[0], b[1] - a[1]), s2 = Math.hypot(c[0] - b[0], c[1] - b[1]);
+    if (s1 < 1e-6 || s2 < 1e-6) return { R: 0, th: Math.PI, s1, s2, t: 0 };
+    const cos = ((b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1])) / (s1 * s2);
+    const th = Math.acos(Math.max(-1, Math.min(1, cos)));
+    const t = Math.min(s1 * share(i, i - 1), s2 * share(i, i + 1));
+    return { R: th < 1e-4 ? Infinity : t / Math.tan(th / 2), th, s1, s2, t };
+  };
+  const move = (j, to, w) => {
+    const q = [P[j][0] + (to[0] - P[j][0]) * w, P[j][1] + (to[1] - P[j][1]) * w];
+    if (ok) { const [lon, lat] = back(q); if (!ok(lon, lat)) return; }
+    P[j] = q;
+  };
+  for (let it = 0; it < 200; it++) {
+    let bad = 0;
+    for (let i = 1; i + 1 < P.length; i++) {
+      const { R, s1, s2 } = turn(i);
+      if (R >= rMinKm) continue;
+      bad++;
+      if (!kind[i]) { move(i, [(P[i - 1][0] + P[i + 1][0]) / 2, (P[i - 1][1] + P[i + 1][1]) / 2], 0.3); continue; }
+      const a = P[i - 1], b = P[i], c = P[i + 1];
+      if (!kind[i + 1]) move(i + 1, [b[0] + (b[0] - a[0]) / s1 * s2, b[1] + (b[1] - a[1]) / s1 * s2], 0.25);
+      if (!kind[i - 1]) move(i - 1, [b[0] + (b[0] - c[0]) / s2 * s1, b[1] + (b[1] - c[1]) / s2 * s1], 0.25);
+    }
+    if (!bad) break;
+  }
+  // 거의 곧은(1.5° 아래) 움직일 수 있는 점은 뺀다
+  for (let i = 1; i + 1 < P.length; i++) {
+    if (!kind[i] && turn(i).th < 0.026) { P.splice(i, 1); kind = kind.filter((_, k) => k !== i); pts = pts.filter((_, k) => k !== i); i--; }
+  }
+  const out = [pts[0]];
+  for (let i = 1; i + 1 < P.length; i++) {
+    const { th, t, s1, s2 } = turn(i);
+    if (kind[i] === 2 || th < 0.026 || !(t > 0)) {
+      if (kind[i] || th >= 0.026) { if (!kind[i]) { const [lon, lat] = back(P[i]); pts[i].lon = lon; pts[i].lat = lat; } out.push(pts[i]); }
+      continue;
+    }
+    const a = P[i - 1], b = P[i], c = P[i + 1];
+    const u1 = [(b[0] - a[0]) / s1, (b[1] - a[1]) / s1], u2 = [(c[0] - b[0]) / s2, (c[1] - b[1]) / s2];
+    const R = t / Math.tan(th / 2), side = Math.sign(u1[0] * u2[1] - u1[1] * u2[0]) || 1;
+    const T1 = [b[0] - u1[0] * t, b[1] - u1[1] * t];
+    const C = [T1[0] - u1[1] * side * R, T1[1] + u1[0] * side * R];
+    const m = Math.max(2, Math.ceil(th / 0.14));   // 약 8°마다
+    for (let k = 0; k <= m; k++) {
+      const ang = side * th * (k / m), v = [T1[0] - C[0], T1[1] - C[1]];
+      const q = [C[0] + v[0] * Math.cos(ang) - v[1] * Math.sin(ang), C[1] + v[0] * Math.sin(ang) + v[1] * Math.cos(ang)];
+      const [lon, lat] = back(q);
+      out.push(mk({ lon, lat }));
+    }
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
 export function polylineKm(line) {
   let d = 0;
   for (let i = 0; i + 1 < line.length; i++) d += kmBetween(line[i][0], line[i][1], line[i + 1][0], line[i + 1][1]);

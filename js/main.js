@@ -20,7 +20,7 @@ import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.j
 import { kmBetween, routeKey } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
 import { helperPorts } from './sim/pool.js';
-import { smoothSegments, polylineKm, splineLine, tangentCurve } from './game/curve.js';
+import { smoothSegments, polylineKm, splineLine, tangentCurve, easeCurves } from './game/curve.js';
 import { loadTerrain, terrainReady, terrainRoute, terrainProfile, terrainRule, terrainCostFactor, terrainAt } from './game/terrain.js';
 import { trackHeadings, branchTangent, unitDir } from './game/branch.js';
 import { stationCost, startStationAdd, nearestLocalRoad, icCost, startICAdd } from './game/points.js';
@@ -1672,7 +1672,7 @@ function terrainAlign() {
     const cos = (e * ox + nn * oy) / (m * ol);
     if (cos < 0.26) return null;
     const L = Math.min(4, Math.max(0.5, d * 0.25)) * cos * cos / 111;
-    const q = { node: null, lon: p.lon + (e / m) * L / ck, lat: p.lat + (nn / m) * L, split: null, via: true };
+    const q = { node: null, lon: p.lon + (e / m) * L / ck, lat: p.lat + (nn / m) * L, split: null, via: true, leadPt: true };
     // 이끎 점이 바다·호수 위면 두지 않는다 (항구역에서 접선이 바다를 향하면 그리로 나갔다가 되돌아 고리가 생긴다)
     const t = terrainAt(q.lon, q.lat);
     if (t && (t.sea || t.water)) return null;
@@ -1699,7 +1699,10 @@ function terrainAlign() {
     for (const [lon, lat] of via) out.push({ node: null, lon, lat, split: null, via: true });
     if (li) out.push(li);
   });
-  draft.points = out;
+  // 지형 경로는 칸을 따라 꺾이므로, 수단별 최소 곡선반경을 지키게 선형 점을 편다 (역·IC·접선 이끎 점은 그대로)
+  const dry = (lon, lat) => { const t = terrainAt(lon, lat); return !(t && t.sea); };
+  const kinds = out.map((p) => (!p.via ? 2 : p.leadPt ? 1 : 0));
+  draft.points = changed ? easeCurves(out, kinds, rule.minRadiusKm * 1.1, ({ lon, lat }) => ({ node: null, lon, lat, split: null, via: true }), dry) : out;
   drawDraft();
   renderBuild();
   if (!changed) alert('지형을 따를 구간이 없습니다 (점 사이가 3km보다 가깝거나 지형 자료 범위 밖).');

@@ -31,13 +31,14 @@ export function terrainAt(lon, lat) {
 
 /**
  * 수단별 선형 기준. gmax: 이 경사까지는 땅 위로 (넘으면 터널·깎기), tunnel: 터널 1km를 평지 몇 km로 치는지,
- * bridge·sea: 강·호수·바다 위 1km를 몇 km로, rough: 거칠기(m)가 이만큼이면 터널 1km만큼 무겁다
+ * bridge·sea: 강·호수·바다 위 1km를 몇 km로, rough: 거칠기(m)가 이만큼이면 터널 1km만큼 무겁다,
+ * minRadiusKm: 지형 따라 잡은 선형을 이 곡선반경 아래로 꺾지 않는다
  */
 const RULES = {
-  hsr: { gmax: 0.025, tunnel: 2.2, bridge: 1.8, sea: 8, rough: 90, simplifyKm: 2.5 },
-  conv: { gmax: 0.02, tunnel: 2.8, bridge: 2.0, sea: 9, rough: 70, simplifyKm: 1.5 },
-  motorway: { gmax: 0.05, tunnel: 2.6, bridge: 1.9, sea: 9, rough: 80, simplifyKm: 1.5 },
-  road: { gmax: 0.08, tunnel: 3.2, bridge: 2.2, sea: 10, rough: 60, simplifyKm: 1 },
+  hsr: { gmax: 0.025, tunnel: 2.2, bridge: 1.8, sea: 8, rough: 90, simplifyKm: 2.5, minRadiusKm: 5 },
+  conv: { gmax: 0.02, tunnel: 2.8, bridge: 2.0, sea: 9, rough: 70, simplifyKm: 1.5, minRadiusKm: 1.2 },
+  motorway: { gmax: 0.05, tunnel: 2.6, bridge: 1.9, sea: 9, rough: 80, simplifyKm: 1.5, minRadiusKm: 1 },
+  road: { gmax: 0.08, tunnel: 3.2, bridge: 2.2, sea: 10, rough: 60, simplifyKm: 1, minRadiusKm: 0.4 },
 };
 export function terrainRule(type) {
   // 도시철도·대심도 광역급행철도·해저터널은 땅 밑이라 지형을 보지 않는다
