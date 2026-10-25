@@ -322,6 +322,41 @@ const METRO_COLOR = ['case', ['==', ['get', 'colour'], ''], '#1a9a6c', ['get', '
 
 let linksCache = null;
 /** 계산망 선 자료를 바꾼다 (혼잡 주의 표시를 다시 만들 때 쓰려고 기억해 둔다) */
+const HOUSING_R = { s: 0.6, m: 1.0, l: 1.6 };   // 택지지구 반지름 (km): 소규모·중규모·신도시급
+
+/**
+ * 택지지구를 배경 지도에 그린다. 다 지은 곳은 시가지 면과 150m 간격 격자 도로(지구마다 방향이 다르다), 공사 중은 점선 경계
+ * @param {{id:string, name:string, lon:number, lat:number, size:string, done:boolean}[]} list
+ */
+export function setHousing(map, list) {
+  const src = map?.getSource('housing');
+  if (!src) return;
+  const features = [];
+  for (const h of list || []) {
+    const R = HOUSING_R[h.size] || 1;
+    const kx = 111.32 * Math.cos((h.lat * Math.PI) / 180), ky = 110.57;
+    const at = (x, y) => [h.lon + x / kx, h.lat + y / ky];
+    const ring = [];
+    // 둥근 단지가 아니라 조금 일그러진 모양 (지구마다 고정)
+    const seed = [...h.id].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 11);
+    const wob = (k) => 1 + 0.12 * Math.sin(k * 2 + (seed % 7)) + 0.06 * Math.cos(k * 3 + (seed % 5));
+    for (let k = 0; k <= 36; k++) { const t = (k / 36) * 2 * Math.PI; ring.push(at(R * wob(t) * Math.cos(t), R * wob(t) * Math.sin(t))); }
+    features.push({ type: 'Feature', properties: { k: 'area', done: !!h.done }, geometry: { type: 'Polygon', coordinates: [ring] } });
+    features.push({ type: 'Feature', properties: { k: 'label', name: h.done ? h.name : `${h.name} (공사 중)` }, geometry: { type: 'Point', coordinates: [h.lon, h.lat] } });
+    if (!h.done) continue;
+    const ang = ((seed % 90) * Math.PI) / 180, c = Math.cos(ang), sn = Math.sin(ang);
+    const r = R * 0.92;
+    for (let off = -r + 0.075; off < r; off += 0.15) {
+      const half = Math.sqrt(Math.max(0, r * r - off * off));
+      for (const [ux, uy, vx, vy] of [[c, sn, -sn, c], [-sn, c, c, sn]]) {
+        const p0 = at(vx * off - ux * half, vy * off - uy * half), p1 = at(vx * off + ux * half, vy * off + uy * half);
+        features.push({ type: 'Feature', properties: { k: 'street' }, geometry: { type: 'LineString', coordinates: [p0, p1] } });
+      }
+    }
+  }
+  src.setData({ type: 'FeatureCollection', features });
+}
+
 export function setLinks(map, fc) {
   linksCache = fc;
   map.getSource('links').setData(fc);
@@ -390,6 +425,21 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addSource('waterline', { type: 'geojson', data: 'data/base/waterline.geojson' });
   map.addLayer({ id: 'water-area-line', type: 'line', source: 'waterline', minzoom: 8,
     paint: { 'line-color': (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? '#4f86ad' : '#5b8fb5'), 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 0.6, 11, 1.1, 14, 1.8] } }, below);
+
+  // 택지지구: 공사 중이면 점선 경계, 다 지으면 배경 지도에 시가지 면·단지 안 도로·지구 이름 (setHousing)
+  map.addSource('housing', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  const dark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+  map.addLayer({ id: 'housing-fill', type: 'fill', source: 'housing', filter: ['==', ['get', 'k'], 'area'],
+    paint: { 'fill-color': dark ? '#4a4540' : '#e9dfcf', 'fill-opacity': ['case', ['get', 'done'], 0.92, 0.25] } }, below);
+  map.addLayer({ id: 'housing-street', type: 'line', source: 'housing', filter: ['==', ['get', 'k'], 'street'], minzoom: 11,
+    paint: { 'line-color': dark ? '#6b6560' : '#ffffff', 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 0.6, 14, 2.2] } }, below);
+  map.addLayer({ id: 'housing-edge', type: 'line', source: 'housing', filter: ['all', ['==', ['get', 'k'], 'area'], ['get', 'done']],
+    paint: { 'line-color': dark ? '#a39a8c' : '#b8a888', 'line-width': 1.2 } }, below);
+  map.addLayer({ id: 'housing-edge-building', type: 'line', source: 'housing', filter: ['all', ['==', ['get', 'k'], 'area'], ['!', ['get', 'done']]],
+    paint: { 'line-color': dark ? '#a39a8c' : '#a08a60', 'line-width': 1.4, 'line-dasharray': [3, 2] } }, below);
+  map.addLayer({ id: 'housing-label', type: 'symbol', source: 'housing', filter: ['==', ['get', 'k'], 'label'], minzoom: 10,
+    layout: { 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 11.5 },
+    paint: { 'text-color': dark ? '#d8cfc0' : '#7a6a4f', 'text-halo-color': dark ? '#22272d' : '#ffffff', 'text-halo-width': 1.4 } });
 
   map.addSource('links', { type: 'geojson', data: linksFC, promoteId: 'id' });
   // 배경 OSM 도로(골목·이면도로)는 인구 색칠 위, 계산망 도로 아래에 그린다 (색칠 밑에 있으면 도심 도로망이 안 보인다)

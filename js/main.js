@@ -11,7 +11,7 @@ import {
 } from './game/state.js';
 import { MEGA, TSR_FREIGHT, megaGeometry, applyMega } from './game/mega.js';
 import { AIRPORT } from './game/catalog.js';
-import { setNameResolver, setLabelGroup, refreshNames, setRegions, setZoneOutline, setLinks, paintHotspots } from './ui/map.js';
+import { setNameResolver, setLabelGroup, refreshNames, setRegions, setZoneOutline, setLinks, paintHotspots, setHousing } from './ui/map.js';
 import { isNarrow, twinPrimary, mergeTwins, ROAD_RANK, motorwayMainline, bridgeMainlineGaps, flattenMainline, connectJunctions, smoothMainlineEnds, mainlineBubbles, roundMainlineCorners } from './ui/traffic.js';
 import { subFold, initPanelUI, toast } from './ui/panel.js';
 import { initPalette, openPalette, goSection } from './ui/palette.js';
@@ -2014,6 +2014,7 @@ function renderVisible() {
 function renderAll() {
   stalePanels.clear();
   renderRegions();
+  if (map) setHousing(map, state.housing || []);   // 다 지은 택지지구는 배경 지도에 시가지로
   renderTop(); renderLegend(); renderStatus(); renderBuild(); renderProjects(); renderRequests(); renderOps(); renderSettings(); renderStats(); renderSelection();
 }
 
@@ -2326,14 +2327,28 @@ function locateProject(p) {
   locateFlash = { ids, t: setTimeout(() => { ids.forEach((i) => map.setFeatureState({ source: 'links', id: i }, { sel: false })); locateFlash = null; }, 3000) };
 }
 
+let reqSide = 'all';   // 확장 요구 목록: 전체·남·북
+
+/** 패널을 다시 그려도 스크롤 자리를 지킨다 (확장 요구를 들어준 뒤 목록 맨 위로 튀지 않게) */
+function keepScroll(el, fn) {
+  const boxes = [];
+  for (let e = el; e; e = e.parentElement) if (e.scrollTop) boxes.push([e, e.scrollTop]);
+  fn();
+  for (const [e, t] of boxes) e.scrollTop = t;
+}
+
 function renderRequests() {
   const el = $('[data-panel=requests]');
   const c = $('#req-count');
   c.hidden = requests.length === 0;
   c.textContent = requests.length;
+  const nKR = requests.filter((r) => !r.kp).length, nKP = requests.length - nKR;
+  const shown = requests.map((r, i) => [r, i]).filter(([r]) => reqSide === 'all' || (reqSide === 'KP') === !!r.kp);
+  const sideBtn = (v, label) => `<button class="small ${reqSide === v ? 'on' : ''}" data-req-side="${v}">${label}</button>`;
   el.innerHTML = `${proposalsHTML()}<h3>확장 요구 (${requests.length})</h3>
     <p class="hint">혼잡도(V/C)가 1.0을 넘는 상태가 2년 이상 이어진 노선입니다(남은 고속도로·간선국도, 북은 모든 도로, 그리고 철도). 방치하면 지지율이 떨어집니다. 넓혀도 통행비용이 줄면 수요가 다시 늘 수 있습니다.</p>
-    <div class="list">${requests.map((r, i) => {
+    <div class="pace">${sideBtn('all', `전체 ${requests.length}`)}${sideBtn('KR', `남 ${nKR}`)}${sideBtn('KP', `북 ${nKP}`)}</div>
+    <div class="list">${shown.map(([r, i]) => {
       const l = linkAt(base, state, r.links[0]);
       const fix = defaultFix(l);
       const cost = fix ? r.links.reduce((sum, id) => sum + upgradeCost(fix, linkAt(base, state, id)), 0) : 0;
@@ -2347,6 +2362,7 @@ function renderRequests() {
     }).join('') || '<p class="hint">요구가 없습니다.</p>'}</div>
     ${policyHTML()}`;
   bindPolicy(el);
+  el.querySelectorAll('[data-req-side]').forEach((b) => { b.onclick = () => { reqSide = b.dataset.reqSide; keepScroll(el, renderRequests); }; });
   el.querySelectorAll('[data-fix]').forEach((b) => {
     b.onclick = () => {
       const r = requests[+b.dataset.fix];
@@ -2354,7 +2370,9 @@ function renderRequests() {
       const res = startUpgrade(base, state, r.links, fix.id);
       if (!res.ok) return alert(res.reason);
       requests = requests.filter((q) => q !== r);
-      save(state); refreshLinks(); renderAll();
+      // 목록을 닫거나 맨 위로 돌리지 않고 그 자리에서 다음 요구를 이어서 볼 수 있게
+      save(state); refreshLinks();
+      keepScroll(el, () => { renderTop(); renderProjects(); renderRequests(); });
     };
   });
   el.querySelectorAll('[data-goto]').forEach((b) => { b.onclick = () => gotoLinks(requests[+b.dataset.goto].links); });
@@ -2364,7 +2382,7 @@ function renderRequests() {
       const r = requests[+b.dataset.dismiss];
       state.dismissed[r.key] = state.year;
       requests = requests.filter((q) => q !== r);
-      save(state); renderRequests();
+      save(state); keepScroll(el, renderRequests);
     };
   });
 }
