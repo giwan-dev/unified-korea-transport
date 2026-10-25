@@ -1,5 +1,6 @@
 // 신규 역·IC·JCT 이름 자동 생성.
-// 가장 가까운 지명(도시 > 읍 > 동·마을 순으로 가중)을 따고, 겹치면 방향 접두어(동·서·남·북)를 붙인다.
+// 역은 곁의 기존 역(환승)·놓인 동 이름을 먼저 보고(stationHints), 없으면 가장 가까운 지명(도시 > 읍 > 동·마을 순으로 가중)을 따고,
+// 겹치면 방향 접두어(동·서·남·북)를 붙인다.
 
 import { kmBetween } from '../sim/model.js';
 
@@ -45,6 +46,13 @@ export class Namer {
    */
   suggest(lon, lat, kind) {
     const suffix = SUFFIX[kind];
+    // 역: 바로 곁(400m)의 다른 종류 기존 역 이름(환승역은 같은 이름), 그다음 역이 놓인 동·이웃 동 이름을 먼저 본다
+    if (kind === 'station' && this.stationHints) {
+      for (const h of this.stationHints(lon, lat)) {
+        const c = stem(h.name).replace(/역$/, '') + suffix;
+        if (h.sameStation || !this.isUsed(c, kind)) return this.take(c, kind);
+      }
+    }
     const near = this.nearbyPlaces(lon, lat);
     const base = near.length ? stem(near[0][0]) : '신설';
     const candidates = [base + suffix];

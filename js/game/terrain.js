@@ -20,6 +20,15 @@ export function loadTerrain() {
 
 export function terrainReady() { return !!T; }
 
+/** 한 점의 지형: {elev 칸 평균 표고(m), rough 칸 안 거칠기(m), water 호수·강, sea 바다}. 지형이 없거나 범위 밖이면 null */
+export function terrainAt(lon, lat) {
+  if (!T) return null;
+  const [c, r] = cellOf(lon, lat);
+  if (!inside(c, r)) return null;
+  const i = r * T.cols + c, e = T.elev[i];
+  return { elev: e, rough: T.rough[i] * 2, water: e === T.water, sea: e === T.sea };
+}
+
 /**
  * 수단별 선형 기준. gmax: 이 경사까지는 땅 위로 (넘으면 터널·깎기), tunnel: 터널 1km를 평지 몇 km로 치는지,
  * bridge·sea: 강·호수·바다 위 1km를 몇 km로, rough: 거칠기(m)가 이만큼이면 터널 1km만큼 무겁다
