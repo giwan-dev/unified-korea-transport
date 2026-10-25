@@ -1115,6 +1115,7 @@ function select(sel) {
 
 function startDraft(type) {
   if (!namer) { alert('지명 데이터를 아직 불러오는 중입니다. 잠시 후 다시 눌러 주세요.'); return; }
+  warmPreview();
   if (pointAdd) endPointAdd();
   cancelDraft();
   select(null);
@@ -4004,6 +4005,7 @@ function startStraighten(linkId) {
   const l = linkAt(base, state, linkId);
   cancelDraft();
   straight = { line: l.name, cls: l.cls, picks: [], plan: null, modes: new Map() };
+  warmPreview();
   map.getCanvas().style.cursor = 'crosshair';
   select({ type: 'straighten' });
 }
@@ -4022,12 +4024,20 @@ function straightenClick(ll) {
   if (straight.plan) {
     const p0 = map.project(ll);
     let hit = null, hd = 24;
+    // 사이 역은 원래 자리와, 미리보기에서 새 선로 위로 옮겨 그린 자리 어느 쪽을 눌러도 잡는다
+    const keptPos = new Map(straight.plan.kept.flatMap((k) => [[k.node, k.pos], ...(k.merged || []).map((m) => [m.node, k.pos])]));
     for (const m of straight.plan.mids) {
-      const q = map.project(nodeCoord(m.node));
-      const d = Math.hypot(q.x - p0.x, q.y - p0.y);
-      if (d < hd) { hd = d; hit = m; }
+      for (const c of [nodeCoord(m.node), keptPos.get(m.node)]) {
+        if (!c) continue;
+        const q = map.project(c);
+        const d = Math.hypot(q.x - p0.x, q.y - p0.y);
+        if (d < hd) { hd = d; hit = m; }
+      }
     }
     if (hit) { straightMenu(hit, p0); return; }
+    // 두 역을 고른 뒤에는 양 끝 역이 아닌 곳을 눌러도 고른 구간을 지우지 않는다 (사이 역을 고르려다 잘못 누른 것)
+    const ends = straight.picks.map((n) => map.project(nodeCoord(n)));
+    if (!ends.some((q) => Math.hypot(q.x - p0.x, q.y - p0.y) < 30)) return;
   }
   // 같은 노선의 역을 고르고, 둘째 역은 이어진 다른 노선의 역도 고를 수 있다 (평부선–경의선처럼 남북 연결 구간)
   const stSet = railStationSet();
@@ -4765,6 +4775,19 @@ function runPreview(title, mutate, extra = {}) {
   showPreviewBox(`<b>${esc(title)}</b><p class="hint">효과를 계산하는 중입니다 (그해 처음은 지금 그대로까지 구하느라 약 30초, 같은 해 두 번째부터는 10~30초${previewYears ? ', 5년 뒤는 조금 더' : ''})…</p>`);
   setBusy(true, '효과 미리보기', 0);
   worker.postMessage({ type: 'preview', id, net, ctx: ctx(), years: previewYears });
+}
+
+/**
+ * 효과 미리보기 미리 데우기: 새 노선을 그리기 시작하면 그해 '지금 그대로'(대조) 평가를 뒤에서 먼저 해 둔다.
+ * 그리는 동안 끝나서, 철도 사업 미리보기는 처리 쪽만 계산하면 된다 (그해 한 번)
+ */
+let warmedFor = null;
+function warmPreview() {
+  if (!worker || !result || busy) return;
+  const key = `${state.year}:${previewYears}:${state.newLinks.length}:${state.projects.length}`;
+  if (warmedFor === key) return;
+  warmedFor = key;
+  worker.postMessage({ type: 'preview', id: -1, net: effectiveNetwork(base, state), ctx: ctx(), years: previewYears, warmOnly: true });
 }
 
 /** 다 지은 상태로 바꾼다: 신설 사업이면 새 구간을 개통으로, 개량이면 속성을 바로 적용 */

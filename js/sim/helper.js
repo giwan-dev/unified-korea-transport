@@ -21,7 +21,7 @@ function handle(m) {
       out.postMessage({ ok: true });
     } else if (m.type === 'sync') {
       if (m.net) model.setNetwork(m.net);
-      model.restore(m.snapshot);
+      if (m.snapshot) model.restore(m.snapshot);   // 망만 먼저 받는 경우(snapshot 없음)도 있다
       if (m.groups) model.setOriginGroups(m.groups);
       out.postMessage({ ok: true });
     } else if (m.type === 'origins') {

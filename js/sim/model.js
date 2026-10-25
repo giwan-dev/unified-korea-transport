@@ -224,6 +224,7 @@ export class Model {
     let active = 0;
     for (const l of L) if (l.active) active++;
     const sig = `${L.length}:${active}:${net.nodes.length}:${net.stations.length}`;
+    this.netRebuilt = sig !== this.netSig || !this.transit;
     if (sig !== this.netSig || !this.transit) {
       this.buildAccess();
       this.buildTransit();
@@ -849,9 +850,13 @@ export class Model {
   async assignParallel(pool, integration, progress, warm = false, offsetOverride = null) {
     const run = this.startAssign(integration, warm, offsetOverride);
     const parts = pool.size + 1;
+    const tm = (this.assignTiming = []);
+    let t0 = performance.now();
+    const lap = (name) => { const t = performance.now(); tm.push([name, Math.round(t - t0)]); t0 = t; };
     for (let it = 1; it <= run.iters; it++) {
       // 역 간 철도 시간표(D, 역 수² 칸)는 여기서 한 번 구해 보조 워커에 넘긴다 (워커마다 같은 계산을 되풀이하지 않게)
       this.beginIteration(run);
+      lap('begin');
       // 보조 워커: 같은 교통량·역 간 시간으로 맞춘 뒤 제 몫의 존을 계산한다
       const pending = pool.run((k) => ({
         type: 'origins', it, iters: run.iters, integration, part: k + 1, parts,
@@ -860,8 +865,13 @@ export class Model {
       const mine = [];
       for (let i = 0; i < this.Z; i += parts) mine.push(i);
       this.originPass(run, it, mine, progress);
-      for (const r of await pending) this.mergeOrigins(run, r, it);
+      lap('main origins');
+      const rs = await pending;
+      lap('wait helpers');
+      for (const r of rs) this.mergeOrigins(run, r, it);
+      lap('merge');
       this.endIteration(run, it);
+      lap('end');
     }
     this.updateCosts();
     this.odT = run.odT; this.odTime = run.odTime;

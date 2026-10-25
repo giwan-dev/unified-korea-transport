@@ -26,6 +26,12 @@ async function makePool() {
         await Promise.all(ports.map((p) => call(p, { type: 'sync', net: this.netSent === net ? null : net, snapshot, groups }, 60000)));
         this.netSent = net;
       },
+      // 망만 먼저 보내 보조 워커가 망을 짜게 한다 (주 워커가 경제·인구를 갱신하는 동안 함께)
+      async preNet(net) {
+        if (this.netSent === net) return;
+        await Promise.all(ports.map((p) => call(p, { type: 'sync', net, snapshot: null }, 60000)));
+        this.netSent = net;
+      },
       run: (mk) => Promise.all(ports.map((p, k) => call(p, mk(k), 120000))),
       close() { ports.forEach((p) => p.close()); },
     };
@@ -40,8 +46,12 @@ async function assign(net, integration, prog, warm = false, offsetOverride = nul
   if (pool === undefined) pool = await makePool();
   if (pool) {
     try {
+      wmark('sync start');
       await pool.sync(net, model.snapshot(), model.originGroups());
-      return await model.assignParallel(pool, integration, prog, warm, offsetOverride);
+      wmark('sync done');
+      const r = await model.assignParallel(pool, integration, prog, warm, offsetOverride);
+      wmark('assign done');
+      return r;
     } catch (err) {
       post('warn', { message: `보조 워커 배정 실패, 한 워커로 계산합니다: ${err.message}` });
       pool.close();
@@ -71,7 +81,7 @@ function results(totals, { withState = true } = {}) {
   const sim = withState ? model.exportBaseline(totals, null) : null;
   wmark('results built');
   post('result', {
-    perf: wperf.splice(0), links, zones, stations, subs, air, totals, summary: model.summary(), snapshot: model.snapshot(),
+    perf: [...wperf.splice(0), ...(model.assignTiming || []).map(([k, v]) => [`assign ${k} (ms)`, v])], links, zones, stations, subs, air, totals, summary: model.summary(), snapshot: model.snapshot(),
     sim: sim && { sizes: sim.json.sizes, bin: sim.bin },
   }, [links.vol.buffer, links.vc.buffer, links.speed.buffer, ...(sim ? [sim.bin] : [])]);
 }
@@ -134,8 +144,9 @@ async function handle(msg) {
       }
     } else if (msg.type === 'step') {
       wmark('step received');
+      const pre = pool ? pool.preNet(msg.net).catch(() => {}) : null;   // 보조 워커 망 짜기를 함께 돌린다
       model.setNetwork(msg.net);
-      wmark('network set');
+      wmark(model.netRebuilt ? 'network set (full rebuild)' : 'network set');
       lastNet = msg.net;
       // 지난 1년의 교통 조건으로 경제·인구를 갱신한 뒤 새 해의 통행을 배정한다 (완공된 역세권 개발 인구를 먼저 옮긴다)
       if (msg.ctx.dev?.length) model.applyDevelopments(msg.ctx.dev);
@@ -143,6 +154,8 @@ async function handle(msg) {
       if (msg.ctx.tourKP?.length === model.tourKP.length) model.tourKP.set(msg.ctx.tourKP);
       model.advanceYear(msg.ctx.integration, msg.ctx.policy, msg.ctx.sez || []);
       wmark('advanced');
+      if (pre) await pre;
+      beforeCache = null;
       // 새 노선이 개통한 해에는 지난해 교통량과 반씩 섞어 이용이 빨리 자리 잡게 한다
       results(await assign(lastNet, msg.ctx.integration, progress('통행배정'), true, msg.opened ? 1 : null));
     } else if (msg.type === 'preview') {
@@ -208,12 +221,12 @@ async function handle(msg) {
         let totals;
         try {
           if (pool) await pool.sync(net, model.snapshot(), model.originGroups());
-          totals = await model.evaluate(pool, msg.ctx.integration, passes, free, progress(label));
+          totals = await model.evaluate(pool, msg.ctx.integration, passes, free, (msg.warmOnly ? () => {} : progress(label)));
         } catch (err) {
           if (!pool) throw err;
           console.warn('보조 워커 평가 실패, 한 워커로 계산합니다', err);
           pool.close(); pool = null;
-          totals = await model.evaluate(null, msg.ctx.integration, passes, free, progress(label));
+          totals = await model.evaluate(null, msg.ctx.integration, passes, free, (msg.warmOnly ? () => {} : progress(label)));
         }
         tick(`${label} 평가`, t0); t0 = performance.now();
         const r = model.linkResults();
@@ -242,6 +255,8 @@ async function handle(msg) {
         before = cached ? beforeCache.out : await run(lastNet, '효과 미리보기 (지금)', 1, new Uint8Array(lastNet.links.length));
         beforeCache = { net: lastNet, years, out: before };
       }
+      // 미리 데우기: 새 노선을 그리기 시작할 때 대조(지금 망) 평가만 해 둔다 (그해 철도 사업 미리보기가 그만큼 빨라진다)
+      if (msg.warmOnly) { post('previewWarm', { id: msg.id, years }); return; }
       const after = await run(msg.net, '효과 미리보기 (완공 뒤)', passes, freeAfter);
       // 이용자 편익 (소비자 잉여의 반분법): OD마다 (전 통행 + 후 통행) / 2 × 시간 비용 감소 (분/일)
       let timeMin = 0;
