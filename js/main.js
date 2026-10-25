@@ -2,7 +2,7 @@
 import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView, LAYER_VIEWS, setBasemap } from './ui/map.js';
 import { Namer } from './game/naming.js';
 import {
-  newGame, START_YEAR, REOPEN_SPEED, startProject, cancelProject, cancelBlocked, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
+  newGame, START_YEAR, REOPEN_SPEED, baseTransfers, startProject, cancelProject, cancelBlocked, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
   updateCongestion, defaultFix, updateApproval, canAfford, isKP, linksUnderWork, UPGRADES, NEW_BUILDS, upgradeCost,
   placeName, setPlaceName, startRestoreName, RENAME, startAirport, startAirportExpand, renameLine, splitLink,
   fundFor, settlePPP, settleRail, renameKPLines, KP_LINE_RENAME, LINE_RENAME_COST, railDividend, railEquity, mergeRail, OP_FACTORS, initOngoing, linkPending, setProjectPace, PACES,
@@ -130,6 +130,7 @@ async function init() {
   // 지명은 새 역·IC 이름을 지을 때만 필요하므로 첫 화면 뒤에 받는다
   const placesReady = fetch('data/places.json').then((r) => r.json()).then((p) => { places = p; });
   fetch('data/base/world.geojson').then((r) => r.json()).then((w) => { isForeign = makeForeignTest(w); }).catch(() => {});
+  fetch('data/closed_lines.json').then((r) => (r.ok ? r.json() : { lines: [] })).then((c) => { closedLines = c.lines || []; if (map) refreshClosed(); }).catch(() => {});
   fetch('data/plans.json').then((r) => (r.ok ? r.json() : { plans: [] })).then((p) => { plans = p.plans || []; migratePlanLines(); if (map) renderBuild(); }).catch(() => {});
   fetch('data/historic_targets.json').then((r) => (r.ok ? r.json() : [])).then((h) => { historic = h; }).catch(() => {});
   rememberNetwork(meta?.stamp, base, zoneProps);
@@ -222,6 +223,7 @@ async function init() {
     const lfc = linksFC();
     mark('linksFC');
     addLayers(map, zonesFC, lfc, { type: 'FeatureCollection', features: [] });
+    refreshClosed();
     mark('layers added');
     addRailKindLayer(map);
     addPlansLayer(map);
@@ -1018,6 +1020,8 @@ function bindMap() {
     const pt = map.queryRenderedFeatures(box, { layers: ['points'] })[0];
     if (pt) return select({ type: 'node', id: pt.properties.node });
     const ln = map.queryRenderedFeatures(box, { layers: ['rails', 'metro', 'roads', 'roads-minor', 'ferries', 'ext-links', 'links-building'] })[0];
+    const cl = !ln && map.getLayer('closed-line') ? map.queryRenderedFeatures(box, { layers: ['closed-line'] })[0] : null;
+    if (cl) return select({ type: 'closed', id: cl.properties.id });
     if (ln) { const sec = sectionOf(ln.properties.id); return select({ type: 'link', id: ln.properties.id, section: sec }); }
     if (METRICS[metric]?.sub) {
       const sb = map.queryRenderedFeatures(e.point, { layers: ['subs-fill'] })[0];
@@ -1032,7 +1036,7 @@ function bindMap() {
   map.on('mousemove', (e) => { const t = performance.now(); if (t - catchT < 60) return; catchT = t; catchLabel(e); });
   map.on('mouseout', () => catchLabel(null));
   enableBoxSelect();
-  for (const l of ['roads', 'roads-minor', 'rails', 'metro', 'points', 'plans-line']) {
+  for (const l of ['roads', 'roads-minor', 'rails', 'metro', 'points', 'plans-line', 'closed-line']) {
     map.on('mouseenter', l, () => { if (!draft) map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', l, () => { if (!draft) map.getCanvas().style.cursor = ''; });
   }
@@ -1498,13 +1502,29 @@ function terrainAlign() {
   const rule = terrainRule(draft.type);
   if (!rule || !terrainReady()) return;
   const anchors = draft.points.filter((p) => !p.via);
+  // 출발·도착이 기존 선로에 붙어 있으면 그 선로의 접선 방향으로 나가고 들어오게:
+  // 끝에서 접선 방향으로 1~4km 나간 '이끎 점'을 선형 점으로 두고, 지형 경로는 이끎 점 사이에서 찾는다
+  const tans = withTangents(anchors, NEW_BUILDS[draft.type].mode);
+  const first = anchors[0], last = anchors[anchors.length - 1];
+  const lead = (p, tan, other) => {
+    if (!tan) return null;
+    const d = kmBetween(p.lon, p.lat, other.lon, other.lat);
+    if (d < 6) return null;
+    const L = Math.min(4, Math.max(1, d * 0.2)) / 111;
+    const ck = Math.cos((p.lat * Math.PI) / 180);
+    const e = tan[0] * ck, nn = tan[1], m = Math.hypot(e, nn) || 1;   // 경위도 방향 → 실제 거리 L(도)만큼
+    return { node: null, lon: p.lon + (e / m) * L / ck, lat: p.lat + (nn / m) * L, split: null, via: true };
+  };
   const out = [];
   let changed = 0;
   anchors.forEach((p, k) => {
     out.push(p);
     const q = anchors[k + 1];
     if (!q) return;
-    const via = terrainRoute([p.lon, p.lat], [q.lon, q.lat], rule);
+    const lo = p === first ? lead(p, tans[0].tan, q) : null;
+    const li = q === last ? lead(q, tans[tans.length - 1].tan, p) : null;
+    const a = lo || p, b = li || q;
+    const via = terrainRoute([a.lon, a.lat], [b.lon, b.lat], rule);
     if (!via) {
       // 경로를 못 찾으면(너무 가깝거나 지형 밖) 원래 선형 점을 그대로 둔다
       const i0 = draft.points.indexOf(p), i1 = draft.points.indexOf(q);
@@ -1512,7 +1532,9 @@ function terrainAlign() {
       return;
     }
     changed++;
+    if (lo) out.push(lo);
     for (const [lon, lat] of via) out.push({ node: null, lon, lat, split: null, via: true });
+    if (li) out.push(li);
   });
   draft.points = out;
   drawDraft();
@@ -2167,7 +2189,7 @@ function renderProjects() {
 사업을 취소할까요? 지금까지 낸 ${formatWon(p.paid)}은 돌려받지 못하고, 남은 ${formatWon(left)}을 아낍니다.${hit ? ` 짓다 만 사업이라 지지율이 ${hit} 내려갑니다.` : ''}`)) return;
       const r = cancelProject(base, state, p.id);
       if (!r.ok) { alert(r.reason); return; }
-      save(state); refreshLinks(); renderAll();
+      save(state); refreshLinks(); refreshClosed(); renderAll();
     };
   });
 }
@@ -2516,6 +2538,7 @@ function renderSelection() {
   el.hidden = false;
   if (selection.type === 'link') el.innerHTML = linkPanel(selection.id);
   else if (selection.type === 'zone') el.innerHTML = zonePanel(selection.id);
+  else if (selection.type === 'closed') el.innerHTML = closedPanel(selection.id);
   else if (selection.type === 'sub') el.innerHTML = subPanel(selection.id);
   else if (selection.type === 'airport') el.innerHTML = airportPanel(selection.id);
   else if (selection.type === 'multi') el.innerHTML = multiPanel(selection.ids);
@@ -2556,6 +2579,7 @@ function renderSelection() {
   });
   el.querySelectorAll('[data-st-diagram]').forEach((b) => { b.onclick = () => openLineDiagram(+b.dataset.stDiagram); });
   el.querySelectorAll('[data-padd]').forEach((b) => { b.onclick = () => { switchTab('build'); startPointAdd(b.dataset.padd); toast(b.dataset.padd === 'ic' ? '고속도로 위 IC 자리를 누르세요.' : '노선 위 역 자리를 누르세요.'); }; });
+  el.querySelectorAll('[data-closed-go]').forEach((b) => { b.onclick = () => startClosedReopen(selection.id, b.dataset.closedGo); });
   el.querySelector('#reopen-go')?.addEventListener('click', () => startReopen(selection.id));
   el.querySelectorAll('[data-xfer]').forEach((b) => { b.onclick = () => startTransfer(selection.id, +b.dataset.xfer); });
   el.querySelector('#devel-ok')?.addEventListener('click', (ev) => commitDevel(+ev.target.dataset.node));
@@ -3209,7 +3233,9 @@ function resolveWaypoint([name, lon, lat], mode, motorwayEnd = false) {
     }
     if (best != null && nodesOfMode(mode).has?.(best) !== false) return best;
   }
-  return nearestNode({ lng: lon, lat }, mode, null, mode === 0 ? 4 : 1.5);
+  // 이름이 같은 역이 없으면 새 역이다: 그 자리(250m 안)의 노드에만 붙인다.
+  // 예전에는 1.5km 안의 아무 역에나 붙여, 서부선의 연희·명지대 등이 홍대입구·증산으로 바뀌어 노선이 엉뚱하게 그려졌다
+  return nearestNode({ lng: lon, lat }, mode, null, mode === 0 ? 4 : name ? 0.25 : 1.5);
 }
 
 /** 예전 저장: 복원 사업 구간이 계획 이름으로 따로 놓였으면 이어지는 노선 이름으로 바꾼다 (계통이 경의선 → 평부선처럼 이어지게) */
@@ -5302,6 +5328,117 @@ function multiPanel(ids) {
     }).join('') || '<p class="hint">고른 구간에 가능한 개량이 없습니다.</p>'}</div>`;
 }
 
+// ------------------------------------------------------------ 폐선 재개통 (수려선·금강산선 등, data/closed_lines.json)
+
+let closedLines = [];
+const CLOSED_REUSE = 0.7;   // 옛 노반·터널·교량 자리를 다시 쓰므로 새로 놓는 것보다 싸다
+
+/** 재개통 사업을 벌인(공사 중·완공) 폐선은 지도에서 뺀다 */
+function closedTaken() {
+  return new Set(state.projects.filter((p) => p.closedLine != null && p.status !== 'cancelled').map((p) => p.closedLine));
+}
+
+function refreshClosed() {
+  if (!map?.getSource('closed')) return;
+  const taken = closedTaken();
+  map.getSource('closed').setData({ type: 'FeatureCollection', features: closedLines.filter((c) => !taken.has(c.id)).map((c) => ({
+    type: 'Feature', properties: { id: c.id, name: c.label }, geometry: { type: 'LineString', coordinates: c.geom } })) });
+}
+
+function closedCost(c, type) {
+  return Math.round(NEW_BUILDS[type].perKm * c.km * CLOSED_REUSE * (c.country === 'KP' ? KP_COST_FACTOR : 1));
+}
+
+function closedPanel(id) {
+  const c = closedLines.find((x) => x.id === id);
+  if (!c) return header('폐선');
+  const taken = closedTaken().has(id);
+  const opt = (type) => {
+    const spec = NEW_BUILDS[type], cost = closedCost(c, type), ok = canAfford(state, cost, spec.years);
+    return `<div class="item opt"><div class="opt-row"><span>${spec.label.replace('신설 ', '')}</span>
+      <button class="small ${ok ? 'primary' : ''}" data-closed-go="${type}" ${ok && !taken ? '' : 'disabled'}>${formatWon(cost)} · ${spec.years}년</button></div></div>`;
+  };
+  return `${header(`${c.label} (폐선)`)}
+    <table class="kv"><tr><td>연장</td><td>${c.km.toFixed(1)} km · ${c.country === 'KP' ? '북' : '남'}</td></tr>
+      <tr><td>옛 역</td><td>${c.stations.length ? c.stations.map((s) => esc(s[0])).join(' · ') : '기록 없음'}</td></tr></table>
+    <p class="hint">문을 닫은 철도입니다. 옛 노선 자리를 따라 다시 놓고 옛 역 자리에 역을 엽니다. 노반 자리를 다시 써서 새로 놓는 것보다 30% 쌉니다.
+      양 끝이 지금 철도역 가까이(1.5km 안)면 그 역에 잇습니다. 다 지은 뒤 구간을 눌러 복선화·전철화할 수 있습니다.</p>
+    ${taken ? '<p class="hint">이미 재개통 사업을 벌였습니다.</p>' : `<div class="list">${opt('rail1')}${opt('rail')}</div>`}`;
+}
+
+/** 폐선 도형을 따라 선형 점(via)을, 옛 역 자리에 역을 둔 그리기 점 목록 */
+function closedPoints(c) {
+  const g = c.geom;
+  const cum = [0];
+  for (let i = 1; i < g.length; i++) cum.push(cum[i - 1] + kmBetween(g[i - 1][0], g[i - 1][1], g[i][0], g[i][1]));
+  const along = (x, y) => {   // 선 위 가장 가까운 자리의 누적 거리
+    let best = 0, bd = Infinity;
+    for (let i = 1; i < g.length; i++) {
+      const [ax, ay] = g[i - 1], [bx, by] = g[i];
+      const dx = bx - ax, dy = by - ay, t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy || 1)));
+      const d = (ax + t * dx - x) ** 2 + (ay + t * dy - y) ** 2;
+      if (d < bd) { bd = d; best = cum[i - 1] + t * (cum[i] - cum[i - 1]); }
+    }
+    return best;
+  };
+  const sts = c.stations.map(([name, x, y]) => ({ s: along(x, y), name, lon: x, lat: y })).sort((a, b) => a.s - b.s);
+  const items = [
+    ...g.map(([x, y], i) => ({ s: cum[i], lon: x, lat: y, via: true })),
+    ...sts.map((t) => ({ s: t.s, lon: t.lon, lat: t.lat, name: t.name })),
+  ].sort((a, b) => a.s - b.s);
+  // 역 가까이(300m)·서로 너무 붙은(500m) 선형 점은 뺀다. 양 끝은 늘 남긴다
+  const out = [];
+  items.forEach((it, k) => {
+    const end = k === 0 || k === items.length - 1;
+    if (it.via && !end) {
+      if (sts.some((t) => Math.abs(t.s - it.s) < 0.3)) return;
+      const prev = out[out.length - 1];
+      if (prev && it.s - prev.s < 0.5) return;
+    }
+    out.push(it);
+  });
+  // 끝: 지금 철도역(없으면 철도 노드) 1.5km 안이면 거기에 잇는다
+  const stSet = new Set(effectiveNetwork(base, state).stations);
+  const railNodes = nodesOfMode(1);
+  const snapEnd = (it) => {
+    let best = null, bd = 1.5;
+    for (const n of railNodes) {
+      const p = nodeCoord(n);
+      if (!p || Math.abs(p[1] - it.lat) > 0.02) continue;
+      const d = kmBetween(it.lon, it.lat, p[0], p[1]) - (stSet.has(n) ? 0.5 : 0);   // 역을 조금 더 반긴다
+      if (d < bd) { bd = d; best = n; }
+    }
+    return best;
+  };
+  for (const k of [0, out.length - 1]) {
+    const it = out[k];
+    const n = snapEnd(it);
+    it.via = false;
+    if (n != null) { const p = nodeCoord(n); Object.assign(it, { node: n, lon: p[0], lat: p[1], name: null }); }
+  }
+  // 끝에 붙은 지금 역 바로 옆(1km 안)의 옛 역은 같은 역으로 본다
+  return out.filter((it, k) => !(k > 0 && k < out.length - 1 && !it.via && [out[0], out[out.length - 1]].some((e) => e.node != null && kmBetween(e.lon, e.lat, it.lon, it.lat) < 1)));
+}
+
+function startClosedReopen(id, type) {
+  const c = closedLines.find((x) => x.id === id);
+  if (!c || closedTaken().has(id)) return;
+  const pts = closedPoints(c);
+  const points = pts.map((it) => ({ node: it.node ?? null, lon: it.lon, lat: it.lat, split: null, via: !!it.via }));
+  const names = {};
+  pts.forEach((it, i) => {
+    if (it.via || it.node != null) return;
+    const name = it.name || (namer ? namer.suggest(it.lon, it.lat, 'station') : `${c.name}역`);
+    names[i] = { name, kind: 'station', auto: !it.name };
+  });
+  const segFactor = points.slice(1).map(() => CLOSED_REUSE);
+  const n0 = state.projects.length;
+  const r = startNewBuild(base, state, { type, points, names, lineName: c.name, title: `${c.label} 재개통`, segFactor });
+  if (!r.ok) { alert(r.reason); return; }
+  if (state.projects.length > n0) state.projects[state.projects.length - 1].closedLine = id;
+  save(state); refreshClosed(); refreshLinks(); renderAll(); switchTab('projects');
+}
+
 // ------------------------------------------------------------ 여객 재개통 (역이 없거나 거의 없어 아무도 타지 않는 선로)
 
 const REOPEN = { perKm: 30, station: 150, years: 2, minPop: 1500, spacingKm: 4, maxStations: 15 };
@@ -5625,7 +5762,8 @@ function transferHTML(id, lines) {
   const isRail = lines.some((l) => l.mode === 1), isMetro = lines.some((l) => l.mode === 2);
   if (!isRail && !isMetro) return '';
   const c = nodeCoord(id);
-  const mine = (state.transfers || []).filter((t) => t.rail === id || t.metro === id);
+  const builtIn = baseTransfers(base).filter(([r, m]) => r === id || m === id).map(([rail, metro]) => ({ rail, metro, built: true, base: true }));
+  const mine = [...builtIn, ...(state.transfers || []).filter((t) => t.rail === id || t.metro === id)];
   const linked = new Set(mine.map((t) => (t.rail === id ? t.metro : t.rail)));
   const cand = [];
   for (const [node, v] of nodeNames()) {
@@ -5642,7 +5780,7 @@ function transferHTML(id, lines) {
   cand.sort((a, b) => a.d - b.d);
   const cost = (d) => Math.round(TRANSFER.base + TRANSFER.perKm * d);
   const nm = (n) => esc(nodeNames().get(n)?.name || '역');
-  const rows = mine.map((t) => `<tr><td>${nm(t.rail === id ? t.metro : t.rail)}</td><td>${t.built ? '연결됨' : '공사 중'}</td></tr>`).join('');
+  const rows = mine.map((t) => `<tr><td>${nm(t.rail === id ? t.metro : t.rail)}</td><td>${t.base ? '연결됨 (기존 환승역)' : t.built ? '연결됨' : '공사 중'}</td></tr>`).join('');
   return `<h4>일반철도–도시철도 환승 연결</h4>
     <p class="hint">통로·연결선을 놓아 도시철도로 와서 이 역 열차로 갈아타게 합니다. 도시철도역 근처 주민이 이 역을 쓰게 되어 철도 수요가 늡니다.</p>
     ${rows ? `<table class="kv">${rows}</table>` : ''}

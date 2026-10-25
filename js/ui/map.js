@@ -426,6 +426,17 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: { 'line-color': vcColor(), 'line-width': ROAD_WIDTH, 'line-opacity': idleOpacity(1) },
   });
+  // 폐선 (수려선·금강산선 등): 갈색 점선, 눌러서 재개통
+  map.addSource('closed', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({
+    id: 'closed-line', type: 'line', source: 'closed', minzoom: 6, layout: { 'line-join': 'round' },
+    paint: { 'line-color': '#8d6e52', 'line-opacity': 0.75, 'line-dasharray': [2, 1.5], 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 1.2, 11, 3] },
+  });
+  map.addLayer({
+    id: 'closed-label', type: 'symbol', source: 'closed', minzoom: 8,
+    layout: { 'symbol-placement': 'line', 'text-field': ['concat', ['get', 'name'], ' (폐선)'], 'text-font': ['Noto Sans Regular'], 'text-size': 11 },
+    paint: { 'text-color': '#7a5c40', 'text-halo-color': '#ffffff', 'text-halo-width': 1.2 },
+  });
   map.addLayer({
     id: 'rails', type: 'line', source: 'links', filter: ['all', ['==', ['get', 'mode'], 1], ['==', ['get', 'building'], 0], ['!=', ['get', 'ext'], 1]],
     paint: {
@@ -589,13 +600,14 @@ const ROAD_LAYERS = ['roads', 'roads-minor', 'roads-casing', 'roads-motorway', '
 const RAIL_LAYERS = ['rails', 'metro'];
 const RAIL_VC = ['rails-vc', 'metro-vc'];
 const AIR_LAYERS = ['airroutes', 'airports', 'airport-labels'];
+const CLOSED_LAYERS = ['closed-line', 'closed-label'];
 // 철도만 보기: 노선 색 대신 혼잡도(V/C) 색 레이어
 const VIEW_HIDE = {
   all: [...RAIL_VC],
-  road: [...RAIL_LAYERS, ...RAIL_VC, ...AIR_LAYERS],
+  road: [...RAIL_LAYERS, ...RAIL_VC, ...AIR_LAYERS, ...CLOSED_LAYERS],
   rail: [...ROAD_LAYERS, ...RAIL_LAYERS, ...AIR_LAYERS],
-  air: [...ROAD_LAYERS, ...RAIL_LAYERS, ...RAIL_VC],
-  none: [...ROAD_LAYERS, ...RAIL_LAYERS, ...RAIL_VC, ...AIR_LAYERS, 'hotspots'],
+  air: [...ROAD_LAYERS, ...RAIL_LAYERS, ...RAIL_VC, ...CLOSED_LAYERS],
+  none: [...ROAD_LAYERS, ...RAIL_LAYERS, ...RAIL_VC, ...AIR_LAYERS, ...CLOSED_LAYERS, 'hotspots'],
 };
 // 공사 중(미개통) 점선·국경 연결·혼잡 주의 표시도 보기에 맞는 수단만: 도로만 보기에서 미개통 철도가 섞여 보이지 않게
 const NONE = ['==', ['get', 'mode'], -9];
@@ -655,6 +667,7 @@ export function legendHTML(metric, view = 'all', basemap = 'plain') {
   else if (rail) rows.push(`${sw('#2453c9')} 고속철 ${sw('#6c3fa0')} 일반철도 ${sw('#e07b1a')} 협궤`, `${sw('#1a9a6c')} 도시철도 (노선색, 굵기 = 이용객)`);
   if (air) rows.push(`${sw('#b04a9c', 'dot')} 공항 ${sw('#b04a9c')} 항공 노선 (굵기 = 여객)`);
   if (road || rail) rows.push(`${sw(IDLE_COLOR)} 이용 없음 ${sw('#8a8f96', 'dash')} 미개통`);
+  if (rail || view === 'rail') rows.push(`${sw('#8d6e52', 'dash')} 폐선 (눌러서 재개통)`);
   if (road) rows.push(`${sw('#2b7bb9', 'dash')} 여객선 ${sw('#7a7f86', 'dash')} 국경 연결`);
   if (view === 'none') rows.push('교통망을 숨기고 지표 색칠만 봅니다.');
   if (view !== 'air' && view !== 'none') rows.push(`<i class="sw warn"></i> 혼잡 주의 (V/C &gt; ${HOT_VC})`);

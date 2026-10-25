@@ -72,6 +72,33 @@ function baseLite(base) {
   return lite;
 }
 
+// 이미 일반철도와 도시철도가 만나는 환승역 (서울역·용산·대전 등): 이름이 같고 1km 안이거나, 이름이 달라도 250m 안인
+// 일반철도역–도시철도역 짝. 처음부터 갈아탈 수 있다 (게임에서 더 짓는 환승 연결은 state.transfers)
+const transferCache = new WeakMap();
+const stName = (n) => (n || '').split('(')[0].replace(/\s+/g, '').replace(/역$/, '');
+export function baseTransfers(base) {
+  let out = transferCache.get(base.stations);
+  if (out) return out;
+  out = [];
+  const metro = (base.metro_stations || []).map(([nm, n]) => [stName(nm), n, base.nodes[n]]);
+  const km = (p, q) => Math.hypot((p[0] - q[0]) * 88.4, (p[1] - q[1]) * 111);
+  const seen = new Set();
+  for (const [nm, r] of base.stations) {
+    const pr = base.nodes[r];
+    if (!pr) continue;
+    for (const [mn, m, pm] of metro) {
+      if (m === r || !pm || Math.abs(pm[1] - pr[1]) > 0.01) continue;
+      const d = km(pr, pm);
+      if ((mn === stName(nm) && d <= 1) || d <= 0.25) {
+        const k = `${r}-${m}`;
+        if (!seen.has(k)) { seen.add(k); out.push([r, m]); }
+      }
+    }
+  }
+  transferCache.set(base.stations, out);
+  return out;
+}
+
 /** 기본 네트워크 + 개량 + 신설을 합친, 시뮬레이션에 넘길 네트워크 */
 export function effectiveNetwork(base, state) {
   const nodes = base.nodes.concat(state.newNodes);
@@ -104,7 +131,7 @@ export function effectiveNetwork(base, state) {
   const serviceStops = (state.services || []).filter((s) => s.built).map((s) => ({ stops: s.stops, trains: s.trains }));
   const closed = new Set(state.closedStations || []);
   // 일반철도역–도시철도역 환승 연결 (지은 것만)
-  const railMetro = (state.transfers || []).filter((t) => t.built).map((t) => [t.rail, t.metro]);
+  const railMetro = baseTransfers(base).concat((state.transfers || []).filter((t) => t.built).map((t) => [t.rail, t.metro]));
   // 새로 놓은 도시철도가 일반철도역에 바로 닿으면 그 역은 저절로 환승역이 된다 (같은 노드)
   const railSt = new Set(base.stations.map((s) => s[1]));
   for (const nl of state.newLinks) {
