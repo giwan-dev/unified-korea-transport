@@ -276,7 +276,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { planStraighten: () => planStraighten(), openPlan, commitDraft, startServicePick, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { planStraighten: () => planStraighten(), openPlan, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
@@ -1804,14 +1804,20 @@ function draftLineName() {
   return draft.lineName;
 }
 
+/** 그리기 점 가운데 새 역·IC가 될 점의 이름 (착공과 미리보기가 같은 역으로 계산하게) */
+function draftNames() {
+  const names = {};
+  draft.points.forEach((p, i) => { if (p.name && !p.existing) names[i] = { name: p.name, kind: p.kind, auto: p.auto !== false }; });
+  return names;
+}
+
 async function commitDraft() {
   if (!draft || draft.points.length < 2) return;
   if (terrainRule(draft.type) && !terrainReady()) { await loadTerrain(); if (!draft) return; }   // 착공 사업비도 지형을 넣어서
   const spec = NEW_BUILDS[draft.type];
   const last = draft.points[draft.points.length - 1];
   if (spec.mode === 0 && !attachRoadEnd(last)) { alert('끝점 5km 안에 이을 도로가 없습니다. 마지막 점을 도로 가까이에 찍어 주세요.'); return; }
-  const names = {};
-  draft.points.forEach((p, i) => { if (p.name && !p.existing) names[i] = { name: p.name, kind: p.kind, auto: p.auto !== false }; });
+  const names = draftNames();
   const dc = draftCost();
   const pp = pppPlan();
   if (pp === false) { alert('민자사업은 먼저 수요 예측·민간 수익성 검토를 하고, 민간이 참여할 수 있어야 착공할 수 있습니다.'); return; }
@@ -3677,7 +3683,7 @@ function plansHTML() {
       let km = 0;
       for (let i = 1; i < p.points.length; i++) km += kmBetween(p.points[i - 1][1], p.points[i - 1][2], p.points[i][1], p.points[i][2]);
       const spec = NEW_BUILDS[p.type];
-      return `<div class="item line"><div class="n" data-plan-show="${p.id}" style="cursor:pointer;${shownPlan === p.id ? 'text-decoration:underline' : ''}" title="지도에 노선 보기"><b>${esc(p.name)}</b><span class="m" title="${esc(p.source || '')}">${spec.label.replace(/ 신설.*$/, '')} · 약 ${Math.round(km * 1.1)}km · ${formatWon(km * 1.1 * spec.perKm)}${p.source ? ` · 출처: ${esc(p.source.split(' · 현황')[0].split(/[,(]/)[0].trim())}` : ''}</span></div>
+      return `<div class="item line"><div class="n" data-plan-show="${p.id}" style="cursor:pointer;${shownPlan === p.id ? 'text-decoration:underline' : ''}" title="지도에 노선 보기"><b>${esc(p.name)}</b><span class="m" title="${esc(p.source || '')}">${spec.label.replace(/ 신설.*$/, '')} · 약 ${Math.round(km * 1.1)}km · ${formatWon(km * 1.1 * spec.perKm)}${p.source ? ` · 출처: ${esc(p.source.split(' · 현황')[0].split(/[,(]/)[0].trim())}` : ''}</span>${p.appraisal ? `<span class="m" title="${esc(p.appraisal.note || '')}"> · 예비 평가 B/C <b class="${p.appraisal.bc >= 1 ? 'pos' : 'neg'}">${p.appraisal.bc.toFixed(2)}</b> · AHP <b class="${p.appraisal.ahp >= 0.5 ? 'pos' : 'neg'}">${p.appraisal.ahp.toFixed(2)}</b></span>` : ''}</div>
         <button class="small" data-plan="${p.id}" ${started.has(p.id) ? 'disabled' : ''}>${started.has(p.id) ? '착공함' : '열기'}</button></div>`;
     }).join('')}</div>`)).join('')}`;
 }
@@ -4553,13 +4559,18 @@ function straightPoints(pl) {
   return pts;
 }
 
+/** 직선화 새 선로에서 역이 될 점(옮긴 역)의 이름 */
+function straightNames(pts) {
+  const names = {};
+  pts.forEach((q, i) => { if (q.station) names[i] = { name: q.ref.name, kind: 'station', auto: false }; });
+  return names;
+}
+
 function commitStraighten() {
   const pl = straight.plan;
   if (!pl) return;
   const pts = straightPoints(pl);
-  const names = {};
-  pts.forEach((q, i) => { if (q.station) names[i] = { name: q.ref.name, kind: 'station', auto: false }; });
-  const r = startNewBuild(base, state, { type: straight.cls === 'hsr' ? 'hsr' : 'rail', points: pts, names, lineName: straight.line,
+  const r = startNewBuild(base, state, { type: straight.cls === 'hsr' ? 'hsr' : 'rail', points: pts, names: straightNames(pts), lineName: straight.line,
     extendOf: null, extraCost: pl.kept.length * MID_COST.rail });
   if (!r.ok) { alert(r.reason); return; }
   const p = state.projects[state.projects.length - 1];
@@ -5233,7 +5244,8 @@ async function previewDraft() {
   if (terrainRule(draft.type) && !terrainReady()) { await loadTerrain(); if (!draft) return; }
   const dc = draftCost();
   runPreview(`${draftLineName() || NEW_BUILDS[draft.type].label} 미리보기`, (c) => {
-    const r = startNewBuild(base, c, { type: draft.type, points: draftPointsOn(c), names: {}, lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost });
+    // 새 역 이름을 넘겨야 새 역이 역이 된다 (예전에는 빈 이름을 넘겨 새 역 없이 계산했다: 새 역이 많은 노선은 B/C가 0에 가까웠다)
+    const r = startNewBuild(base, c, { type: draft.type, points: draftPointsOn(c), names: draftNames(), lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost });
     if (!r.ok) throw new Error(r.reason);
     return buildNow(c, c.projects[c.projects.length - 1]);
   }, { kind: 'new', cost: dc.cost, years: dc.years, km: dc.km, cls: NEW_BUILDS[draft.type].attrs.cls, mode: NEW_BUILDS[draft.type].mode, plan: !!draft.plan });
@@ -5253,7 +5265,8 @@ function previewStraighten() {
   const pl = straight?.plan;
   if (!pl) return;
   runPreview(`${straight.line} 직선화 미리보기`, (c) => {
-    const r = startNewBuild(base, c, { type: straight.cls === 'hsr' ? 'hsr' : 'rail', points: straightPoints(pl), names: {}, lineName: straight.line });
+    const pts = straightPoints(pl);
+    const r = startNewBuild(base, c, { type: straight.cls === 'hsr' ? 'hsr' : 'rail', points: pts, names: straightNames(pts), lineName: straight.line });
     if (!r.ok) throw new Error(r.reason);
     const p = c.projects[c.projects.length - 1];
     for (const lid of p.links) c.newLinks[lid - base.links.length].speed = pl.speed;
@@ -5530,7 +5543,7 @@ function evaluateDraftPPP() {
   const dc = draftCost();
   const sig = pppSig(p);
   runPreview(`${draftLineName() || spec.label} 수요 예측 (${PPP_TYPES[p.type].label})`, (c) => {
-    const r = startNewBuild(base, c, { type: draft.type, points: draftPointsOn(c), names: {}, lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost,
+    const r = startNewBuild(base, c, { type: draft.type, points: draftPointsOn(c), names: draftNames(), lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost,
       ppp: { type: p.type, subsidy: p.subsidy, toll: linkToll(kind, p.type, p.tollMult) } });
     if (!r.ok) throw new Error(r.reason);
     return buildNow(c, c.projects[c.projects.length - 1]);
@@ -6440,12 +6453,12 @@ function gazetteData(p) {
   const seq = 100 + state.projects.indexOf(p) + 1;
   const date = `${p.startYear}. ${1 + (h % 12)}. ${1 + ((h >> 4) % 28)}.`;
   const kp = ls.every((l) => l.kp);
-  const kindWord = p.type === 'metro' ? '도시철도' : p.type === 'hsr' ? '고속철도' : p.type === 'gtx' ? '광역급행철도' : rail ? '철도' : '도로';
+  const kindWord = (p.type === 'metro' || p.type === 'lrt') ? '도시철도' : p.type === 'hsr' ? '고속철도' : p.type === 'gtx' ? '광역급행철도' : rail ? '철도' : '도로';
   const reopen = p.closedLine != null || !!plans.find((x) => x.id === p.plan)?.closedLine;
   const title = reopen ? `「${lineName} 재개통 사업」 기본계획 고시`
-    : p.type === 'metro' ? `「${lineName} 도시철도 건설사업」 기본계획 승인 고시`
+    : (p.type === 'metro' || p.type === 'lrt') ? `「${lineName} 도시철도 건설사업」 기본계획 승인 고시`
       : rail ? `「${lineName} ${p.extension ? '연장 ' : ''}건설사업」 기본계획 고시` : `「${lineName} 건설사업」 도로구역 결정 고시`;
-  const law = p.type === 'metro' ? '「도시철도법」' : rail ? '「철도의 건설 및 철도시설 유지관리에 관한 법률」' : '「도로법」';
+  const law = (p.type === 'metro' || p.type === 'lrt') ? '「도시철도법」' : rail ? '「철도의 건설 및 철도시설 유지관리에 관한 법률」' : '「도로법」';
   const lead = rail
     ? `${law}에 따라 ${lineName} 건설사업의 기본계획을 다음과 같이 수립하였으므로 이를 고시합니다.`
     : `${law}에 따라 ${lineName} 건설사업의 도로구역을 다음과 같이 결정하였으므로 이를 고시합니다.`;
@@ -6454,7 +6467,7 @@ function gazetteData(p) {
   const sum = ['계', formatWon(total), '100%'];
   const funding = p.fund === 'ppp' ? [fr('정부 보조', p.govShare || 0), fr('민간 투자', 1 - (p.govShare || 0)), sum]
     : p.fund && p.fund !== 'gov' ? [['운영사 자체 재원', formatWon(total), '100%'], sum]
-      : p.type === 'metro' ? [fr('국비', 0.6), fr('지방비', 0.4), sum]
+      : (p.type === 'metro' || p.type === 'lrt') ? [fr('국비', 0.6), fr('지방비', 0.4), sum]
         : p.type === 'motorway' || p.type === 'tunnelRoad' ? [fr('국비', 0.5), fr('한국도로공사', 0.5), sum]
           : kp ? [fr('국비 (남북 통합 특별회계)', 1), sum] : [fr('국비', 1), sum];
   const stopWord = rail ? '정거장' : 'IC·JCT';
@@ -6481,7 +6494,7 @@ function gazetteData(p) {
     ['총사업비', esc(formatWon(p.cost))],
     ['사업 기간', esc(`${p.startYear}년 ~ ${p.doneYear}년 (${p.years}년)`)],
     ['사업 방식', esc(p.fund === 'ppp' ? `민간투자사업 (정부 보조 ${Math.round((p.govShare || 0) * 100)}%)` : p.fund && p.fund !== 'gov' ? '운영사 자체 사업' : '재정사업')],
-    ['사업 시행자', esc(rail ? (p.type === 'metro' ? (first.place.split(' ')[0] || '해당 광역자치단체') : '국가철도공단')
+    ['사업 시행자', esc(rail ? ((p.type === 'metro' || p.type === 'lrt') ? (first.place.split(' ')[0] || '해당 광역자치단체') : '국가철도공단')
       : p.type === 'motorway' || p.type === 'tunnelRoad' ? '한국도로공사' : '지방국토관리청')],
   ];
   const offices = [...new Set(stations.map((s) => s.place.split(' ').slice(-1)[0]).filter(Boolean))].slice(0, 6).join('·');

@@ -86,6 +86,8 @@ export const NEW_BUILDS = {
   // 단선 비전철: 싸고 빨리 짓지만 열차를 많이 못 다니고 느리다. 나중에 구간을 눌러 복선화·전철화할 수 있다
   rail1: { mode: 1, label: '일반철도 신설 (단선 비전철)', perKm: 200, years: 4, attrs: { cls: 'conv', tracks: 1, speed: 120, power: 'none' } },
   metro: { mode: 2, label: '도시철도 신설 (지하)', perKm: 1300, years: 6, attrs: { cls: 'metro', tracks: 2, speed: 35, power: 'AC' } },
+  // 경전철·트램: 지상·고가라 지하철의 3분의 1 값이지만 느리고(표정 25km/h) 수송력이 작다
+  lrt: { mode: 2, label: '경전철·트램 신설 (지상·고가)', perKm: 450, years: 5, attrs: { cls: 'metro', tracks: 2, speed: 25, power: 'AC' } },
   tunnelRail: { mode: 1, label: '해저터널 (고속철도)', perKm: 3500, years: 10, attrs: { cls: 'hsr', tracks: 2, speed: 250, power: 'AC' } },
   tunnelRoad: { mode: 0, label: '해저터널 (고속도로)', perKm: 2500, years: 10, attrs: { cls: 'motorway', lanes: 4, speed: 90, paved: 1 } },
 };
