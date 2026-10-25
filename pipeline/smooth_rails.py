@@ -125,6 +125,88 @@ def smooth_geom(geom):
     return out, fixed
 
 
+BUNDLE_M, BUNDLE_RUN_M, BUNDLE_TAPER_M, BUNDLE_STEP_M = 150.0, 800.0, 300.0, 50.0
+
+
+def bundle(links):
+    """같은 통로를 나란히 가는 철도(경의선–공항철도처럼 50~150m 떨어져 엇갈리는 두 선)를 한 선에 겹친다.
+
+    같은 수단의 앞선 링크(선로가 많은 것부터)를 기준선으로 두고, 뒤 링크가 기준선 BUNDLE_M 안을
+    BUNDLE_RUN_M 넘게 이어 가면 그 구간을 기준선 위로 옮긴다. 구간 양 끝 BUNDLE_TAPER_M은 서서히 옮긴다.
+    여러 줄로 된 도형과 양 끝 노드는 건드리지 않는다. 고친 링크 수를 돌려준다.
+    """
+    from shapely.geometry import LineString, Point
+    from shapely.strtree import STRtree
+
+    lat0 = 37.0
+    kx, ky = 111320 * math.cos(math.radians(lat0)), 110570
+    order = sorted((i for i, l in enumerate(links) if l["mode"] in (1, 2) and None not in l["geom"] and len(l["geom"]) >= 2),
+                   key=lambda i: (-links[i]["tracks"], i))
+    refs = {1: [], 2: []}
+    trees = {}
+    moved = 0
+    for idx, i in enumerate(order):
+        l = links[i]
+        mode = l["mode"]
+        ends = (l["geom"][0], l["geom"][-1])
+        line = LineString([(x * kx, y * ky) for x, y in l["geom"]])
+        cand = []
+        if refs[mode] and line.length >= BUNDLE_RUN_M:
+            if mode not in trees or trees[mode][1] != len(refs[mode]):
+                trees[mode] = (STRtree([g for _, g in refs[mode]]), len(refs[mode]))
+            tree = trees[mode][0]
+            cand = [refs[mode][k][1] for k in tree.query(line.buffer(BUNDLE_M))]
+        if cand:
+            n = max(2, int(line.length / BUNDLE_STEP_M) + 1)
+            samples = [line.interpolate(t * line.length / (n - 1)) for t in range(n)]
+            proj = []
+            for p in samples:
+                best, bd = None, BUNDLE_M
+                for g in cand:
+                    d = g.distance(p)
+                    if d < bd:
+                        bd, best = d, g
+                proj.append(best.interpolate(best.project(p)) if best is not None else None)
+            # BUNDLE_RUN_M 넘게 이어지는 구간만
+            near = [q is not None for q in proj]
+            runs, k = [], 0
+            while k < n:
+                if near[k]:
+                    j = k
+                    while j + 1 < n and near[j + 1]:
+                        j += 1
+                    if (j - k) * BUNDLE_STEP_M >= BUNDLE_RUN_M:
+                        runs.append((k, j))
+                    k = j + 1
+                else:
+                    k += 1
+            if runs:
+                taper = BUNDLE_TAPER_M / BUNDLE_STEP_M
+                w = [0.0] * n
+                for a, b in runs:
+                    for k in range(a, b + 1):
+                        # 노선 양 끝(노드)에 닿은 쪽은 바로, 중간에서 갈라지는 쪽은 서서히
+                        ea = 1.0 if a == 0 else min(1.0, (k - a) / taper)
+                        eb = 1.0 if b == n - 1 else min(1.0, (b - k) / taper)
+                        w[k] = max(w[k], min(ea, eb))
+                pts = []
+                for k, p in enumerate(samples):
+                    q = proj[k]
+                    if q is None or w[k] <= 0:
+                        pts.append((p.x, p.y))
+                    else:
+                        pts.append((p.x + (q.x - p.x) * w[k], p.y + (q.y - p.y) * w[k]))
+                pts[0], pts[-1] = line.coords[0], line.coords[-1]
+                xy = [(x, y) for x, y in pts]
+                xy = _dp(xy, 8.0)
+                l["geom"] = [(x / kx, y / ky) for x, y in xy]
+                l["geom"][0], l["geom"][-1] = ends
+                line = LineString([(x * kx, y * ky) for x, y in l["geom"]])
+                moved += 1
+        refs[mode].append((i, line))
+    return moved
+
+
 def main():
     check = "--check" in sys.argv
     data = ROOT / "data"
@@ -142,6 +224,7 @@ def main():
             links += 1
             l["geom"] = g
     print("fixed", total, "vertices on", links, "rail/metro links")
+    print("bundled", bundle(net["links"]), "links onto parallel lines")
     if check:
         return
     # 노드·링크 속성은 그대로 두고 꼭짓점 수·꼭짓점 바이트열만 다시 쓴다

@@ -20,13 +20,21 @@ export function smoothSegments(pts, stepKm = 1) {
     const seg = [];
     const t1 = i === 0 && pts[0].tan, t2 = i + 2 === P.length && pts[i + 1].tan;
     if (t1 || t2) {
-      const L = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]) / 3;
+      // 접선 끝은 먼저 그 방향으로 곧게(구간의 25%, 최대 2km) 나간 뒤 굽는다: 기존 선로와 같은 방향으로 붙어 나가고 들어온다
+      const chord = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+      const S = Math.min(chord * 0.25, 2 / 111);
       const unit = (a, b) => { const d = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1; return [(b[0] - a[0]) / d, (b[1] - a[1]) / d]; };
+      const q1 = t1 ? [p1[0] + t1[0] * S, p1[1] + t1[1] * S] : p1;
+      const q2 = t2 ? [p2[0] + t2[0] * S, p2[1] + t2[1] * S] : p2;
+      const L = Math.hypot(q2[0] - q1[0], q2[1] - q1[1]) / 2.5;
       const d1 = t1 || unit(p0, p2), d2 = t2 ? [-t2[0], -t2[1]] : unit(p1, p3);
-      const c1 = [p1[0] + d1[0] * L, p1[1] + d1[1] * L], c2 = [p2[0] - d2[0] * L, p2[1] - d2[1] * L];
-      for (let k = 0; k <= n; k++) seg.push(bezier(p1, c1, c2, p2, k / n));
+      const c1 = [q1[0] + d1[0] * L, q1[1] + d1[1] * L], c2 = [q2[0] - d2[0] * L, q2[1] - d2[1] * L];
+      const mk = Math.max(1, Math.round(n * 0.2));
+      if (t1) for (let k = 0; k < mk; k++) seg.push([p1[0] + (q1[0] - p1[0]) * (k / mk), p1[1] + (q1[1] - p1[1]) * (k / mk)]);
+      for (let k = 0; k <= n; k++) seg.push(bezier(q1, c1, c2, q2, k / n));
+      if (t2) for (let k = mk - 1; k >= 0; k--) seg.push([p2[0] + (q2[0] - p2[0]) * (k / mk), p2[1] + (q2[1] - p2[1]) * (k / mk)]);
     } else for (let k = 0; k <= n; k++) seg.push(catmullRom(p0, p1, p2, p3, k / n));
-    seg[0] = p1; seg[n] = p2;
+    seg[0] = p1; seg[seg.length - 1] = p2;
     out.push(seg);
   }
   return out;

@@ -1467,8 +1467,8 @@ function withTangents(points, mode) {
     const cands = dirs.length === 1 ? [[-dirs[0][0], -dirs[0][1]]] : dirs.flatMap((d) => [d, [-d[0], -d[1]]]);
     let best = null, bd = -2;
     for (const d of cands) { const dot = (d[0] * to[0] + d[1] * to[1]) / tl; if (dot > bd) { bd = dot; best = d; } }
-    // 다음 점과 거의 반대(100° 넘게)면 억지로 돌리지 않는다
-    if (best && bd > -0.17) p.tan = best;
+    // 다음 점과 아주 반대(120° 넘게)일 때만 접선을 놓는다 (그 밖에는 늘 기존 선로 방향으로 나가고 들어온다)
+    if (best && bd > -0.5) p.tan = best;
   }
   return out;
 }
@@ -1509,8 +1509,8 @@ function terrainAlign() {
   const lead = (p, tan, other) => {
     if (!tan) return null;
     const d = kmBetween(p.lon, p.lat, other.lon, other.lat);
-    if (d < 6) return null;
-    const L = Math.min(4, Math.max(1, d * 0.2)) / 111;
+    if (d < 1.5) return null;
+    const L = Math.min(4, Math.max(0.5, d * 0.25)) / 111;
     const ck = Math.cos((p.lat * Math.PI) / 180);
     const e = tan[0] * ck, nn = tan[1], m = Math.hypot(e, nn) || 1;   // 경위도 방향 → 실제 거리 L(도)만큼
     return { node: null, lon: p.lon + (e / m) * L / ck, lat: p.lat + (nn / m) * L, split: null, via: true };
