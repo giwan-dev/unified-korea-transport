@@ -58,7 +58,7 @@ startI18n();
 import { buildReport, reportHTML, downloadReportImage, TIME_PAIRS, GOALS } from './ui/report.js';
 import { openGazette } from './ui/gazette.js';
 
-const APP_VERSION = 'Alpha 0.1';
+const APP_VERSION = 'Alpha 0.2';
 const BUG_MAIL = 'evrgrn0528@gmail.com';
 // 오류 제보에 함께 보낼 최근 오류 (화면에 안 보이는 것도)
 const errLog = [];
