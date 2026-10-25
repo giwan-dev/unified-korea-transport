@@ -38,77 +38,129 @@ def km(p, q):
 
 
 SUBMERGED_KM = 1.5   # 물속을 이만큼 넘게 지나야 돌아간다 (강·짧은 만은 다리로 건넌다)
-ARM_M = 500.0        # 이보다 좁은(폭 2배) 호수 팔은 다리로 건넌다
+STATION_DRY_M = 150.0   # 역은 물에서 이만큼 떨어진 땅에
+CELL_M = 100.0       # 우회 경로를 찾는 격자 칸
+WATER_COST = 12.0    # 물 칸 1칸 = 땅 12칸 (좁은 호수 팔은 짧은 다리로 건너고, 넓은 물은 돌아간다)
+SHORE_COST = 2.0     # 물가 바로 옆(1칸) 땅: 호숫가에 너무 붙지 않게
+LEAD_KM = 1.5        # 잠긴 구간 앞뒤로 이만큼 떨어진 옛 선형에서 갈라지고 합친다
+PAD_KM = 8.0         # 경로를 찾는 창의 여유
 
 
-def lakes_near(line_xy, water):
-    """선이 SUBMERGED_KM 넘게 잠기는 물(댐 호수)을 오목 껍질로 감싸 OFFSET_M 넓힌 것"""
-    b = line_xy.buffer(0.05).bounds
-    polys = [g for g in water if g.intersects(box(*b))]
-    if not polys:
-        return None
-    u = unary_union(polys)
-    hits = [g for g in getattr(u, "geoms", [u]) if g.area * 111 * 111 >= DETOUR_MIN_KM2 and line_xy.intersection(g).length * 111 > SUBMERGED_KM]
-    if not hits:
-        return None
-    # 폭 1km 안 되는 호수 팔(지류)은 다리로 건너고 호수 본체만 피한다: 깎았다 다시 불린(열림) 도형
-    r = ARM_M / 111000
-    body = unary_union([g.buffer(-r).buffer(r) for g in hits])
-    body = unary_union([b for b in getattr(body, "geoms", [body]) if line_xy.intersection(b).length * 111 > SUBMERGED_KM])
-    if body.is_empty:
-        return None
-    return body.buffer(OFFSET_M / 111000, join_style=1).simplify(0.0008)
+def submerged_spans(line, wet):
+    """선이 물속을 SUBMERGED_KM 넘게 지나는 구간들 [(시작, 끝)] (선 위 거리, 도)"""
+    inside = line.intersection(wet)
+    spans = sorted((line.project(Point(g.coords[0])), line.project(Point(g.coords[-1])))
+                   for g in getattr(inside, "geoms", [inside]) if g.geom_type == "LineString" and g.length > 0)
+    spans = [(min(a, b), max(a, b)) for a, b in spans]
+    # 300m 안으로 끊긴 잠긴 조각은 한 구간으로
+    merged = []
+    for a, b in spans:
+        if merged and a - merged[-1][1] < 0.003:
+            merged[-1] = (merged[-1][0], max(b, merged[-1][1]))
+        else:
+            merged.append((a, b))
+    return [(a, b) for a, b in merged if line.intersection(wet).intersection(
+        substring(line, a, b).buffer(1e-6)).length * 111 > SUBMERGED_KM]
+
+
+def raster_path(a, b, water):
+    """a에서 b까지 물을 비싸게 치는 격자 최단 경로 (점 목록, 좌표는 경도×KX·위도)"""
+    import heapq
+    import numpy as np
+    import rasterio.features
+    from rasterio.transform import from_origin
+    pad = PAD_KM / 111
+    x0, x1 = min(a[0], b[0]) - pad, max(a[0], b[0]) + pad
+    y0, y1 = min(a[1], b[1]) - pad, max(a[1], b[1]) + pad
+    d = CELL_M / 111000
+    W, H = int((x1 - x0) / d) + 1, int((y1 - y0) / d) + 1
+    tr = from_origin(x0, y1, d, d)
+    polys = [g for g in water if g.intersects(box(x0, y0, x1, y1))]
+    wet = rasterio.features.rasterize(((g, 1) for g in polys), out_shape=(H, W), transform=tr, fill=0, dtype="uint8") if polys else np.zeros((H, W), "uint8")
+    from scipy import ndimage
+    shore = ndimage.binary_dilation(wet.astype(bool)) & ~wet.astype(bool)
+    cost = np.where(wet == 1, WATER_COST, np.where(shore, SHORE_COST, 1.0))
+    cell = lambda p: (min(H - 1, max(0, int((y1 - p[1]) / d))), min(W - 1, max(0, int((p[0] - x0) / d))))
+    s, t = cell(a), cell(b)
+    dist = np.full((H, W), np.inf)
+    prev = np.full((H, W, 2), -1, dtype=np.int32)
+    dist[s] = 0
+    heap = [(0.0, s)]
+    steps = [(-1, 0, 1), (1, 0, 1), (0, -1, 1), (0, 1, 1), (-1, -1, 1.414), (-1, 1, 1.414), (1, -1, 1.414), (1, 1, 1.414)]
+    while heap:
+        g, (r, c) = heapq.heappop(heap)
+        if (r, c) == t:
+            break
+        if g > dist[r, c]:
+            continue
+        for dr, dc, w in steps:
+            rr, cc = r + dr, c + dc
+            if 0 <= rr < H and 0 <= cc < W:
+                ng = g + w * (cost[r, c] + cost[rr, cc]) / 2
+                if ng < dist[rr, cc]:
+                    dist[rr, cc] = ng
+                    prev[rr, cc] = (r, c)
+                    heapq.heappush(heap, (ng, (rr, cc)))
+    path, cur = [], t
+    while cur[0] >= 0:
+        path.append((x0 + (cur[1] + 0.5) * d, y1 - (cur[0] + 0.5) * d))
+        if cur == s:
+            break
+        cur = tuple(prev[cur])
+    path.reverse()
+    return [a] + path[1:-1] + [b]
 
 
 def detour(coords, water):
-    """경위도 점 목록 → (고친 점 목록, 고쳤는지)"""
+    """경위도 점 목록 → (고친 점 목록, 고쳤는지). 잠긴 구간마다 앞뒤 LEAD_KM 옛 선형에서 갈라져 격자 최단 경로로 돈다"""
     line = LineString(to_xy(coords))
-    obs = lakes_near(line, water)
-    if obs is None or not line.intersects(obs):
+    near = [g for g in water if g.intersects(line.buffer(0.02))]
+    if not near:
         return coords, False
-    out = []
-    pos = 0.0
-    L = line.length
-    inside = line.intersection(obs)
-    spans = sorted(((line.project(Point(g.coords[0])), line.project(Point(g.coords[-1]))) for g in getattr(inside, "geoms", [inside])
-                    if g.geom_type == "LineString" and g.length > 0), key=lambda s: s[0])
+    wet = unary_union(near)
+    spans = submerged_spans(line, wet)
     if not spans:
         return coords, False
+    out, pos, L = [], 0.0, line.length
+    lead = LEAD_KM / 111
     for a, b in spans:
-        a, b = min(a, b), max(a, b)
+        a, b = max(pos, a - lead), min(L, b + lead)
         if a > pos:
             out += list(substring(line, pos, a).coords)
-        ea, eb = line.interpolate(a), line.interpolate(b)
-        # 들어간 자리와 나온 자리를 감싼 물 테두리의 짧은 쪽으로 돈다
-        poly = min(getattr(obs, "geoms", [obs]), key=lambda g: g.exterior.distance(ea) + g.exterior.distance(eb))
-        ring = LineString(poly.exterior.coords)
-        da, db = ring.project(ea), ring.project(eb)
-        R = ring.length
-        if da <= db:
-            arc1 = substring(ring, da, db)
-            arc2 = LineString(list(substring(ring, db, R).coords) + list(substring(ring, 0, da).coords)[1:])
-            arc2 = LineString(arc2.coords[::-1])
-        else:
-            arc1 = LineString(substring(ring, db, da).coords[::-1])
-            arc2 = LineString(list(substring(ring, da, R).coords) + list(substring(ring, 0, db).coords)[1:])
-        arc = arc1 if arc1.length <= arc2.length else arc2
-        out += [ea.coords[0]] + list(arc.coords) + [eb.coords[0]]
+        pa, pb = line.interpolate(a), line.interpolate(b)
+        out += raster_path((pa.x, pa.y), (pb.x, pb.y), near)
         pos = b
     if pos < L:
         out += list(substring(line, pos, L).coords)
-    # 붙은 점 정리와 단순화 (약 150m)
-    new = LineString(out).simplify(0.0014)
+    new = LineString(out).simplify(0.0009)   # 약 100m
     return from_xy(new.coords), True
 
 
-def move_stations(stations, coords):
-    """선형에서 300m 넘게 떨어진(물에 잠긴) 역을 새 선형 위로"""
+def move_stations(stations, coords, water):
+    """옛 역을 새 선형 위로 올리되 물(호수·강, 둘레 STATION_DRY_M) 밖 자리로.
+
+    선형에서 300m 넘게 떨어졌거나 물에 잠긴 역은 선형 위 가장 가까운 자리에서 앞뒤로 100m씩 옮겨 가며
+    물 밖인 첫 자리에 둔다 (호수 팔을 다리로 건너는 자리에 역이 서지 않게)
+    """
     line = LineString(to_xy(coords))
+    lake = unary_union([g for g in water if g.intersects(line.buffer(0.03))])
+    wet = lake.buffer(STATION_DRY_M / 111000) if not lake.is_empty else None
     out = []
     for name, x, y in stations:
         p = Point(x * KX, y)
-        if line.distance(p) * 111 > 0.3:
-            q = line.interpolate(line.project(p))
+        if line.distance(p) * 111 > 0.3 or (wet is not None and wet.contains(p)):
+            d0 = line.project(p)
+            best = None
+            for k in range(0, 61):
+                for d in ((d0 + k * 0.0009, d0 - k * 0.0009) if k else (d0,)):
+                    if 0 <= d <= line.length:
+                        q = line.interpolate(d)
+                        if wet is None or not wet.contains(q):
+                            best = q
+                            break
+                if best is not None:
+                    break
+            q = best or line.interpolate(d0)
             x, y = round(q.x / KX, 5), round(q.y, 5)
         out.append([name, x, y])
     return out
@@ -125,7 +177,7 @@ def main():
         if changed:
             before = sum(km(c["geom"][i], c["geom"][i + 1]) for i in range(len(c["geom"]) - 1))
             c["geom"] = [list(p) for p in g]
-            c["stations"] = move_stations(c["stations"], g)
+            c["stations"] = move_stations(c["stations"], g, water)
             after = sum(km(g[i], g[i + 1]) for i in range(len(g) - 1))
             c["km"] = round(c["km"] * after / max(before, 1e-6), 1)
             c["detour"] = True
