@@ -145,7 +145,16 @@ def main():
             feats.append((ids[i], code, ln))
     print("inland gaps turned into borders", fixed, file=sys.stderr)
     water = water_edges(geoms, ids)
-    print("water edges", len(water), file=sys.stderr)
+    # 좁은 수로(강화–김포 염하 등)는 두 시군이 육상 경계로 이미 맞닿아 있다: 그 곁(약 300m)의 해상 경계 조각은 겹쳐 그려지므로 뺀다
+    land_lines = unary_union([f[2] for f in feats])
+    near_land = land_lines.buffer(0.003)
+    trimmed = []
+    for f in water:
+        g = f[2].difference(near_land)
+        if not g.is_empty and g.length > 0.002:
+            trimmed.append((f[0], f[1], g, *f[3:]))
+    print("water edges", len(water), "->", len(trimmed), "after removing ones beside land borders", file=sys.stderr)
+    water = trimmed
     feats += water
     out = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "id": k, "properties": {"i": k, "a": f[0], "b": f[1], **({"w": 1} if len(f) > 3 else {})},

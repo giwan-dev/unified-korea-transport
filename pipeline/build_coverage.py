@@ -105,6 +105,19 @@ def main():
         zgeom[zid] = Z
         claimed = Z if claimed is None else claimed.union(Z)
 
+    # 1-2) 시군구 사이에 낀 작은 빈 구멍(1km² 미만: 군사분계선을 따라 남북 시군 경계가 덜 맞물린 곳 등)은 가장 길게 맞닿은 시군구에 붙인다
+    allz = unary_union(list(zgeom.values()))
+    holes = [shapely.Polygon(r) for g in polys(allz) for r in g.interiors]
+    filled = 0
+    for h in holes:
+        if h.area * 111 * 88 > 1.0:
+            continue
+        ring = h.buffer(2e-5)
+        best = max(zgeom, key=lambda z: ring.intersection(zgeom[z]).area if zgeom[z].intersects(ring) else 0)
+        zgeom[best] = clean(zgeom[best].union(h.buffer(1e-6)))
+        filled += 1
+    print("filled", filled, "small holes between zones")
+
     # 2) 읍면동 커버리지: 존마다 읍면동을 존 안에 맞추고, 읍면동이 없는 존은 존 하나를 한 조각으로
     pieces, owner = [], []          # owner: ("unit", unit id) 또는 ("zone", zid)
     for zid in zone_ids:

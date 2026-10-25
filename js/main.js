@@ -6088,7 +6088,9 @@ function gazetteData(p) {
     });
     return {
       node: n, name: names.get(n)?.name || (rail ? `${code0 + i}정거장` : `${i + 1}`), code: rail ? String(code0 + i) : '', km: cum.get(n) || 0,
-      lon: c[0], lat: c[1], transfers, isNew: n >= base.nodes.length, place: [zf.province, zoneProps[zi]?.name].filter(Boolean).join(' '),
+      // 소재지는 게임 속 지금 이름으로 (행정구역 정리로 바뀐 소속 도·시군 이름: 간성군 등)
+      lon: c[0], lat: c[1], transfers, isNew: n >= base.nodes.length,
+      place: zi >= 0 ? [regionOf(state, zoneProps[zi]) || zf.province, zoneName(zi)].filter(Boolean).join(' ') : '',
     };
   });
   if (!stations.length) return null;
