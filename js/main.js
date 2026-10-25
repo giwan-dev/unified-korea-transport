@@ -274,7 +274,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { planStraighten: () => planStraighten(), namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { planStraighten: () => planStraighten(), openPlan, commitDraft, startServicePick, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
@@ -1054,6 +1054,7 @@ function bindMap() {
     if (straight) { straightenClick(e.lngLat); return; }
     if (secPick) { sectionClick(e.lngLat); return; }
     if (svcPick) { servicePickClick(e.lngLat); return; }
+    if (svcEdit && selection?.type === 'service') { serviceEditClick(e.lngLat); return; }
     if (pointAdd) { pointAddClick(e.lngLat); return; }
     if (housingPick) { housingClick(e); return; }
     if (draft?.type === 'airport') { placeAirport(e.lngLat); return; }
@@ -1148,6 +1149,7 @@ function select(sel) {
   if (selection?.type === 'link') for (const i of selection.section?.ids || [selection.id]) map.setFeatureState({ source: 'links', id: i }, { sel: false });
   if (selection?.type === 'zone') for (const j of countyZones(selection.id)) map.setFeatureState({ source: 'zones', id: j }, { sel: false });
   if (selection?.type === 'sub') map.setFeatureState({ source: 'subs', id: selection.id }, { sel: false });
+  if (svcEdit && sel?.type !== 'service') { svcEdit = null; map.getSource('draft').setData({ type: 'FeatureCollection', features: [] }); drawServices(); }
   selection = sel;
   if (sel?.type === 'sub') map.setFeatureState({ source: 'subs', id: sel.id }, { sel: true });
   if (sel?.type === 'link') for (const i of sel.section?.ids || [sel.id]) map.setFeatureState({ source: 'links', id: i }, { sel: true });
@@ -1889,6 +1891,11 @@ function bindUI() {
       try { localStorage.setItem('ukt-basemap', basemap); } catch { /* 저장 못 해도 된다 */ }
     }
     if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); syncRailKind(map); renderLegend(); }
+    if (e.target.id === 'svc-lines-toggle') {
+      showServices = e.target.checked;
+      try { localStorage.setItem('ukt-svc-lines', showServices ? '1' : '0'); } catch { /* 저장 못 해도 이번에는 적용 */ }
+      drawServices();
+    }
     if (e.target.id === 'trains-toggle') {
       if (e.target.checked && !confirm('지도에 열차 위치를 그리면 컴퓨터 부하가 커집니다 (화면에 보이는 열차를 1초에 5번 다시 그립니다). 느려지면 다시 끄세요. 켤까요?')) { e.target.checked = false; return; }
       setTrains(map, e.target.checked);
@@ -2119,6 +2126,7 @@ function renderAllPanels() {
   renderRegions();
   if (map) setHousing(map, state.housing || []);   // 다 지은 택지지구는 배경 지도에 시가지로
   renderTop(); renderLegend(); renderStatus(); renderBuild(); renderProjects(); renderRequests(); renderOps(); renderSettings(); renderStats(); renderSelection();
+  drawServices();
 }
 
 /** 지도의 광역 단체 경계·이름: 북측 도 복원, 광역시 승격(독립)이 바로 보이게 */
@@ -2143,7 +2151,8 @@ let layerView = 'all';
 let basemap = (() => { try { return localStorage.getItem('ukt-basemap') || 'plain'; } catch { return 'plain'; } })();
 function renderLegend() {
   // 좁은 화면에서는 고르기 칸과 색 띠만 보이고, 나머지는 '범례 더 보기'로 편다 (지도를 덜 가리게)
-  $('#legend').innerHTML = legendHTML(metric, layerView, basemap) + `<div class="lg-extra">${railKindLegend()}${trainsLegend()}</div>`
+  $('#legend').innerHTML = legendHTML(metric, layerView, basemap) + `<div class="lg-extra">${railKindLegend()}${trainsLegend()}
+    <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:4px"><input type="checkbox" id="svc-lines-toggle" ${showServices ? 'checked' : ''}> 운행 계통 노선 보기</label></div>`
     + `<button type="button" class="small lg-toggle">${$('#legend').classList.contains('open') ? '범례 접기' : '범례 더 보기'}</button>`;
 }
 
@@ -2833,8 +2842,8 @@ function renderSelection() {
   el.querySelectorAll('[data-st-goto]').forEach((a) => {
     a.onclick = (ev) => { ev.preventDefault(); const nd = +a.dataset.stGoto; flyToNode(nd); select({ type: 'node', id: nd }); };
   });
-  el.querySelector('#svc-new')?.addEventListener('click', (ev) => openServiceEditor(ev.target.dataset.line, ev.target.dataset.cls));
-  el.querySelectorAll('.svc-pick').forEach((b) => { b.onclick = startServicePick; });
+  el.querySelectorAll('.svc-pick').forEach((b) => { b.onclick = () => startServicePick(); });
+  el.querySelectorAll('[data-svc-from]').forEach((b) => { b.onclick = () => startServicePick([+b.dataset.svcFrom]); });
   el.querySelectorAll('[data-svc-edit]').forEach((b) => {
     b.onclick = () => {
       const s = state.services.find((x) => x.id === b.dataset.svcEdit);
@@ -3021,12 +3030,15 @@ function openServiceEditor(line, cls, id = null) {
   const net = effectiveNetwork(base, state);
   const s = id && state.services.find((x) => x.id === id);
   const lines = s?.lines || [line];
-  const nodes = chainStations(net, lines);
+  // 이미 있는 계통은 정차역을 차례로 잇는 경로의 역들로 (여러 노선을 지나는 계통도 순서가 맞게)
+  const nodes = (s && s.stops.length >= 2 && routeThrough(s.stops)?.nodes) || chainStations(net, lines);
   if (nodes.length < 2) { alert('이 노선에는 역이 둘 이상 있어야 운행 계통을 짤 수 있습니다.'); return; }
   const under = net.links.filter((l) => lines.includes(l.name) && l.mode === 1 && !l.via);
   svcEdit = s
-    ? { line: lines[0], lines, cls, kind: s.kind, name: s.name, type: s.type || defaultTrainType(cls, under), sets: s.sets, nodes, stops: new Set(s.stops), id, nameEdited: true }
-    : { line, lines, cls, kind: 'limited', name: `${line} ${SERVICE_KINDS.limited.label}`, type: defaultTrainType(cls, under), sets: 4, nodes, stops: defaultStops(nodes, 'limited'), id: null };
+    ? { line: lines[0], lines, cls, kind: s.kind, name: s.name, type: s.type || defaultTrainType(cls, under), sets: s.sets, nodes, stops: new Set(s.stops), id, nameEdited: true,
+      color: svcColor(s, state.services.indexOf(s)) }
+    : { line, lines, cls, kind: 'limited', name: `${line} ${SERVICE_KINDS.limited.label}`, type: defaultTrainType(cls, under), sets: 4, nodes, stops: defaultStops(nodes, 'limited'), id: null,
+      color: nextSvcColor() };
   select({ type: 'service' });
 }
 
@@ -3059,10 +3071,31 @@ function servicePanel() {
   const cost = serviceBuyCost(cur && { ...cur, type: cur.type || e.type }, { type: e.type, sets: e.sets });
   const runnable = (t) => !plan || canRun(t, plan.under);
   const typeOk = runnable(e.type);
-  const rows = e.nodes.map((n) => `<label class="name-row" style="margin:2px 0"><input type="checkbox" data-stop="${n}" ${e.stops.has(n) ? 'checked' : ''}>
-      <span>${esc(nn.get(n)?.name || `역 ${n}`)}</span><span class="m" style="margin-left:auto">${Math.round(r.get(n) || 0).toLocaleString()}명/일</span></label>`).join('');
+  // 전동차를 막는 비전철 구간 (노선별 km): 바로 전철화를 벌일 수 있게
+  const noPower = new Map(), noPowerIds = [];
+  if (plan) {
+    const links = effectiveNetwork(base, state).links, seen = new Set();
+    for (const sg of plan.segs) for (const i of sg.via) {
+      const l = links[i];
+      if (seen.has(i) || !l || (l.power && l.power !== 'none')) continue;
+      seen.add(i);
+      if (i < base.links.length && linkPending(base, state, i)) continue;
+      if (state.projects.some((pj) => pj.status === 'building' && pj.links.includes(i))) continue;
+      noPowerIds.push(i);
+      noPower.set(l.name || '이름 없는 선로', (noPower.get(l.name || '이름 없는 선로') || 0) + l.len);
+    }
+  }
+  const powerHint = noPower.size ? `<p class="hint" style="color:#b54708">비전철 구간이 있어 전동차는 다닐 수 없습니다: ${[...noPower].map(([n, km]) => `${esc(n)} ${km.toFixed(0)}km`).join(', ')}.
+    디젤 객차로 다니거나, 이 구간을 전철화하세요 (완공되면 전동차를 고를 수 있습니다).</p>
+    <div class="actions"><button class="small" id="svc-electrify" data-ids="${JSON.stringify(noPowerIds)}">비전철 구간 전철화 (${noPowerIds.length}개 구간)</button></div>` : '';
+  // 정차역은 지도에서 눌러 넣고 뺀다. 여기서는 순서대로 보여 주고 ×로 뺄 수 있게만
+  const rows = stops.map((n) => `<span class="svc-stop" style="display:inline-flex;align-items:center;gap:2px;margin:2px 4px 2px 0;padding:1px 6px;border-radius:10px;background:var(--chip, #eef1f5)">
+      ${esc(nn.get(n)?.name || `역 ${n}`)} <span class="m">${Math.round(r.get(n) || 0).toLocaleString()}</span><a href="#" data-unstop="${n}" title="정차 빼기" style="text-decoration:none">×</a></span>`).join('');
   return `${header(e.id ? `운행 계통: ${e.name}` : `${e.line} 운행 계통 짜기`)}
     <div class="name-row"><span class="kind">이름</span><input type="text" id="svc-name" value="${esc(e.name)}"></div>
+    <div class="name-row"><span class="kind">노선 색</span><input type="color" id="svc-color" value="${esc(e.color)}">
+      <span class="m">지도에 이 색으로 그립니다</span></div>
+    <p class="hint"><b>지도에서 역을 누르면</b> 정차역을 넣고 뺍니다. 계통 밖의 역을 누르면 그 역까지 경로를 늘려 잇습니다.</p>
     <div class="name-row"><span class="kind">등급</span><select id="svc-kind">${Object.entries(SERVICE_KINDS)
       .map(([k, v]) => `<option value="${k}" ${k === e.kind ? 'selected' : ''}>${v.label}</option>`).join('')}</select>
       <span class="m">정차 방식·요금</span></div>
@@ -3070,6 +3103,7 @@ function servicePanel() {
       .map(([k, v]) => `<option value="${k}" ${k === e.type ? 'selected' : ''} ${runnable(k) ? '' : 'disabled'}>${v.label}${runnable(k) ? '' : ' (비전철 구간 있음)'}</option>`).join('')}</select></div>
     <div class="name-row"><span class="kind">편성</span><input type="range" id="svc-sets" min="1" max="60" value="${e.sets}" style="flex:1">
       <b>${e.sets}편성</b></div>
+    ${powerHint}
     <p class="hint">${TRAIN_TYPES[e.type].label}: 정원 ${TRAIN_TYPES[e.type].cap.toLocaleString()}명, 편성당 ${formatWon(TRAIN_TYPES[e.type].setCost)}. 편성을 늘리면 운행 횟수가 저절로 늘어납니다.</p>
     <table class="kv">
       <tr><td>정차역</td><td>${stops.length} / ${e.nodes.length}개</td></tr>
@@ -3091,18 +3125,27 @@ function servicePanel() {
         + (c.length ? `<div class="name-row"><span class="kind">이어 가기</span>
       <select id="svc-ext">${c.map((x) => `<option value="${esc(x.name)}">${lab[x.end]} ${esc(endName[x.end])}에서 → ${esc(x.name)}</option>`).join('')}</select><button class="small" id="svc-ext-ok">노선 잇기 (직통)</button></div>` : '');
     })()}
-    <div style="max-height:240px;overflow:auto">${rows}</div>
+    <div class="name-row"><span class="kind">정차역</span><span class="m">(숫자: 하루 이용객)</span></div>
+    <div style="max-height:200px;overflow:auto;line-height:1.9">${rows || '<span class="m">지도에서 역을 누르세요.</span>'}</div>
     ${e.id ? '' : fundSelect(plan ? [serviceOperator({ segs: plan.segs })] : [])}
     <div class="actions">
       <button class="primary" id="svc-ok" ${plan && typeOk ? '' : 'disabled'}>${e.id ? (cost ? `저장 (차량 ${formatWon(cost)})` : '저장') : `운행 시작 (차량 ${formatWon(cost)} · 1년)`}</button>
       ${e.id ? '<button id="svc-del">운행 중단</button>' : ''}
-    </div>`;
+    </div>${plan && !typeOk ? `<p class="hint" style="color:#b54708">${esc(TRAIN_TYPES[e.type].label)}은(는) 비전철 구간을 달릴 수 없어 저장할 수 없습니다. 열차를 디젤 객차로 바꾸거나 전철화를 마친 뒤 저장하세요.</p>` : ''}`;
 }
 
 function bindService(el) {
   const e = svcEdit;
   if (!e) return;
   el.querySelector('#svc-name').onchange = (ev) => { e.name = ev.target.value.trim() || e.name; e.nameEdited = true; };
+  el.querySelector('#svc-electrify')?.addEventListener('click', (ev) => {
+    const r = startUpgrade(base, state, JSON.parse(ev.target.dataset.ids), 'electrify');
+    if (!r.ok) { alert(r.reason); return; }
+    save(state); refreshLinks(); renderAll();
+    toast('비전철 구간 전철화를 시작했습니다. 완공되면 이 계통에 전동차를 고를 수 있습니다.');
+  });
+  el.querySelector('#svc-color').oninput = (ev) => { e.color = ev.target.value; drawServiceEdit(); };
+  drawServiceEdit();
   el.querySelector('#svc-kind').onchange = (ev) => {
     e.kind = ev.target.value;
     if (!e.nameEdited) e.name = `${e.line} ${SERVICE_KINDS[e.kind].label}`;
@@ -3113,14 +3156,14 @@ function bindService(el) {
   el.querySelector('#svc-ext-ok')?.addEventListener('click', () => extendServiceLine(el.querySelector('#svc-ext').value));
   el.querySelector('#svc-sets').oninput = (ev) => { e.sets = +ev.target.value; ev.target.nextElementSibling.textContent = `${e.sets}편성`; };
   el.querySelector('#svc-sets').onchange = () => renderSelection();
-  el.querySelectorAll('[data-stop]').forEach((c) => {
-    c.onchange = () => { const n = +c.dataset.stop; if (c.checked) e.stops.add(n); else e.stops.delete(n); renderSelection(); };
+  el.querySelectorAll('[data-unstop]').forEach((a) => {
+    a.onclick = (ev) => { ev.preventDefault(); e.stops.delete(+a.dataset.unstop); renderSelection(); };
   });
   el.querySelectorAll('[data-svc-preset]').forEach((b) => { b.onclick = () => { e.stops = defaultStops(e.nodes, b.dataset.svcPreset); renderSelection(); }; });
   el.querySelector('#svc-ok').onclick = () => {
     const { stops, plan } = servicePlan();
     if (!plan) return;
-    const rec = { name: e.name, kind: e.kind, line: e.lines[0], lines: e.lines, cls: e.cls, stops, type: e.type, sets: e.sets, runMin: plan.runMin, km: plan.km, segs: plan.segs,
+    const rec = { name: e.name, kind: e.kind, line: e.lines[0], lines: e.lines, cls: e.cls, stops, type: e.type, sets: e.sets, runMin: plan.runMin, km: plan.km, segs: plan.segs, color: e.color,
       underLinks: plan.under };
     const r = e.id ? updateService(state, e.id, rec) : startService(state, rec);
     if (!r.ok) { alert(r.reason); return; }
@@ -3146,8 +3189,7 @@ function serviceSection(l) {
     <div class="list">${list.map((s) => `<div class="item opt"><div class="opt-row">
       <span>${esc(s.name)} <span class="m">${s.name.includes(serviceBrand(s)) ? '' : `${esc(serviceBrand(s))} · `}${s.name.includes(SERVICE_KINDS[s.kind].label) ? "" : `${SERVICE_KINDS[s.kind].label} · `}${s.stops.length}개 역 · ${TRAIN_TYPES[s.type]?.label.split(' ')[0] || ''} ${s.sets}편성 · 하루 ${s.trains}회${s.built ? '' : ' · 차량 제작 중'}</span></span>
       ${opBadge(state, serviceOperator(s))} <button class="small" data-svc-edit="${s.id}">고치기</button></div></div>`).join('')}</div>
-    <div class="actions"><button class="small" id="svc-new" data-line="${esc(l.name)}" data-cls="${l.cls}">새 운행 계통 짜기 (특급·급행·보통)</button>
-    <button class="small svc-pick" title="설 역을 지도에서 차례로 눌러 여러 노선을 지나는 계통을 만듭니다">역 골라 계통 짜기</button></div>`;
+    <div class="actions"><button class="small primary svc-pick" title="설 역을 지도에서 차례로 눌러 계통을 만듭니다 (여러 노선을 지나도 됩니다)">새 운행 계통 짜기 (역 고르기)</button></div>`;
 }
 
 function fmtRatio(r) { return isFinite(r) ? Math.round(r).toLocaleString() : '–'; }
@@ -5651,22 +5693,18 @@ function sectionOf(id) {
 
 let svcPick = null;   // {picks: [역 노드]}
 
-function startServicePick() {
+function startServicePick(first = []) {
   cancelDraft();
   if (straight) endStraighten();
   if (secPick) endSection();
-  svcPick = { picks: [] };
+  svcPick = { picks: [...first] };
   map.getCanvas().style.cursor = 'crosshair';
   select({ type: 'svcpick' });
+  drawServicePick();
 }
 
-function endServicePick() {
-  svcPick = null;
-  map.getCanvas().style.cursor = '';
-  map.getSource('draft').setData({ type: 'FeatureCollection', features: [] });
-}
-
-function servicePickClick(ll) {
+/** 화면에서 누른 자리에서 가장 가까운(30px 안) 철도역 */
+function nearestStation(ll) {
   const p = map.project(ll), stations = railStationSet();
   let best = null, bd = 30;
   for (const n of stations) {
@@ -5676,36 +5714,23 @@ function servicePickClick(ll) {
     const d = Math.hypot(q.x - p.x, q.y - p.y);
     if (d < bd) { bd = d; best = n; }
   }
-  if (best == null) return;
-  const k = svcPick.picks.indexOf(best);
-  if (k >= 0) svcPick.picks.splice(k, 1); else svcPick.picks.push(best);   // 다시 누르면 뺀다
-  const f = svcPick.picks.map((n) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: nodeCoord(n) } }));
-  map.getSource('draft').setData({ type: 'FeatureCollection', features: f });
-  renderSelection();
+  return best;
 }
 
-function servicePickPanel() {
-  const nn = nodeNames(), picks = svcPick.picks;
-  return `${header('역 골라 계통 짜기')}
-    <p class="hint">특급·급행이 설 역을 지도에서 차례로 누르세요 (다시 누르면 빠집니다). 노선이 달라도 됩니다 — 사이 경로와 지나는 노선은 저절로 잡습니다.</p>
-    <div class="m">${picks.map((n, i) => `${i + 1}. ${esc(nn.get(n)?.name || '')}`).join(' → ') || '아직 고른 역이 없습니다.'}</div>
-    <div class="actions">
-      <button class="primary" id="sp-ok" ${picks.length >= 2 ? '' : 'disabled'}>이 역들로 계통 만들기</button><button id="sp-cancel">취소</button></div>`;
-}
-
-/** 고른 역들을 차례로 잇는 경로를 찾아, 지나는 노선·역 순서로 계통 편집 창을 연다 */
-function commitServicePick() {
-  const picks = svcPick.picks, net = effectiveNetwork(base, state), stSet = railStationSet();
-  const lineKm = new Map(), nodes = [picks[0]];
+/** 고른 역들 사이를 차례로 잇는 철도 경로: 지나는 역 순서(nodes)·노선(lines)·등급(cls). 길이 없으면 null */
+function routeThrough(picks) {
+  const net = effectiveNetwork(base, state), stSet = railStationSet();
+  const lineKm = new Map(), nodes = [picks[0]], segs = [];
   for (let k = 0; k + 1 < picks.length; k++) {
     let via = railPath(net.links, picks[k], picks[k + 1], null);
-    if (!via) { alert('고른 역 사이를 잇는 철도 경로가 없습니다.'); return; }
+    if (!via) return null;
     // 가장 빠른 길이 짧은 연결선을 여럿 거치면 계통이 지저분해진다: 길게 지나는 노선만 골라 그 노선을 따라 다시 찾는다
     const km = new Map();
     for (const i of via) { const l = net.links[i]; km.set(l.name, (km.get(l.name) || 0) + l.len); }
     const legKm = [...km.values()].reduce((a, b) => a + b, 0);
     const main = new Set([...km].filter(([, v]) => v >= Math.min(10, legKm * 0.15)).map(([n]) => n));
     via = railPath(net.links, picks[k], picks[k + 1], main) || via;
+    segs.push({ a: picks[k], via });
     let node = picks[k];
     for (const i of via) {
       const l = net.links[i];
@@ -5719,10 +5744,127 @@ function commitServicePick() {
   if (!lines.length) lines.push(...lineKm.keys());
   const cls = net.links.some((l) => lines.includes(l.name) && l.cls === 'hsr') && lines.every((n) => net.links.find((l) => l.name === n)?.cls === 'hsr') ? 'hsr' : 'conv';
   const under = net.links.filter((l) => lines.includes(l.name) && l.mode === 1 && !l.via);
+  return { nodes: nodes.filter((n, i) => nodes.indexOf(n) === i), lines, cls, under, segs };
+}
+
+function drawServicePick() {
+  const picks = svcPick.picks;
+  const f = picks.map((n) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: nodeCoord(n) } }));
+  const r = picks.length >= 2 ? routeThrough(picks) : null;
+  if (r) f.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: serviceCoords(effectiveNetwork(base, state).links, r.segs) } });
+  map.getSource('draft').setData({ type: 'FeatureCollection', features: f });
+}
+
+// ------------------------------------------------------------ 운행 계통을 지도에 노선으로
+
+const SVC_COLORS = ['#e4572e', '#2e86de', '#20a35a', '#9b59b6', '#f0a202', '#d6337f', '#0fa3b1', '#7a5c3e', '#596275', '#c0392b', '#6ab04c', '#30336b'];
+let showServices = true;
+try { showServices = localStorage.getItem('ukt-svc-lines') !== '0'; } catch { /* 기본은 켬 */ }
+
+function svcColor(s, k) { return s.color || SVC_COLORS[Math.max(0, k) % SVC_COLORS.length]; }
+
+/** 새 계통 색: 아직 안 쓴 색부터 */
+function nextSvcColor() {
+  const used = new Set((state.services || []).map((s, k) => svcColor(s, k)));
+  return SVC_COLORS.find((c) => !used.has(c)) || SVC_COLORS[(state.services || []).length % SVC_COLORS.length];
+}
+
+/** 계통 구간(a에서 via를 따라)들을 이은 좌표 */
+function serviceCoords(links, segs) {
+  const out = [];
+  for (const sg of segs) {
+    const c = pathCoords(links, sg.via, sg.a);
+    out.push(...(out.length ? c.slice(1) : c));
+  }
+  return out;
+}
+
+/** 운행 계통을 계통 색의 노선으로 그린다 (차량 제작 중이면 옅게, 같은 선로를 지나는 계통은 옆으로 비켜) */
+function drawServices() {
+  const src = map?.getSource('services');
+  if (!src || !state) return;
+  const f = [];
+  if (showServices && state.services?.length) {
+    const links = effectiveNetwork(base, state).links;
+    state.services.forEach((s, k) => {
+      if (svcEdit?.id === s.id) return;   // 고치는 중인 계통은 편집 미리보기로
+      const c = serviceCoords(links, s.segs || []);
+      if (c.length > 1) f.push({ type: 'Feature', properties: { id: s.id, color: svcColor(s, k), off: ((k % 5) - 2) * 2.5, built: s.built ? 1 : 0 }, geometry: { type: 'LineString', coordinates: c } });
+    });
+  }
+  src.setData({ type: 'FeatureCollection', features: f });
+}
+
+/** 계통 편집 중: 지금 고른 정차역과 경로를 지도에 */
+function drawServiceEdit() {
+  const e = svcEdit;
+  if (!e) return;
+  const { plan } = servicePlan();
+  const f = [...e.stops].filter((n) => nodeCoord(n)).map((n) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: nodeCoord(n) } }));
+  if (plan) f.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: serviceCoords(effectiveNetwork(base, state).links, plan.segs) } });
+  map.getSource('draft').setData({ type: 'FeatureCollection', features: f });
+  const src = map.getSource('services');
+  if (src && e.id) drawServices();
+}
+
+/** 계통 편집 중 지도에서 역을 누르면: 계통 위 역은 정차를 넣고 빼고, 계통 밖 역은 가장 덜 돌아가는 자리에 넣어 경로를 늘린다 */
+function serviceEditClick(ll) {
+  const e = svcEdit, n = nearestStation(ll);
+  if (n == null) return;
+  if (e.nodes.includes(n)) {
+    if (e.stops.has(n)) e.stops.delete(n); else e.stops.add(n);
+    renderSelection();
+    return;
+  }
+  const stops = e.nodes.filter((x) => e.stops.has(x));
+  const d = (a, b) => { const p = nodeCoord(a), q = nodeCoord(b); return kmBetween(p[0], p[1], q[0], q[1]); };
+  let at = 0, bc = Infinity;
+  for (let k = 0; k <= stops.length; k++) {
+    const cost = !stops.length ? 0 : k === 0 ? d(n, stops[0]) : k === stops.length ? d(stops[k - 1], n) : d(stops[k - 1], n) + d(n, stops[k]) - d(stops[k - 1], stops[k]);
+    if (cost < bc) { bc = cost; at = k; }
+  }
+  const picks = [...stops.slice(0, at), n, ...stops.slice(at)];
+  const r = picks.length >= 2 ? routeThrough(picks) : null;
+  if (!r) { alert('이 역까지 이어지는 철도 경로가 없습니다.'); return; }
+  e.lines = r.lines; e.line = r.lines[0]; e.nodes = r.nodes;
+  e.stops.add(n);
+  renderSelection();
+}
+
+function endServicePick() {
+  svcPick = null;
+  map.getCanvas().style.cursor = '';
+  map.getSource('draft').setData({ type: 'FeatureCollection', features: [] });
+}
+
+function servicePickClick(ll) {
+  const best = nearestStation(ll);
+  if (best == null) return;
+  const k = svcPick.picks.indexOf(best);
+  if (k >= 0) svcPick.picks.splice(k, 1); else svcPick.picks.push(best);   // 다시 누르면 뺀다
+  drawServicePick();
+  renderSelection();
+}
+
+function servicePickPanel() {
+  const nn = nodeNames(), picks = svcPick.picks;
+  return `${header('역 골라 계통 짜기')}
+    <p class="hint">열차가 설 역을 지도에서 차례로 누르세요 (다시 누르면 빠집니다). 노선이 달라도 됩니다 — 사이 경로와 지나는 노선은 저절로 잡고 지도에 미리 그립니다.</p>
+    <div class="m">${picks.map((n, i) => `${i + 1}. ${esc(nn.get(n)?.name || '')}`).join(' → ') || '아직 고른 역이 없습니다.'}</div>
+    <div class="actions">
+      <button class="primary" id="sp-ok" ${picks.length >= 2 ? '' : 'disabled'}>이 역들로 계통 만들기</button><button id="sp-cancel">취소</button></div>`;
+}
+
+/** 고른 역들을 차례로 잇는 경로를 찾아, 지나는 노선·역 순서로 계통 편집 창을 연다 */
+function commitServicePick() {
+  const picks = svcPick.picks;
+  const r = routeThrough(picks);
+  if (!r) { alert('고른 역 사이를 잇는 철도 경로가 없습니다.'); return; }
+  const { nodes, lines, cls, under } = r;
   const nn = nodeNames();
   const kind = picks.length <= Math.max(3, nodes.length / 4) ? 'limited' : 'express';
   svcEdit = { line: lines[0], lines, cls, kind, name: `${nn.get(picks[0])?.name}–${nn.get(picks[picks.length - 1])?.name} ${SERVICE_KINDS[kind].label}`,
-    type: defaultTrainType(cls, under), sets: 4, nodes: nodes.filter((n, i) => nodes.indexOf(n) === i), stops: new Set(picks), id: null, nameEdited: false };
+    type: defaultTrainType(cls, under), sets: 4, nodes, stops: new Set(picks), id: null, nameEdited: false, color: nextSvcColor() };
   endServicePick();
   select({ type: 'service' });
 }
@@ -6445,7 +6587,8 @@ function stationPanel(id, n) {
     if (seen.has(key)) near.splice(i--, 1); else seen.add(key);
   }
   const modeLabel = (l) => (l.mode === 2 ? '도시철도' : CLASS_LABEL[l.cls]);
-  const svcRow = (s, stop) => `<tr><td>${esc(s.name)} <span class="m">${SERVICE_KINDS[s.kind].label}${s.built ? '' : ' · 차량 제작 중'}</span></td>
+  const svcRow = (s, stop) => `<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${esc(svcColor(s, state.services.indexOf(s)))}"></span>
+    ${esc(s.name)} <span class="m">${SERVICE_KINDS[s.kind].label}${s.built ? '' : ' · 차량 제작 중'}</span> <button class="small" data-svc-edit="${s.id}">고치기</button></td>
     <td>${stop ? `하루 ${s.trains}회 · 약 ${Math.round(SERVICE_DAY_MIN / Math.max(1, s.trains / 2))}분 간격` : '통과'}</td></tr>`;
   return `
     <h4>노선</h4>
@@ -6464,7 +6607,8 @@ function stationPanel(id, n) {
     <table class="kv">${lines.filter((l) => l.named).map((l) => { const t = autoLocalTrains(l.name, l.mode === 2 ? 'metro' : l.cls);
       return `<tr><td>${esc(l.name)} ${l.cls === 'hsr' ? '고속' : '보통'} <span class="m">자동 · 24시간</span></td><td>하루 ${t}회 · 약 ${Math.max(1, Math.round(SERVICE_DAY_MIN / Math.max(1, t / 2)))}분 간격</td></tr>`; }).join('')}
       ${stopping.map((s) => svcRow(s, true)).join('')}${passing.map((s) => svcRow(s, false)).join('')}</table>
-    ${svcTrains ? `<p class="hint">이 역에 서는 특급·급행 등 계통 열차 하루 ${svcTrains}회</p>` : '<p class="hint">보통 열차는 모든 노선에 저절로 다닙니다. 철도 구간을 눌러 특급·급행 계통을 짤 수 있습니다.</p>'}
+    ${svcTrains ? `<p class="hint">이 역에 서는 특급·급행 등 계통 열차 하루 ${svcTrains}회</p>` : '<p class="hint">보통 열차는 모든 노선에 저절로 다닙니다. 특급·급행은 계통을 짜야 다닙니다.</p>'}
+    ${lines.some((l) => l.mode === 1) ? `<div class="actions"><button class="small primary" data-svc-from="${id}" title="이 역에서 시작해, 설 역을 지도에서 차례로 누릅니다">이 역에서 운행 계통 짜기</button></div>` : ''}
     <h4>환승</h4>
     ${lines.filter((l) => l.named).length > 1 ? `<p class="hint">같은 역 환승: ${lines.filter((l) => l.named).map((l) => esc(l.name)).join(', ')}</p>` : ''}
     ${near.length ? `<table class="kv">${near.map((x) => `<tr><td><a href="#" data-st-goto="${x.node}">${esc(x.name)}</a>

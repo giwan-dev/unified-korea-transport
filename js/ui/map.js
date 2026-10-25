@@ -604,6 +604,13 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addLayer({ id: 'route-pts', type: 'circle', source: 'route', filter: ['==', ['get', 'k'], 'pt'],
     paint: { 'circle-radius': 7, 'circle-color': '#ffffff', 'circle-stroke-color': '#1d232b', 'circle-stroke-width': 3 } });
 
+  // 운행 계통: 계통마다 고른 색의 노선으로 (겹치면 옆으로 비켜 그린다). 역 점 아래에
+  map.addSource('services', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({ id: 'services-line', type: 'line', source: 'services',
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': ['get', 'color'], 'line-offset': ['get', 'off'], 'line-opacity': ['case', ['==', ['get', 'built'], 1], 0.9, 0.5],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 6, 2, 10, 3.5, 13, 5] } }, 'points');
+
   map.addSource('draft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({ id: 'draft-line', type: 'line', source: 'draft', filter: ['==', ['geometry-type'], 'LineString'],
     paint: { 'line-color': '#1f5fbf', 'line-width': 3, 'line-dasharray': [1.5, 1] } });
