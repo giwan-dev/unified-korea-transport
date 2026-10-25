@@ -42,6 +42,7 @@ STATION_DRY_M = 150.0   # 역은 물에서 이만큼 떨어진 땅에
 CELL_M = 100.0       # 우회 경로를 찾는 격자 칸
 WATER_COST = 12.0    # 물 칸 1칸 = 땅 12칸 (좁은 호수 팔은 짧은 다리로 건너고, 넓은 물은 돌아간다)
 SHORE_COST = 2.0     # 물가 바로 옆(1칸) 땅: 호숫가에 너무 붙지 않게
+SHORE_BAND, SHORE_LOW = 4, 0.55   # 호숫가 2~4칸(200~400m) 띠는 싸게: 호수를 따라 돈다 (곧은 지름길로 가로지르지 않게)
 LEAD_KM = 1.5        # 잠긴 구간 앞뒤로 이만큼 떨어진 옛 선형에서 갈라지고 합친다
 PAD_KM = 8.0         # 경로를 찾는 창의 여유
 
@@ -78,8 +79,10 @@ def raster_path(a, b, water):
     polys = [g for g in water if g.intersects(box(x0, y0, x1, y1))]
     wet = rasterio.features.rasterize(((g, 1) for g in polys), out_shape=(H, W), transform=tr, fill=0, dtype="uint8") if polys else np.zeros((H, W), "uint8")
     from scipy import ndimage
-    shore = ndimage.binary_dilation(wet.astype(bool)) & ~wet.astype(bool)
-    cost = np.where(wet == 1, WATER_COST, np.where(shore, SHORE_COST, 1.0))
+    # 물에서 떨어진 거리(칸): 바로 옆 1칸은 피하고, 2~4칸(200~400m) 호숫가 띠를 가장 싸게 해서 호수를 따라 돈다
+    dist_w = ndimage.distance_transform_edt(wet == 0)
+    cost = np.where(wet == 1, WATER_COST, np.where(dist_w <= 1, SHORE_COST,
+                    np.where(dist_w <= SHORE_BAND, SHORE_LOW, 1.0 + np.minimum(dist_w - SHORE_BAND, 30) * 0.02)))
     cell = lambda p: (min(H - 1, max(0, int((y1 - p[1]) / d))), min(W - 1, max(0, int((p[0] - x0) / d))))
     s, t = cell(a), cell(b)
     dist = np.full((H, W), np.inf)
