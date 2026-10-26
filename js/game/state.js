@@ -574,6 +574,63 @@ export function splitLink(base, state, id, lon, lat) {
   return node;
 }
 
+// 새 도시철도 노선 색 후보: 서로 잘 구별되는 노선도 색들
+// (지도 바탕에서 잘 보이게 짙은 색만: 연한 살구·연보라 등은 뺐다)
+const METRO_PALETTE = ['#e6194b', '#3cb44b', '#f58231', '#4363d8', '#911eb4', '#0fa3c4', '#d61fc2', '#9a6324', '#800000', '#469990',
+  '#000075', '#7aa300', '#808000', '#e6a100', '#c71585', '#2e8b57', '#4b0082', '#ff5a4e', '#00a3a3', '#8b4513', '#6a5acd', '#b5651d', '#d4a017', '#5b7c99'];
+// OSM 노선 색에 이름으로 적힌 것 (천리마선 red, 혁신선 green 등)
+const CSS_COLOURS = { red: '#ff0000', green: '#008000', blue: '#0000ff', yellow: '#ffff00', orange: '#ffa500', purple: '#800080', brown: '#a52a2a',
+  pink: '#ffc0cb', gray: '#808080', grey: '#808080', black: '#000000', white: '#ffffff', navy: '#000080', maroon: '#800000', olive: '#808000',
+  teal: '#008080', lime: '#00ff00', aqua: '#00ffff', cyan: '#00ffff', magenta: '#ff00ff', fuchsia: '#ff00ff', silver: '#c0c0c0', gold: '#ffd700',
+  violet: '#ee82ee', indigo: '#4b0082', lightblue: '#add8e6', darkblue: '#00008b', darkgreen: '#006400', skyblue: '#87ceeb', beige: '#f5f5dc' };
+
+const hexRgb = (h) => {
+  let x = String(h).trim().toLowerCase();
+  x = CSS_COLOURS[x] || x;
+  x = x.replace('#', '');
+  if (x.length === 3) x = [...x].map((c) => c + c).join('');
+  const v = parseInt(x.slice(0, 6).padEnd(6, '0'), 16) || 0;
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+};
+const rgbDist = (a, b) => { const x = hexRgb(a), y = hexRgb(b); return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]); };
+
+/**
+ * 새 도시철도 링크 색. 이미 있는 노선(연장)이면 그 노선 색을 그대로,
+ * 새 노선이면 둘레 40km 안 도시철도 노선 색과 겹치지 않는(비슷하지도 않은) 색을 무작위로 고른다. 색이 이미 있는 노선은 건드리지 않는다
+ */
+export function metroColour(base, state, name, points) {
+  const all = base.links.concat(state.newLinks);
+  if (name) {
+    const same = all.find((l) => l.mode === 2 && l.name === name && l.colour && !l.replaced);
+    if (same) return same.colour;
+  }
+  const pts = points.filter((p) => p.lon != null);
+  if (!pts.length) return null;
+  const coord = (n) => (n < base.nodes.length ? base.nodes[n] : state.newNodes[n - base.nodes.length]);
+  const near = new Set();
+  for (const l of all) {
+    if (l.mode !== 2 || !l.colour || l.replaced) continue;
+    const c = coord(l.a);
+    if (c && pts.some((p) => Math.abs(p.lat - c[1]) < 0.36 && Math.abs(p.lon - c[0]) < 0.45)) near.add(l.colour);   // 약 40km
+  }
+  const free = METRO_PALETTE.filter((c) => [...near].every((u) => rgbDist(c, u) > 90));
+  const pool = free.length ? free : METRO_PALETTE;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+/** 예전 저장: 색 없이 지은 새 도시철도 노선에 색을 준다 (노선마다 한 색) */
+export function colourNewMetro(base, state) {
+  const byName = new Map();
+  for (const l of state.newLinks) if (l.mode === 2 && !l.colour && !l.replaced) { if (!byName.has(l.name)) byName.set(l.name, []); byName.get(l.name).push(l); }
+  for (const [name, ls] of byName) {
+    const coord = (n) => (n < base.nodes.length ? base.nodes[n] : state.newNodes[n - base.nodes.length]);
+    const pts = ls.map((l) => coord(l.a)).filter(Boolean).map(([lon, lat]) => ({ lon, lat }));
+    const c = metroColour(base, state, name, pts);
+    if (c) for (const l of ls) l.colour = c;
+  }
+  return byName.size;
+}
+
 export function startNewBuild(base, state, plan) {
   const spec = NEW_BUILDS[plan.type];
   const firstId = base.links.length + state.newLinks.length;
@@ -617,6 +674,7 @@ export function startNewBuild(base, state, plan) {
     state.newNodes.length -= stops.filter((i) => plan.points[i].node == null).length;
     return { ok: false, reason: fund === 'gov' ? '예산과 차입 한도가 부족합니다.' : '운영사 잔액이 부족합니다.' };
   }
+  if (spec.mode === 2) { const c = metroColour(base, state, plan.lineName || '', plan.points); if (c) for (const l of links) l.colour = c; }
   state.newLinks.push(...links);
   plan.points.forEach((pt, i) => {
     const nm = plan.names[i];

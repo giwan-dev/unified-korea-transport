@@ -3,7 +3,7 @@ import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView, LAYE
 import { Namer, stem } from './game/naming.js';
 import {
   newGame, START_YEAR, REOPEN_SPEED, baseTransfers, startProject, cancelProject, cancelBlocked, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
-  updateCongestion, defaultFix, updateApproval, canAfford, isKP, linksUnderWork, UPGRADES, NEW_BUILDS, upgradeCost,
+  updateCongestion, defaultFix, updateApproval, canAfford, isKP, linksUnderWork, UPGRADES, NEW_BUILDS, upgradeCost, colourNewMetro,
   placeName, setPlaceName, startRestoreName, RENAME, startAirport, startAirportExpand, renameLine, splitLink,
   fundFor, settlePPP, settleRail, renameKPLines, KP_LINE_RENAME, LINE_RENAME_COST, railDividend, railEquity, mergeRail, OP_FACTORS, initOngoing, linkPending, setProjectPace, PACES,
   initAirRoutes, updateAirRoutes, startOpenRoute, closeRoute, AIR,
@@ -174,6 +174,7 @@ async function init() {
   initRail(state);
   seedServices(state, base);
   // 예전 저장의 1호선·4호선 기본 계통을 직통 계통으로 (선로 자료가 바뀌었다)
+  colourNewMetro(base, state);   // 예전 저장의 색 없는 새 도시철도 노선
   const refreshed = refreshExistingServices(state, effectiveNetwork(base, state), base.stations);
   if (refreshed.length) state.log.unshift(`${state.year}년: 기본 운행 계통을 지금 선로에 맞춰 다시 짰습니다 (${refreshed.join(', ')})`);
   initLocal(state);
