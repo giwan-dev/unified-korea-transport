@@ -4329,7 +4329,11 @@ function planStraighten() {
   const [A, B] = straight.picks;
   // 두 역이 서로 다른 노선이면 두 노선을 함께 따라간다
   const lines = new Set([straight.line, ...linesAt(A).map((x) => x.name), ...linesAt(B).map((x) => x.name)].filter(Boolean));
-  const via = railPath(net.links, A, B, lines);
+  let via = railPath(net.links, A, B, lines);
+  // 이름이 다른 연결선(보통강–서평양 경의선 연결선 등)으로 훨씬 짧게 이어지면 그 길을 편다: 두 역 노선만 따라가면 평양역을 크게 돌아간다
+  const any = railPath(net.links, A, B, null);
+  const kmOf = (v) => (v || []).reduce((s0, i) => s0 + net.links[i].len, 0);
+  if (any?.length && (!via?.length || kmOf(any) < kmOf(via) * 0.8)) via = any;
   if (!via || !via.length) return null;
   const oldKm = via.reduce((s, i) => s + net.links[i].len, 0);
   const oldMin = via.reduce((s, i) => s + (net.links[i].len / net.links[i].speed) * 60, 0);
