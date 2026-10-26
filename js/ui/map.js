@@ -1,5 +1,6 @@
 // MapLibre 지도와 레이어. 자체 벡터 배경지도(위성·음영기복을 고르면 Esri 타일), 존 단계구분도, 도로(혼잡도), 철도(교통량), 역·IC 라벨, 그리기 미리보기.
 
+import { NETWORK_COLORS } from './network-colors.js';
 import { hotspotsFC, warnIcon, HOT_VC } from './traffic.js';
 import { borderLines } from './borders.js';
 
@@ -354,9 +355,6 @@ const vol = ['coalesce', ['feature-state', 'vol'], 0];
 const vcColor = () => ['case', ['>', vol, 0], ['interpolate', ['linear'], ['coalesce', ['feature-state', 'vc'], 0], ...VC_STOPS.flat()], IDLE_COLOR];
 const IDLE_COLOR = '#9aa1aa';
 const idleOpacity = (on) => ['case', ['>', vol, 0], on, 0.45];
-// 철도 기본 색: 고속철 파랑, 협궤 주황, 일반철도 보라
-const RAIL_COLOR = ['case', ['==', ['get', 'cls'], 'hsr'], '#2453c9', ['==', ['get', 'narrow'], 1], '#e07b1a', '#6c3fa0'];
-const METRO_COLOR = ['case', ['==', ['get', 'colour'], ''], '#1a9a6c', ['get', 'colour']];
 
 let linksCache = null;
 /** 계산망 선 자료를 바꾼다 (혼잡 주의 표시를 다시 만들 때 쓰려고 기억해 둔다) */
@@ -514,14 +512,14 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     id: 'roads-minor', type: 'line', source: 'links', minzoom: 10,
     filter: ['all', ['==', ['get', 'mode'], 0], ['==', ['get', 'building'], 0], ['==', ['get', 'minor'], 1]],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': vcColor(), 'line-width': ROAD_WIDTH, 'line-opacity': idleOpacity(1) },
+    paint: { 'line-color': NETWORK_COLORS.road, 'line-width': ROAD_WIDTH, 'line-opacity': idleOpacity(1) },
   });
   // 일반도로 (간선국도·주요 도로)
   map.addLayer({
     id: 'roads', type: 'line', source: 'links',
     filter: ['all', roadBase, ['!=', ['get', 'minor'], 1], ['!=', ['get', 'cls'], 'motorway']],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': vcColor(), 'line-width': ROAD_WIDTH, 'line-opacity': idleOpacity(1) },
+    paint: { 'line-color': NETWORK_COLORS.road, 'line-width': ROAD_WIDTH, 'line-opacity': idleOpacity(1) },
   });
   // 고속도로: 짙은 테두리를 깔고 그 위에 혼잡도 색 (일반도로 위에 그려 교차하는 국도에 가려지지 않게)
   map.addLayer({
@@ -534,7 +532,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     id: 'roads-motorway', type: 'line', source: 'links',
     filter: ['all', roadBase, ['==', ['get', 'cls'], 'motorway']],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': vcColor(), 'line-width': ROAD_WIDTH, 'line-opacity': idleOpacity(1) },
+    paint: { 'line-color': NETWORK_COLORS.road, 'line-width': ROAD_WIDTH, 'line-opacity': idleOpacity(1) },
   });
   // 폐선 (수려선·금강산선 등): 갈색 점선, 눌러서 재개통
   map.addSource('closed', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -550,15 +548,15 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addLayer({
     id: 'rails', type: 'line', source: 'links', filter: ['all', ['==', ['get', 'mode'], 1], ['==', ['get', 'building'], 0], ['!=', ['get', 'ext'], 1]],
     paint: {
-      'line-color': RAIL_COLOR,
+      'line-color': NETWORK_COLORS.rail,
       'line-width': ['interpolate', ['linear'], vol, 0, 1.6, 20000, 2.2, 100000, 3.8, 400000, 7],
     },
   });
   map.addLayer({
     id: 'metro', type: 'line', source: 'links', filter: ['all', ['==', ['get', 'mode'], 2], ['==', ['get', 'building'], 0]],
     paint: {
-      // 노선 고유색 (OSM colour 태그), 없으면 기본 초록. 굵기 = 이용객 (어느 배율에서나)
-      'line-color': METRO_COLOR,
+      // 기존·신설 노선 모두 도시철도 공통색. 굵기 = 이용객 (어느 배율에서나)
+      'line-color': NETWORK_COLORS.metro,
       'line-width': ['interpolate', ['linear'], ['zoom'],
         7, ['interpolate', ['linear'], vol, 0, 0.6, 100000, 1.6, 400000, 3.2],
         11, ['interpolate', ['linear'], vol, 0, 1.2, 50000, 2.5, 200000, 5, 600000, 9]],
@@ -578,7 +576,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   });
   map.addLayer({
     id: 'ext-links', type: 'line', source: 'links', filter: ['all', ['==', ['get', 'ext'], 1], ['!=', ['get', 'cls'], 'ferry']],
-    paint: { 'line-color': ['case', ['==', ['get', 'mode'], 1], '#6c3fa0', '#7a7f86'], 'line-width': 1.6, 'line-dasharray': [1, 1.5] },
+    paint: { 'line-color': ['case', ['==', ['get', 'mode'], 1], NETWORK_COLORS.rail, NETWORK_COLORS.road], 'line-width': 1.6, 'line-dasharray': [1, 1.5] },
   });
   // 공사 중인 신설 노선은 회색 점선
   map.addLayer({
@@ -626,7 +624,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     id: 'airroutes', type: 'line', source: 'airroutes',
     layout: { 'line-sort-key': ['get', 'pax'] },
     paint: {
-      'line-color': '#b04a9c', 'line-opacity': ['interpolate', ['linear'], ['get', 'pax'], 0, 0.25, 5000, 0.4, 50000, 0.6],
+      'line-color': NETWORK_COLORS.air, 'line-opacity': ['interpolate', ['linear'], ['get', 'pax'], 0, 0.25, 5000, 0.4, 50000, 0.6],
       'line-width': ['interpolate', ['linear'], ['get', 'pax'], 0, 0.5, 1000, 0.9, 5000, 1.6, 20000, 3, 100000, 7],
     },
   });
@@ -635,14 +633,14 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     id: 'airports', type: 'circle', source: 'airports',
     paint: {
       'circle-radius': ['interpolate', ['linear'], ['get', 'pax'], 0, 3, 50000, 7, 200000, 12],
-      'circle-color': ['case', ['>', ['get', 'vc'], 1], '#d9452f', '#b04a9c'],
+      'circle-color': ['case', ['>', ['get', 'vc'], 1], '#d9452f', NETWORK_COLORS.air],
       'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1.5,
     },
   });
   map.addLayer({
     id: 'airport-labels', type: 'symbol', source: 'airports', minzoom: 6.5,
     layout: { 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 11, 'text-offset': [0, 1.1], 'text-anchor': 'top' },
-    paint: { 'text-color': '#7a3d70', 'text-halo-color': '#ffffff', 'text-halo-width': 1.2 },
+    paint: { 'text-color': NETWORK_COLORS.air, 'text-halo-color': '#ffffff', 'text-halo-width': 1.2 },
   });
 
   // 소요 시간 측정 경로 (승용차 주황, 철도 파랑)
@@ -714,7 +712,8 @@ export function setBasemap(map, kind) {
 
 export const NETWORK_GROUPS = {
   road: { label: '도로', types: { motorway: '고속도로', road: '일반도로' } },
-  rail: { label: '철도', types: { hsr: '고속철', rail: '일반 철도', narrow: '협궤', metro: '도시 철도' } },
+  rail: { label: '철도', types: { hsr: '고속철', rail: '일반 철도', narrow: '협궤' } },
+  metro: { label: '도시 철도', types: { metro: '도시 철도' } },
   air: { label: '항공', types: { air: '항공 노선' } },
 };
 export const DEFAULT_NETWORK_FILTERS = { motorway: true, road: true, hsr: true, rail: true, narrow: true, metro: true, air: true, roadCongestion: false, railCongestion: false };
@@ -748,7 +747,7 @@ export function setNetworkFilters(map, filters) {
   for (const id of ['rails-vc', 'metro-vc']) visible(id, filters.railCongestion);
   for (const id of ['airroutes', 'airports', 'airport-labels']) visible(id, filters.air);
   for (const id of ROAD_PICK_LAYERS) {
-    if (id !== 'roads-casing' && map.getLayer(id)) map.setPaintProperty(id, 'line-color', filters.roadCongestion ? vcColor() : '#3f9e63');
+    if (id !== 'roads-casing' && map.getLayer(id)) map.setPaintProperty(id, 'line-color', filters.roadCongestion ? vcColor() : NETWORK_COLORS.road);
   }
   for (const [id, base] of Object.entries(POINT_BASE)) {
     const pf = ['any', ['==', ['get', 'kind'], 'city'], ...enabled.filter((k) => k !== 'air').map((k) => ['==', ['get', `show_${k}`], true])];
@@ -770,19 +769,19 @@ export function legendHTML(metric, filters = DEFAULT_NETWORK_FILTERS, basemap = 
   const rows = [];
   if (road || rail) rows.push(`${sw(IDLE_COLOR)} 이용 없음 ${sw('#8a8f96', 'dash')} 미개통`);
   if (rail) rows.push(`${sw('#8d6e52', 'dash')} 폐선 (눌러서 재개통)`);
-  if (road) rows.push(`${sw('#2b7bb9', 'dash')} 여객선 ${sw('#7a7f86', 'dash')} 국경 연결`);
+  if (road) rows.push(`${sw('#2b7bb9', 'dash')} 여객선 ${sw(NETWORK_COLORS.road, 'dash')} 국경 연결`);
   if (!road && !rail && !air) rows.push('교통망을 숨기고 지표 색칠만 봅니다.');
   if ((road && filters.roadCongestion) || (rail && filters.railCongestion)) rows.push(`<i class="sw warn"></i> 혼잡 주의 (V/C &gt; ${HOT_VC})`);
   const congestionSample = `<i class="sw congestion" title="혼잡도 V/C: 0 → 10" style="background:linear-gradient(to right,${VC_STOPS.map(([v, c]) => `${c} ${v * 10}%`).join(',')})"></i>`;
   const samples = {
-    motorway: sw('#3f9e63', 'line motorway'), road: sw('#3f9e63'),
-    hsr: sw('#2453c9'), rail: sw('#6c3fa0'), narrow: sw('#e07b1a'), metro: sw('#1a9a6c'),
-    air: sw('#b04a9c'), roadCongestion: congestionSample, railCongestion: congestionSample,
+    motorway: sw(NETWORK_COLORS.road, 'line motorway'), road: sw(NETWORK_COLORS.road),
+    hsr: sw(NETWORK_COLORS.rail), rail: sw(NETWORK_COLORS.rail), narrow: sw(NETWORK_COLORS.rail), metro: sw(NETWORK_COLORS.metro),
+    air: sw(NETWORK_COLORS.air), roadCongestion: congestionSample, railCongestion: congestionSample,
   };
   if (filters.roadCongestion) { samples.motorway = congestionSample; samples.road = congestionSample; }
   if (filters.railCongestion) for (const key of ['hsr', 'rail', 'narrow', 'metro']) samples[key] = congestionSample;
-  const hints = { hsr: '굵기 = 이용객', rail: '굵기 = 이용객', narrow: '굵기 = 이용객', metro: '노선별 고유색 · 굵기 = 이용객', air: '굵기 = 여객', roadCongestion: '혼잡도 V/C: 0 → 10', railCongestion: '혼잡도 V/C: 0 → 10' };
-  const toggle = (key, label, group = false) => `<label class="network-toggle" title="${group ? '' : hints[key] || ''}"><span class="network-label">${group ? (key === 'air' ? sw('#b04a9c', 'dot') : '') : samples[key] || ''}${label}</span><input type="checkbox" role="switch" ${group ? `data-network-group="${key}"` : `data-network-filter="${key}"`} ${group ? (Object.keys(NETWORK_GROUPS[key].types).every((k) => filters[k]) ? 'checked' : '') : (filters[key] ? 'checked' : '')}><span class="toggle-track" aria-hidden="true"></span></label>`;
+  const hints = { hsr: '굵기 = 이용객', rail: '굵기 = 이용객', narrow: '굵기 = 이용객', metro: '굵기 = 이용객', air: '굵기 = 여객', roadCongestion: '혼잡도 V/C: 0 → 10', railCongestion: '혼잡도 V/C: 0 → 10' };
+  const toggle = (key, label, group = false) => `<label class="network-toggle" title="${group ? '' : hints[key] || ''}"><span class="network-label">${group ? sw(NETWORK_COLORS[key], key === 'air' ? 'dot' : 'line') : samples[key] || ''}${label}</span><input type="checkbox" role="switch" ${group ? `data-network-group="${key}"` : `data-network-filter="${key}"`} ${group ? (Object.keys(NETWORK_GROUPS[key].types).every((k) => filters[k]) ? 'checked' : '') : (filters[key] ? 'checked' : '')}><span class="toggle-track" aria-hidden="true"></span></label>`;
   const groups = Object.entries(NETWORK_GROUPS).map(([key, g]) => `<div class="network-group">${toggle(key, g.label, true)}<div class="network-types">${Object.entries(g.types).map(([k, label]) => toggle(k, label)).join('')}</div></div>`).join('');
   return `<div class="network-filters" aria-label="교통망 필터">${groups}</div>
     <div class="congestion-filters">${toggle('roadCongestion', '도로 혼잡도')}${toggle('railCongestion', '노선 혼잡도')}</div>

@@ -1,8 +1,9 @@
 // 계획 노선(data/plans.json)을 지도에 점선으로 그린다. 평소에는 숨기고, 건설 탭 목록에서 계획을 누르면 그 노선만 보인다.
 // 그 선을 누르면 계획이 그리기로 열린다 (main.js openPlan).
+import { NETWORK_COLORS } from './network-colors.js';
 import { smoothSegments } from '../game/curve.js';
 
-export const PLAN_COLORS = { gtx: '#0b7a8f', hsr: '#2453c9', rail: '#6c3fa0', metro: '#1a9a6c', motorway: '#c0392b', trunk: '#d35400', tunnelRoad: '#c0392b', tunnelRail: '#2453c9' };
+export const PLAN_COLORS = { gtx: NETWORK_COLORS.rail, hsr: NETWORK_COLORS.rail, rail: NETWORK_COLORS.rail, metro: NETWORK_COLORS.metro, motorway: NETWORK_COLORS.road, trunk: NETWORK_COLORS.road, tunnelRoad: NETWORK_COLORS.road, tunnelRail: NETWORK_COLORS.rail };
 
 export function planLine(p) {
   const pts = p.points.map(([, lon, lat]) => ({ lon, lat }));

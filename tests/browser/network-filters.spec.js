@@ -13,9 +13,12 @@ test('transport groups, individual types and congestion can be toggled independe
   await page.evaluate(() => { window.filterErrors = []; ukt.map.on('error', event => filterErrors.push(event.error.message)); });
   const toggle = key => page.locator(`[data-network-filter="${key}"]`);
   const group = key => page.locator(`[data-network-group="${key}"]`);
+  await expect(page.locator('[data-network-group]')).toHaveCount(4);
+  await expect(group('rail').locator('../..').locator('[data-network-filter=metro]')).toHaveCount(0);
+  expect(await page.evaluate(() => ['roads', 'rails', 'metro', 'airroutes'].map(id => ukt.map.getPaintProperty(id, 'line-color')))).toEqual(['#c46b24', '#6c3fa0', '#1a9a6c', '#2478c8']);
   await expect(page.locator('#layerview')).toHaveCount(0);
   await expect(toggle('roadCongestion')).not.toBeChecked();
-  expect(await page.evaluate(() => ukt.map.getPaintProperty('roads', 'line-color'))).toBe('#3f9e63');
+  expect(await page.evaluate(() => ukt.map.getPaintProperty('roads', 'line-color'))).toBe('#c46b24');
   for (const key of ['motorway', 'road', 'hsr', 'rail', 'narrow', 'metro', 'air']) {
     await expect(toggle(key).locator('..').locator('.network-label .sw')).toHaveCount(1);
   }
@@ -35,6 +38,9 @@ test('transport groups, individual types and congestion can be toggled independe
   expect(await page.evaluate(() => ukt.map.getLayoutProperty('bg-roads', 'visibility'))).toBe('none');
   expect(await page.evaluate(() => ukt.map.getLayoutProperty('airroutes', 'visibility'))).toBe('visible');
   expect(await page.evaluate(() => ukt.map.getSource('services')._data.features.length)).toBe(0);
+  await expect(group('metro')).toBeChecked();
+  expect(await page.evaluate(() => ukt.map.getFilter('metro').at(-1).at(-1)[1])).toEqual(['metro', 'air']);
+  await group('metro').uncheck();
   await group('air').uncheck();
   expect(await page.evaluate(() => ukt.map.getLayoutProperty('airports', 'visibility'))).toBe('none');
   for (const id of ['roads', 'rails', 'metro', 'links-building', 'ext-links', 'hotspots', 'closed-line']) {
@@ -48,10 +54,11 @@ test('transport groups, individual types and congestion can be toggled independe
   expect(await page.evaluate(() => ukt.map.getFilter('rails-vc').at(-1).at(-1)[1])).toEqual(['narrow']);
   await group('road').check();
   await toggle('roadCongestion').uncheck();
-  expect(await page.evaluate(() => ukt.map.getPaintProperty('roads', 'line-color'))).toBe('#3f9e63');
+  expect(await page.evaluate(() => ukt.map.getPaintProperty('roads', 'line-color'))).toBe('#c46b24');
   await toggle('roadCongestion').check();
   expect(Array.isArray(await page.evaluate(() => ukt.map.getPaintProperty('roads', 'line-color')))).toBe(true);
   await group('rail').check();
+  await group('metro').check();
   await group('air').check();
   await toggle('railCongestion').uncheck();
   await toggle('roadCongestion').uncheck();
@@ -83,11 +90,11 @@ test('each transport type renders on its own without restoring other types', asy
       type: 'Feature', id: 900000 + i,
       properties: {testType: type, mode: i < 2 ? 0 : type === 'metro' ? 2 : 1,
         cls: type === 'motorway' ? 'motorway' : type === 'hsr' ? 'hsr' : 'primary',
-        narrow: type === 'narrow' ? 1 : 0, building: 0, ext: 0, minor: 0, colour: ''},
+        narrow: type === 'narrow' ? 1 : 0, building: 0, ext: 0, minor: 0, colour: type === 'metro' ? '#ff0000' : ''},
       geometry: {type: 'LineString', coordinates: [350, 600].map(x => map.unproject([x, 100 + i * 40]).toArray())}
     }))});
   }, types);
-  for (const group of ['road', 'rail', 'air']) await page.locator(`[data-network-group="${group}"]`).uncheck();
+  for (const group of ['road', 'rail', 'metro', 'air']) await page.locator(`[data-network-group="${group}"]`).uncheck();
   const renderedTypes = () => page.evaluate(() => [...new Set(ukt.map.queryRenderedFeatures({layers: ['roads', 'roads-motorway', 'rails', 'metro']}).map(f => f.properties.testType).filter(Boolean))].sort());
   await expect.poll(renderedTypes).toEqual([]);
   for (const type of types) {
