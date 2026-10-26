@@ -994,12 +994,15 @@ function nodeNames() {
 }
 
 /** 점의 중요도: 0 도시·새 시설, 1 큰 역(고속철도역·이용 많은 역), 2 일반 역·JCT·휴게소, 3 IC·도시철도역 */
-function pointRank(node, v, hsrNodes, riders) {
-  if (v.kind === 'city' || v.isNew) return 0;
+function pointRank(node, v, hsrNodes, riders, railNodes) {
+  if (v.kind === 'city') return 0;
   if (v.kind === 'station') {
-    if (v.metro) return 3;
+    // 도시철도역(새로 놓은 역 포함: 철도 선로가 닿지 않는 역)은 확대해야 보인다. 축소하면 점이 너무 많다
+    if (v.metro || !railNodes.has(node)) return 3;
+    if (v.isNew) return 1;
     return hsrNodes.has(node) || (riders.get(node) || 0) >= 8000 ? 1 : 2;
   }
+  if (v.isNew) return v.kind === 'rest' ? 2 : 1;
   if (v.kind === 'JCT' || v.kind === 'rest') return 2;
   return 3;
 }
@@ -1007,12 +1010,17 @@ function pointRank(node, v, hsrNodes, riders) {
 function refreshPoints() {
   const features = [];
   const hsrNodes = new Set();
-  for (const l of allLinks()) if (l.mode === 1 && l.cls === 'hsr') { hsrNodes.add(l.a); hsrNodes.add(l.b); }
+  const railNodes = new Set();
+  for (const l of allLinks()) {
+    if (l.mode !== 1 || l.replaced) continue;
+    railNodes.add(l.a); railNodes.add(l.b);
+    if (l.cls === 'hsr') { hsrNodes.add(l.a); hsrNodes.add(l.b); }
+  }
   const riders = stationRiders();
   for (const [node, v] of nodeNames()) {
     const c = v.coord || nodeCoord(node);
     if (!c) continue;
-    features.push({ type: 'Feature', properties: { node, ...v, rank: pointRank(node, v, hsrNodes, riders) }, geometry: { type: 'Point', coordinates: c } });
+    features.push({ type: 'Feature', properties: { node, ...v, rank: pointRank(node, v, hsrNodes, riders, railNodes) }, geometry: { type: 'Point', coordinates: c } });
   }
   // 한 역의 노선별 노드(수서: SRT·3호선·수인분당선)는 지도에 점 하나만: 같은 이름이 600m 안이면 가장 중요한(순위가 높은) 점만 남긴다
   features.sort((a, b) => a.properties.rank - b.properties.rank);
@@ -3767,10 +3775,15 @@ function openPlan(id) {
     // 새 역이면 계획에 적힌 역 이름을 쓴다. 계획서의 가칭 번호('102정거장')는 놓인 곳 지명으로 짓는다
     if (spec.mode >= 1 && !pt.existing && wp[0] && !/^\d+정거장$/.test(wp[0])) { if (pt.reserved) namer.release(pt.name, 'station'); pt.name = wp[0]; pt.auto = false; }
   }
-  // 복원 사업처럼 기존 노선을 잇는 계획은 그 노선 이름을 이어 쓴다 (사업 이름은 계획 이름)
-  draft.lineName = plan.line || plan.name;
+  // 옛 노선을 걷어 내는 계획(현대화·고속화)은 새 선형 곁의 옛 역을 새 노선 역으로 넣는다 (완공 뒤에도 그 역의 여객 영업이 이어진다)
+  const oldStops = plan.retireLine && spec.mode === 1 ? addOldLineStops(plan.retireLine) : 0;
+  if (oldStops) draft.recNote = `옛 ${plan.retireLine.join('·')} 역 ${oldStops}곳을 새 노선의 역으로 넣었습니다. 완공 때 옛 선로를 걷어 내도 이 역들의 여객 영업이 이어집니다. 서지 않을 역은 '통과'로 바꾸세요.`;
+  // 복원 사업처럼 기존 노선을 잇는 계획은 그 노선 이름을 이어 쓴다 (사업 이름은 계획 이름).
+  // 옛 노선을 대신하는 계획도 그 노선 이름을 잇는다 (황해청년선 현대화 → 황해청년선: 계획 이름이 노선 이름이 되어 옛 노선이 사라진 것처럼 보였다)
+  draft.lineName = plan.line || plan.lineName || (plan.retireLine?.length === 1 ? plan.retireLine[0] : plan.name);
   draft.lineNameEdited = true;
-  if (plan.line) { draft.extendOf = plan.line; draft.planTitle = plan.name; }
+  if (plan.line) draft.extendOf = plan.line;
+  if (draft.lineName !== plan.name) draft.planTitle = plan.name;
   draft.plan = plan.id;
   // 철도는 계획 자료의 실제 정차역 목록 그대로, 도로는 기존 간선도로와 만나는 곳에 IC를 넣는다
   draft.planFilled = spec.mode === 0 ? fillPlanICs(plan.type) : 0;
@@ -3778,6 +3791,47 @@ function openPlan(id) {
   renderBuild();
   const xs = draft.points.map((p) => p.lon), ys = draft.points.map((p) => p.lat);
   map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: 60, maxZoom: 11 });
+}
+
+/**
+ * 옛 노선을 걷어 내는 계획: 새 선형에서 2.5km 안에 있는 옛 노선 역을 새 노선의 역으로 끼운다 (계획 정차역에 없는 역).
+ * 계획 정차역만 두면 완공 때 사이 역이 모두 닫혀 그 지역의 여객 영업이 사라졌다 (황해청년선 현대화는 4개 역, 원산–청진은 22개 역만 남았다).
+ * 선형 끝 너머의 역, 이미 있는 역에서 0.8km 안인 역은 넣지 않는다. 끼운 역 수를 돌려준다
+ */
+function addOldLineStops(lineNames) {
+  const lines = new Set(lineNames);
+  const st = railStationSet(), names = nodeNames();
+  const cand = new Set();
+  effectiveNetwork(base, state).links.forEach((l) => { if (l.active && l.mode === 1 && lines.has(l.name)) for (const n of [l.a, l.b]) if (st.has(n)) cand.add(n); });
+  for (const p of draft.points) if (p.node != null) cand.delete(p.node);
+  const segs = smoothSegments(draftPoints());
+  const stops = draft.points.filter((p) => !p.via);
+  const picked = [];
+  for (const n of cand) {
+    const [x, y] = nodeCoord(n);
+    const ck = Math.cos((y * Math.PI) / 180);
+    let best = null;
+    segs.forEach((seg, i) => {
+      for (let k = 0; k + 1 < seg.length; k++) {
+        const [ax, ay] = seg[k], [bx, by] = seg[k + 1];
+        const dx = (bx - ax) * ck, dy = by - ay, px = (x - ax) * ck, py = y - ay;
+        const t = Math.max(0, Math.min(1, (px * dx + py * dy) / (dx * dx + dy * dy || 1e-12)));
+        const d = Math.hypot(px - t * dx, py - t * dy) * 111.32;
+        if (!best || d < best.d) best = { d, i, t: (k + t) / (seg.length - 1), lon: ax + t * (bx - ax), lat: ay + t * (by - ay) };
+      }
+    });
+    if (!best || best.d > 2.5) continue;
+    if ((best.i === 0 && best.t < 0.01) || (best.i === segs.length - 1 && best.t > 0.99)) continue;   // 선형 끝 너머
+    const near = (q) => kmBetween(q.lon, q.lat, best.lon, best.lat) < 0.8;
+    if (stops.some(near) || picked.some(near)) continue;
+    picked.push({ ...best, name: names.get(n)?.name || anyStationName(n) });
+  }
+  // 뒤에서부터 끼워 앞 번호가 밀리지 않게 (같은 구간 안에서는 먼 쪽부터)
+  picked.sort((a, b) => b.i - a.i || b.t - a.t);
+  for (const q of picked) {
+    draft.points.splice(q.i + 1, 0, { node: null, lon: q.lon, lat: q.lat, split: null, kind: 'station', name: q.name, auto: false, reserved: false });
+  }
+  return picked.length;
 }
 
 /** 계획 노선 미리보기 선: 양 끝이 기존 역·노드면 그리기와 같이 그 노선에 접선으로 붙인다 */
@@ -4833,15 +4887,17 @@ function planRetire(p, lineNames) {
   if (!via?.length) return;
   const mine = new Set(p.links);
   p.retire = via.filter((i) => !mine.has(i));
-  // 옛 경로의 역: 새 선로 양 끝과 같은 노드는 그대로, 나머지는 가까운 새 역으로 (없으면 닫는다)
-  const stSet = railStationSet(), newSt = (p.stations || []).filter((n) => nodeCoord(n));
+  // 옛 경로의 역: 새 선로가 지나는 역(양 끝, 계획 정차역으로 쓴 옛 역)은 그대로, 나머지는 가까운 새 노선 역으로 (없으면 닫는다)
+  const stSet = railStationSet();
+  const onNew = new Set(ls.flatMap((l) => [l.a, l.b]));
+  const newSt = [...new Set([...(p.stations || []), ...[...onNew].filter((n) => stSet.has(n))])].filter((n) => nodeCoord(n));
   p.stationMap = {};
   p.dropStations = [];
   let node = a;
   for (const i of via) {
     const l = L[i];
     node = l.a === node ? l.b : l.a;
-    if (node === A || node === B || node === b || !stSet.has(node)) continue;
+    if (node === A || node === B || node === b || onNew.has(node) || !stSet.has(node)) continue;
     const c = nodeCoord(node);
     let best = null, bd = 3;
     for (const n of newSt) { const q = nodeCoord(n); const d = kmBetween(c[0], c[1], q[0], q[1]); if (d < bd) { bd = d; best = n; } }
