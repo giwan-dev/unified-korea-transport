@@ -280,9 +280,24 @@ export const METRICS = {
   access: { label: '접근성 (상대)', ramp: ['#f7f4ea', '#c8e0b4', '#5aa36b', '#1d5c3a'], stops: [0.2, 0.6, 1.2, 2.5], fmt: (v) => v.toFixed(1) },
 };
 
+const MAP_VIEW_KEY = 'ukt-map-view';
+
+function savedMapView() {
+  try {
+    const v = JSON.parse(localStorage.getItem(MAP_VIEW_KEY));
+    if (!Array.isArray(v?.center) || v.center.length !== 2 || !v.center.every(Number.isFinite)
+      || Math.abs(v.center[0]) > 180 || Math.abs(v.center[1]) > 85.051129
+      || !Number.isFinite(v.zoom) || v.zoom < 4 || v.zoom > 14) return {};
+    return {center: v.center, zoom: v.zoom,
+      bearing: Number.isFinite(v.bearing) ? v.bearing : 0,
+      pitch: Number.isFinite(v.pitch) && v.pitch >= 0 && v.pitch <= 60 ? v.pitch : 0};
+  } catch { return {}; }
+}
+
 export async function createMap(container) {
   const map = new maplibregl.Map({
     container, style: baseStyle(), center: [127.4, 38.6], zoom: 5.6, minZoom: 4, maxZoom: 14,
+    ...savedMapView(),
     localIdeographFontFamily: '"Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif',
     locale: { 'NavigationControl.ZoomIn': '확대', 'NavigationControl.ZoomOut': '축소', 'NavigationControl.ResetBearing': '북쪽을 위로 (방위 정렬)' },
     attributionControl: {
@@ -290,6 +305,16 @@ export async function createMap(container) {
       customAttribution: '행정동 경계 © 통계청 SGIS(공공누리 1유형)·vuski/admdongkor (CC BY 4.0) · 도로·철도·북측 경계 © OpenStreetMap 기여자 (ODbL) · WorldPop (CC BY 4.0) · Natural Earth',
     },
   });
+  const saveView = () => {
+    const center = map.getCenter().wrap();
+    try {
+      localStorage.setItem(MAP_VIEW_KEY, JSON.stringify({center: [center.lng, center.lat],
+        zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch()}));
+    } catch { /* 저장을 막은 브라우저에서도 지도는 계속 쓴다 */ }
+  };
+  map.on('moveend', saveView);
+  window.addEventListener('pagehide', saveView);
+  map.on('remove', () => window.removeEventListener('pagehide', saveView));
   map.scrollZoom.setWheelZoomRate(1 / 180);
   map.scrollZoom.setZoomRate(1 / 50);
   // 출처 표기는 접어 둔 채(ⓘ) 시작한다: 넓은 화면에서 펼쳐진 채로 뜨면 지도 아래를 한 줄 가린다. 누르면 펼쳐진다
