@@ -1,5 +1,36 @@
 import {test, expect} from '@playwright/test';
 
+test('clicking a motorway casing selects it instead of a nearby railway', async ({page}) => {
+  await page.addInitScript(() => { localStorage.setItem('ukt-guide-mode', 'off'); localStorage.setItem('ukt-lang', 'ko'); });
+  await page.goto('/?serial');
+  await page.waitForFunction(() => window.ukt?.result && !document.querySelector('#btn-next').disabled, null, {timeout: 120000});
+  await page.locator('[data-setup-act="ok"]').click();
+  // A small rendering fixture isolates two parallel lines, using real network IDs
+  // so the normal click handler and detail panel still run end to end.
+  const target = await page.evaluate(() => {
+    const map = ukt.map;
+    map.jumpTo({center: [126.4, 38.3], zoom: 10});
+    const id = ukt.base.links.findIndex(l => l.cls === 'motorway' && !l.ext);
+    const railId = ukt.base.links.findIndex(l => l.mode === 1 && !l.ext);
+    const p = map.project([126.4, 38.3]);
+    const line = (id, mode, cls, offset) => ({type: 'Feature', id,
+      properties: {id, mode, cls, building: 0, ext: 0},
+      geometry: {type: 'LineString', coordinates: [-100, 100].map(dx => map.unproject([p.x + dx, p.y + offset]).toArray())}});
+    map.getSource('links').setData({type: 'FeatureCollection', features: [line(id, 0, 'motorway', 0), line(railId, 1, 'conv', 7)]});
+    map.getSource('points').setData({type: 'FeatureCollection', features: []});
+    return {id, x: p.x, y: p.y + 3.5};
+  });
+  await page.waitForFunction(p => {
+    const layers = ['roads-motorway', 'roads-casing', 'rails'];
+    const direct = ukt.map.queryRenderedFeatures([p.x, p.y], {layers})[0];
+    const nearby = ukt.map.queryRenderedFeatures([[p.x - 4, p.y - 4], [p.x + 4, p.y + 4]], {layers})[0];
+    return direct?.properties.id === p.id && direct.layer.id === 'roads-casing' && nearby?.properties.mode === 1;
+  }, target, {timeout: 15000});
+  await page.locator('.maplibregl-canvas').click({position: {x: target.x, y: target.y}});
+  await expect(page.locator('#selection')).toContainText('고속도로');
+  expect(await page.evaluate(id => ukt.map.getFeatureState({source: 'links', id}).sel, target.id)).toBe(true);
+});
+
 test('motorway segments support click selection, box selection and construction snapping', async ({page}) => {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));

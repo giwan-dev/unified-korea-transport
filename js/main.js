@@ -1073,9 +1073,12 @@ function bindMap() {
     if (ap) return select({ type: 'airport', id: ap.properties.id });
     const pt = map.queryRenderedFeatures(box, { layers: ['points'] })[0];
     if (pt) return select({ type: 'node', id: pt.properties.node });
-    const ln = map.queryRenderedFeatures(box, { layers: ['rails', 'metro', ...ROAD_PICK_LAYERS, 'ferries', 'ext-links', 'links-building'] })[0];
+    const linkLayers = ['rails', 'metro', ...ROAD_PICK_LAYERS, 'ferries', 'ext-links', 'links-building'];
+    // 실제 누른 선(고속도로 테두리 포함)을 먼저 고른다. 주변 4px 검색만 쓰면 옆 철도가 우선된다.
+    const directLine = map.queryRenderedFeatures(e.point, { layers: linkLayers })[0];
+    const ln = directLine || map.queryRenderedFeatures(box, { layers: linkLayers })[0];
     // 지도에 그린 운행 계통을 누르면 그 계통 고치기 (밑 선로는 편집 창의 '이 자리 선로 보기'로)
-    const sv = showServices && !e.originalEvent?.shiftKey && map.getLayer('services-line') ? map.queryRenderedFeatures([[e.point.x - 8, e.point.y - 8], [e.point.x + 8, e.point.y + 8]], { layers: ['services-line'] })[0] : null;   // 계통 선은 옆으로 비켜 그려 칸을 넓게
+    const sv = showServices && !e.originalEvent?.shiftKey && (!directLine || directLine.properties.mode >= 1) && map.getLayer('services-line') ? map.queryRenderedFeatures([[e.point.x - 8, e.point.y - 8], [e.point.x + 8, e.point.y + 8]], { layers: ['services-line'] })[0] : null;   // 계통 선은 옆으로 비켜 그려 칸을 넓게. 직접 누른 도로는 가리지 않는다.
     const svc = sv && state.services.find((x) => x.id === sv.properties.id);
     if (svc) { openServiceEditor(svc.line, svc.cls, svc.id); if (svcEdit && ln) svcEdit.underLink = ln.properties.id; renderSelection(); return; }
     const cl = !ln && map.getLayer('closed-line') ? map.queryRenderedFeatures(box, { layers: ['closed-line'] })[0] : null;
