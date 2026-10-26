@@ -218,6 +218,17 @@ async function init() {
     const closed = new Set(state.closedStations ||= []), reopened = new Set(state.reopenedStations || []);
     for (const n of p.dropStations) if (!closed.has(n) && !reopened.has(n)) state.closedStations.push(n);
   }
+  // 예전 저장: 나중에 놓은 철도가 문 닫은 역(직선화로 폐역한 옛 역)에 서는데 그 역이 닫힌 채였다
+  // (경의고속철도의 금천·평산·서흥이 노선도에서 빠지고 고시에 "104정거장"으로 나오던 것): 새 선로가 닿는 닫힌 역은 다시 연다
+  if (state.closedStations?.length) {
+    const touched = new Set();
+    for (const l of state.newLinks) if (!l.replaced && (l.mode === 1 || l.mode === 2)) { touched.add(l.a); touched.add(l.b); }
+    const back = state.closedStations.filter((n) => touched.has(n));
+    if (back.length) {
+      (state.reopenedStations ||= []).push(...back);
+      state.closedStations = state.closedStations.filter((n) => !touched.has(n));
+    }
+  }
   mark('game state');
   assignTourism(await tourismP);
   const bl = await baselineP;
