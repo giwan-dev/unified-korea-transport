@@ -343,25 +343,47 @@ export function setHousing(map, list) {
   const src = map?.getSource('housing');
   if (!src) return;
   const features = [];
+  const inRing = (x, y, ring) => {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i], [xj, yj] = ring[j];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  };
   for (const h of list || []) {
-    const R = HOUSING_R[h.size] || 1;
+    const R = h.R || HOUSING_R[h.size] || 1;
     const kx = 111.32 * Math.cos((h.lat * Math.PI) / 180), ky = 110.57;
     const at = (x, y) => [h.lon + x / kx, h.lat + y / ky];
-    const ring = [];
-    // 둥근 단지가 아니라 조금 일그러진 모양 (지구마다 고정)
     const seed = [...h.id].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 11);
-    const wob = (k) => 1 + 0.12 * Math.sin(k * 2 + (seed % 7)) + 0.06 * Math.cos(k * 3 + (seed % 5));
-    for (let k = 0; k <= 36; k++) { const t = (k / 36) * 2 * Math.PI; ring.push(at(R * wob(t) * Math.cos(t), R * wob(t) * Math.sin(t))); }
-    features.push({ type: 'Feature', properties: { k: 'area', done: !!h.done }, geometry: { type: 'Polygon', coordinates: [ring] } });
-    features.push({ type: 'Feature', properties: { k: 'label', name: h.done ? h.name : `${h.name} (공사 중)` }, geometry: { type: 'Point', coordinates: [h.lon, h.lat] } });
-    if (!h.done) continue;
+    let ring = h.ring ? [...h.ring, h.ring[0]] : null;
+    if (!ring) {
+      // 둥근 단지가 아니라 조금 일그러진 모양 (지구마다 고정)
+      ring = [];
+      const wob = (k) => 1 + 0.12 * Math.sin(k * 2 + (seed % 7)) + 0.06 * Math.cos(k * 3 + (seed % 5));
+      for (let k = 0; k <= 36; k++) { const t = (k / 36) * 2 * Math.PI; ring.push(at(R * wob(t) * Math.cos(t), R * wob(t) * Math.sin(t))); }
+    }
+    const built = h.built || h.done;
+    features.push({ type: 'Feature', properties: { k: 'area', done: !!built }, geometry: { type: 'Polygon', coordinates: [ring] } });
+    features.push({ type: 'Feature', properties: { k: 'label', name: h.done ? h.name : built ? `${h.name} (입주 중)` : `${h.name} (공사 중)` }, geometry: { type: 'Point', coordinates: [h.lon, h.lat] } });
+    if (!built) continue;
+    // 150m 간격 격자 도로 (지구마다 방향이 다르다), 경계 안 조각만
     const ang = ((seed % 90) * Math.PI) / 180, c = Math.cos(ang), sn = Math.sin(ang);
-    const r = R * 0.92;
+    const r = R * (h.ring ? 1.8 : 0.92);
     for (let off = -r + 0.075; off < r; off += 0.15) {
-      const half = Math.sqrt(Math.max(0, r * r - off * off));
+      const half = h.ring ? r : Math.sqrt(Math.max(0, r * r - off * off));
       for (const [ux, uy, vx, vy] of [[c, sn, -sn, c], [-sn, c, c, sn]]) {
-        const p0 = at(vx * off - ux * half, vy * off - uy * half), p1 = at(vx * off + ux * half, vy * off + uy * half);
-        features.push({ type: 'Feature', properties: { k: 'street' }, geometry: { type: 'LineString', coordinates: [p0, p1] } });
+        if (!h.ring) {
+          features.push({ type: 'Feature', properties: { k: 'street' }, geometry: { type: 'LineString', coordinates: [at(vx * off - ux * half, vy * off - uy * half), at(vx * off + ux * half, vy * off + uy * half)] } });
+          continue;
+        }
+        let seg = null;
+        for (let t = -half; t <= half; t += 0.05) {
+          const p = at(vx * off + ux * t, vy * off + uy * t);
+          if (inRing(p[0], p[1], h.ring)) (seg ||= []).push(p);
+          else if (seg) { if (seg.length > 1) features.push({ type: 'Feature', properties: { k: 'street' }, geometry: { type: 'LineString', coordinates: seg } }); seg = null; }
+        }
+        if (seg?.length > 1) features.push({ type: 'Feature', properties: { k: 'street' }, geometry: { type: 'LineString', coordinates: seg } });
       }
     }
   }

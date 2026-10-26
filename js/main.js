@@ -3,7 +3,7 @@ import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView, LAYE
 import { Namer, stem } from './game/naming.js';
 import {
   newGame, START_YEAR, REOPEN_SPEED, baseTransfers, startProject, cancelProject, cancelBlocked, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
-  updateCongestion, defaultFix, updateApproval, canAfford, isKP, linksUnderWork, UPGRADES, NEW_BUILDS, upgradeCost, colourNewMetro,
+  updateCongestion, defaultFix, updateApproval, canAfford, isKP, linksUnderWork, UPGRADES, NEW_BUILDS, upgradeCost, colourNewMetro, addNewNode, addPlannedRoad,
   placeName, setPlaceName, startRestoreName, RENAME, startAirport, startAirportExpand, renameLine, splitLink,
   fundFor, settlePPP, settleRail, renameKPLines, KP_LINE_RENAME, LINE_RENAME_COST, railDividend, railEquity, mergeRail, OP_FACTORS, initOngoing, linkPending, setProjectPace, PACES,
   initAirRoutes, updateAirRoutes, startOpenRoute, closeRoute, AIR,
@@ -58,7 +58,7 @@ startI18n();
 import { buildReport, reportHTML, downloadReportImage, TIME_PAIRS, GOALS } from './ui/report.js';
 import { openGazette } from './ui/gazette.js';
 
-const APP_VERSION = 'Alpha 0.2';
+const APP_VERSION = 'Alpha 0.3';
 const BUG_MAIL = 'evrgrn0528@gmail.com';
 // 오류 제보에 함께 보낼 최근 오류 (화면에 안 보이는 것도)
 const errLog = [];
@@ -576,6 +576,7 @@ function nextYear() {
   const opened = done.some((p) => p.kind === 'new');   // 플레이어가 놓은 새 노선 (이어받은 공사는 해마다 열려서 뺀다)
   // 완공된 역세권 개발: 분양 수익과 인구 순유입
   const dev = [...settleDevels(state, done), ...settleHousing(state, done)];
+  housingComplaints();
   settleSEZ(done);
   // 남북 통합도가 오르면 북측 관광지가 하나씩 열린다
   for (const s of newlyUnlocked(state, tourSites)) {
@@ -2453,21 +2454,25 @@ function housingStatusHTML() {
   const list = state.housing || [];
   if (!list.length) return '';
   const projOf = new Map(state.projects.filter((p) => p.kind === 'housing').map((p) => [p.id, p]));
-  const sizeLabel = (k) => HOUSING.sizes[k]?.label || k;
-  const done = list.filter((h) => h.done), building = list.filter((h) => !h.done && projOf.get(h.id)?.status === 'building');
-  const people = done.reduce((s, h) => s + (h.persons || 0), 0), revenue = done.reduce((s, h) => s + (h.revenue || 0), 0);
+  const sizeLabel = (h) => (h.ring ? `그린 구역 ${((h.R || 1) ** 2 * Math.PI).toFixed(1)}km²` : HOUSING.sizes[h.size]?.label || h.size);
+  const done = list.filter((h) => h.done), going = list.filter((h) => !h.done);
+  const people = list.reduce((s, h) => s + (h.done ? h.persons : h.occupied || 0), 0);
   const row = (h) => {
-    const p = projOf.get(h.id);
-    const prog = p ? Math.min(1, p.paid / Math.max(1, p.cost)) : 1;
+    const phases = h.phases || [{ id: h.id, households: h.households || 0, done: h.done }];
+    const ph = phases.map((p, k) => {
+      const pr = projOf.get(p.id);
+      const prog = p.done ? 1 : pr ? Math.min(1, pr.paid / Math.max(1, pr.cost)) : 0;
+      return `${phases.length > 1 ? `${k + 1}단계 ` : ''}${p.done ? '준공' : `${pr?.doneYear ?? ''}년 준공 예정`}<div class="progress"><div style="width:${Math.round(prog * 100)}%"></div></div>`;
+    }).join('');
+    const occ = h.done ? 1 : (h.occupied || 0) / Math.max(1, h.persons);
     return `<div class="item"><button class="t link" data-house-go="${h.id}" title="지도에서 보기">${esc(h.name)}</button>
-      <div class="m">${esc(zoneName(h.zone))} · ${sizeLabel(h.size)} · ${h.done
-        ? `입주 ${fmtPeople(h.persons)} (그중 순증 ${fmtPeople(h.net)}) · 분양 수익 ${formatWon(h.revenue)}`
-        : `${p?.doneYear ?? ''}년 입주 예정 · 입주 예상 ${fmtPeople(h.persons)}`}</div>
-      ${h.done ? '' : `<div class="progress"><div style="width:${Math.round(prog * 100)}%"></div></div>`}</div>`;
+      <div class="m">${esc(zoneName(h.zone))} · ${sizeLabel(h)} · ${(h.households || 0).toLocaleString()}세대${h.score != null ? ` · 입지 ${Math.round(h.score * 100)}점` : ''}${h.levy ? ' · 광역교통개선대책' : ''}</div>
+      <div class="m">입주 ${fmtPeople(h.done ? h.persons : h.occupied || 0)} / ${fmtPeople(h.persons)} (${Math.round(occ * 100)}%) · 분양 수익 ${formatWon(h.revenue)}${h.complaint ? ` · <span class="neg">교통 대책 민원 (철도역 ${(h.railKm || 0).toFixed(1)}km)</span>` : ''}</div>
+      ${h.done ? '' : ph}</div>`;
   };
   return `<h3 style="margin-top:16px">택지지구 (${list.length})</h3>
-    <p class="hint">입주 완료 ${done.length}곳 · 입주민 ${fmtPeople(people)} · 분양 수익 합계 ${formatWon(revenue)}${building.length ? ` · 공사 중 ${building.length}곳` : ''}</p>
-    <div class="list">${[...building, ...done].map(row).join('')}</div>`;
+    <p class="hint">입주 완료 ${done.length}곳 · 입주민 ${fmtPeople(people)}${going.length ? ` · 공사·입주 중 ${going.length}곳` : ''} · 민원 ${list.filter((h) => h.complaint).length}곳</p>
+    <div class="list">${[...going, ...done].map(row).join('')}</div>`;
 }
 
 /** 사업이 놓인 범위 [[서, 남], [동, 북]]: 구간·공항·항공 노선·옛 이름(시군구). 찾을 수 없으면 null */
@@ -4798,32 +4803,106 @@ function recommendRoute(text) {
 // ------------------------------------------------------------ 택지지구 개발
 
 let housingPick = false;
+let housingDraw = null;   // 경계 그리기 중: {pts: [[경도, 위도], ...]}
+
 function startHousingPick() {
   cancelDraft();
   housingPick = true;
+  housingDraw = null;
   map.getCanvas().style.cursor = 'crosshair';
+  map.doubleClickZoom.disable();
   if (metric !== 'subDensity' && metric !== 'density') { metricBeforeDraft = metric; metric = 'subDensity'; paintZones(); renderLegend(); }
-  toast('초록색 칸이 택지지구를 놓을 수 있는 곳입니다 (진할수록 큰 신도시까지). 누르면 그 자리에 놓습니다 (Esc: 취소). 교통이 좋은 곳일수록 분양이 잘 됩니다.');
+  housingTool();
   // 평지인지 보려고 지형 격자를 받은 뒤 지금 보이는 곳의 가능 구역을 칠한다 (지도를 옮기면 다시)
   loadTerrain().then(() => { if (housingPick) drawHousingSites(); });
   map.on('moveend', drawHousingSites);
+  document.addEventListener('keydown', housingKey);
 }
 function endHousingPick() {
   if (!housingPick) return;
   housingPick = false;
+  housingDraw = null;
   map.getCanvas().style.cursor = '';
+  map.doubleClickZoom.enable();
   map.off('moveend', drawHousingSites);
+  document.removeEventListener('keydown', housingKey);
   map.getSource('housing-sites')?.setData({ type: 'FeatureCollection', features: [] });
+  map.getSource('housing-draw')?.setData({ type: 'FeatureCollection', features: [] });
+  document.getElementById('housing-tool')?.remove();
   endDraftView();
 }
+function housingKey(e) {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'Escape') endHousingPick();
+  if (housingDraw && e.key === 'Enter') finishHousingDraw();
+  if (housingDraw && e.key === 'Backspace') { housingDraw.pts.pop(); drawHousingOutline(); }
+}
 
-/** 지금 보이는 곳을 칸으로 나눠 택지지구를 놓을 수 있는 칸을 칠한다 (누를 때와 같은 판정: housingSiteProblem) */
+/** 택지지구를 고르는 동안 지도 위에 뜨는 작은 도구: 누른 곳에 놓기 / 경계 그리기, 색 설명 */
+function housingTool() {
+  document.getElementById('housing-tool')?.remove();
+  const el = document.createElement('div');
+  el.id = 'housing-tool';
+  el.className = 'map-tool';
+  el.innerHTML = `<b>택지지구 개발</b>
+    <div class="m">초록 칸: 지을 수 있는 곳 (진할수록 입지가 좋아 분양 수익이 큼 · 철도역·고속도로 IC가 가깝고 둘레 인구가 많은 곳)</div>
+    <div class="btns"><button class="small ${housingDraw ? '' : 'primary'}" data-ht="click">누른 곳에 놓기</button>
+      <button class="small ${housingDraw ? 'primary' : ''}" data-ht="draw">경계 그리기</button>
+      ${housingDraw ? '<button class="small" data-ht="done">완료 (Enter)</button>' : ''}
+      <button class="small" data-ht="cancel">취소 (Esc)</button></div>
+    ${housingDraw ? `<div class="m">지도를 눌러 꼭짓점을 찍고 완료를 누르세요 (Backspace: 마지막 점 지우기). 면적에 따라 세대 수가 정해집니다 (km²당 ${HOUSING.density.toLocaleString()}세대).</div>` : ''}`;
+  el.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-ht]');
+    if (!b) return;
+    if (b.dataset.ht === 'cancel') endHousingPick();
+    else if (b.dataset.ht === 'draw') { housingDraw = { pts: [] }; housingTool(); drawHousingOutline(); }
+    else if (b.dataset.ht === 'click') { housingDraw = null; housingTool(); drawHousingOutline(); }
+    else if (b.dataset.ht === 'done') finishHousingDraw();
+  });
+  document.getElementById('map').appendChild(el);
+}
+
+// ---- 입지 점수: 철도역·고속도로 IC까지 거리와 둘레 수요 (분양 수익과 교통 민원에 쓴다)
+let siteIndex = null;
+function siteIndexes() {
+  const sig = `${state.newStations.length}|${state.newLinks.length}|${(state.closedStations || []).length}`;
+  if (siteIndex?.sig === sig) return siteIndex;
+  const bins = (pts) => {
+    const m = new Map();
+    for (const c of pts) { if (!c) continue; const k = `${Math.floor(c[0] / 0.1)}:${Math.floor(c[1] / 0.1)}`; if (!m.has(k)) m.set(k, []); m.get(k).push(c); }
+    return m;
+  };
+  const rail = [...railStationSet(), ...(base.metro_stations || []).map(([, n]) => n)].map(nodeCoord);
+  const ic = base.junctions.map(([, n]) => nodeCoord(n));
+  for (const [k, v] of Object.entries(state.names || {})) if (v.kind === 'IC' || v.kind === 'JCT') ic.push(nodeCoord(+k));
+  siteIndex = { sig, rail: bins(rail), ic: bins(ic) };
+  return siteIndex;
+}
+function nearestKm(binMap, lon, lat, maxKm = 15) {
+  const bx = Math.floor(lon / 0.1), by = Math.floor(lat / 0.1);
+  let best = Infinity;
+  for (let i = bx - 2; i <= bx + 2; i++) for (let j = by - 2; j <= by + 2; j++) {
+    for (const c of binMap.get(`${i}:${j}`) || []) { const d = kmBetween(lon, lat, c[0], c[1]); if (d < best) best = d; }
+  }
+  return Math.min(best, maxKm);
+}
+/** 입지 점수 0~1과 근거: 철도역(가까울수록, 1km 안 만점·8km 밖 0), 고속도로 IC(2km 안 만점·15km 밖 0), 8km 안 인구(5만 0점·200만 만점) */
+function siteScore(lon, lat) {
+  const ix = siteIndexes();
+  const railKm = nearestKm(ix.rail, lon, lat), icKm = nearestKm(ix.ic, lon, lat);
+  const pop = popNear(lon, lat, 8);
+  const sr = Math.max(0, Math.min(1, 1 - (railKm - 1) / 7)), sm = Math.max(0, Math.min(1, 1 - (icKm - 2) / 13));
+  const sp = Math.max(0, Math.min(1, Math.log10(Math.max(1, pop) / 5e4) / Math.log10(40)));
+  return { score: 0.4 * sr + 0.25 * sm + 0.35 * sp, railKm, icKm, pop };
+}
+
+/** 지금 보이는 곳을 칸으로 나눠 택지지구를 놓을 수 있는 칸을 입지 점수로 칠한다 (누를 때와 같은 판정: housingSiteProblem) */
 function drawHousingSites() {
   if (!housingPick || !map) return;
   if (!map.getSource('housing-sites')) {
     map.addSource('housing-sites', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     map.addLayer({ id: 'housing-sites', type: 'fill', source: 'housing-sites',
-      paint: { 'fill-color': ['match', ['get', 'k'], 'l', '#1e8a3c', 'm', '#3fb05c', '#8fd49f'], 'fill-opacity': 0.55, 'fill-outline-color': 'rgba(0,0,0,0)' } },
+      paint: { 'fill-color': ['interpolate', ['linear'], ['get', 'sc'], 0, '#e9e4a6', 0.35, '#a6d68a', 0.6, '#4daf4a', 0.85, '#1b6b2f'], 'fill-opacity': 0.6, 'fill-outline-color': 'rgba(0,0,0,0)' } },
     map.getLayer('points') ? 'points' : undefined);
   }
   const z = map.getZoom();
@@ -4837,8 +4916,7 @@ function drawHousingSites() {
     for (let x = Math.floor(b.getWest() / dx) * dx; x < b.getEast(); x += dx) {
       const cx = x + dx / 2, cy = y + dy / 2;
       if (isForeign(cx, cy) || housingSiteProblem(cx, cy, 's')) continue;   // 바다·물은 지형 판정이 거른다
-      const k = !housingSiteProblem(cx, cy, 'l') ? 'l' : !housingSiteProblem(cx, cy, 'm') ? 'm' : 's';
-      feats.push({ type: 'Feature', properties: { k }, geometry: { type: 'Polygon', coordinates: [[[x, y], [x + dx, y], [x + dx, y + dy], [x, y + dy], [x, y]]] } });
+      feats.push({ type: 'Feature', properties: { sc: Math.round(siteScore(cx, cy).score * 100) / 100 }, geometry: { type: 'Polygon', coordinates: [[[x, y], [x + dx, y], [x + dx, y + dy], [x, y + dy], [x, y]]] } });
     }
   }
   map.getSource('housing-sites').setData({ type: 'FeatureCollection', features: feats });
@@ -4868,11 +4946,39 @@ function urbanFabric(lon, lat) {
   return n >= 30;   // 약 2.7km × 3.3km 칸에 교차점·역 30개 넘게
 }
 
+/** 택지지구 반지름 (km): 크기 이름 또는 그린 경계의 같은 넓이 원 */
+const housingR = (h) => h.R || HOUSING_SITE.r[h.size] || 1;
+
+/** 경위도 점이 다각형 안인가 */
+function inRing(x, y, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** 한 점이 택지가 될 수 있는가 (그린 경계 안을 훑을 때): null(된다) 또는 까닭 */
+function housingPointProblem(lon, lat) {
+  if (popNear(lon, lat, 1) / Math.PI > HOUSING_SITE.urbanDensity || urbanFabric(lon, lat)) return '이미 시가지';
+  for (const h of state.housing || []) {
+    if (h.ring ? inRing(lon, lat, h.ring) : kmBetween(lon, lat, h.lon, h.lat) < housingR(h)) return '다른 택지지구와 겹침';
+  }
+  if (terrainReady()) {
+    const t = terrainAt(lon, lat);
+    if (t?.water || t?.sea) return '물·바다';
+    if (t && t.rough > HOUSING_SITE.roughM) return '산지';
+  }
+  if (isForeign(lon, lat)) return '국외';
+  return null;
+}
+
 /** 이 자리에 이 크기의 택지지구를 놓을 수 있는가: null(된다) 또는 안 되는 까닭 */
 function housingSiteProblem(lon, lat, size) {
   const R = HOUSING_SITE.r[size];
   if (popNear(lon, lat, 1) / Math.PI > HOUSING_SITE.urbanDensity || urbanFabric(lon, lat)) return '이미 시가지';
-  for (const h of state.housing || []) if (kmBetween(lon, lat, h.lon, h.lat) < R + (HOUSING_SITE.r[h.size] || 1)) return '다른 택지지구와 겹침';
+  for (const h of state.housing || []) if (kmBetween(lon, lat, h.lon, h.lat) < R + housingR(h)) return '다른 택지지구와 겹침';
   if (terrainReady()) {
     const kx = 111.32 * Math.cos((lat * Math.PI) / 180);
     const pts = [[0, 0]];
@@ -4916,57 +5022,245 @@ function housingName(lon, lat, zi) {
   for (let i = 2; ; i++) if (!used.has(`${hints[0] || zoneName(zi)}${i}지구`)) return `${hints[0] || zoneName(zi)}${i}지구`;
 }
 
+// ---- 경계 그리기
+function drawHousingOutline() {
+  if (!map.getSource('housing-draw')) {
+    map.addSource('housing-draw', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'housing-draw-fill', type: 'fill', source: 'housing-draw', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#e07b1a', 'fill-opacity': 0.25 } });
+    map.addLayer({ id: 'housing-draw-line', type: 'line', source: 'housing-draw', paint: { 'line-color': '#c0561a', 'line-width': 2, 'line-dasharray': [2, 1] } });
+    map.addLayer({ id: 'housing-draw-pts', type: 'circle', source: 'housing-draw', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 4, 'circle-color': '#fff', 'circle-stroke-color': '#c0561a', 'circle-stroke-width': 2 } });
+  }
+  const pts = housingDraw?.pts || [];
+  const f = pts.map((c) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: c } }));
+  if (pts.length >= 3) f.push({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[...pts, pts[0]]] } });
+  else if (pts.length === 2) f.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: pts } });
+  map.getSource('housing-draw').setData({ type: 'FeatureCollection', features: f });
+}
+
+/** 다각형 넓이 (km²)와 중심 */
+function ringAreaKm2(ring) {
+  const lat0 = ring.reduce((s, p) => s + p[1], 0) / ring.length, kx = 111.32 * Math.cos((lat0 * Math.PI) / 180), ky = 110.57;
+  let a = 0, cx = 0, cy = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const x0 = ring[j][0] * kx, y0 = ring[j][1] * ky, x1 = ring[i][0] * kx, y1 = ring[i][1] * ky, f = x0 * y1 - x1 * y0;
+    a += f; cx += (x0 + x1) * f; cy += (y0 + y1) * f;
+  }
+  a /= 2;
+  return { km2: Math.abs(a), lon: a ? cx / (6 * a) / kx : ring[0][0], lat: a ? cy / (6 * a) / ky : ring[0][1] };
+}
+
+function finishHousingDraw() {
+  const pts = housingDraw?.pts || [];
+  if (pts.length < 3) { toast('꼭짓점을 세 개 넘게 찍으세요.'); return; }
+  const { km2, lon, lat } = ringAreaKm2(pts);
+  if (km2 < 0.3) { toast(`너무 좁습니다 (${km2.toFixed(2)}km²). 0.3km² 넘게 그리세요.`); return; }
+  if (km2 > 25) { toast(`너무 넓습니다 (${km2.toFixed(1)}km²). 25km² 안으로 그리세요.`); return; }
+  // 경계 안을 250m 간격으로 훑어 시가지·산지·물·다른 지구가 15% 넘게 걸리면 안 된다
+  const kx = 111.32 * Math.cos((lat * Math.PI) / 180), step = 0.25;
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const why = new Map();
+  let n = 0, bad = 0;
+  for (let y = Math.min(...ys); y <= Math.max(...ys); y += step / 110.57) {
+    for (let x = Math.min(...xs); x <= Math.max(...xs); x += step / kx) {
+      if (!inRing(x, y, pts)) continue;
+      n++;
+      const w = housingPointProblem(x, y);
+      if (w) { bad++; why.set(w, (why.get(w) || 0) + 1); }
+    }
+  }
+  if (n && bad / n > 0.15) {
+    toast(`경계 안 ${Math.round((bad / n) * 100)}%가 택지로 쓸 수 없는 땅입니다 (${[...why].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${Math.round((v / n) * 100)}%`).join(', ')}). 초록 칸 안으로 그리세요.`);
+    return;
+  }
+  const households = Math.max(1000, Math.round((km2 * HOUSING.density) / 100) * 100);
+  const ring = pts.map((p) => [Math.round(p[0] * 1e5) / 1e5, Math.round(p[1] * 1e5) / 1e5]);
+  openHousingDialog({ lon, lat, ring, km2, households });
+}
+
 function housingClick(e) {
+  if (housingDraw) {
+    housingDraw.pts.push([e.lngLat.lng, e.lngLat.lat]);
+    drawHousingOutline();
+    return;
+  }
   const zf = map.queryRenderedFeatures(e.point, { layers: ['zones-fill'] })[0];
   const zi0 = zf ? zf.id : -1;
   if (!(zi0 >= 0) || zoneProps[zi0]?.ext || !result) { toast('남북 땅 안을 누르세요.'); return; }
   // 누른 곳이 시가지·산지·물이면 6km 안에서 가장 가까운 평지로 옮긴다 (가장 작은 소규모 단지 기준)
   const site = findHousingSite(e.lngLat.lng, e.lngLat.lat, 's');
   if (!site) { toast(`여기서 ${HOUSING_SITE.searchKm}km 안에 택지지구를 놓을 평지가 없습니다 (기존 시가지·산지·물 제외).`); return; }
-  const { lon, lat } = site;
+  if (site.moved) {
+    map.easeTo({ center: [site.lon, site.lat], duration: 600 });
+    toast(`누른 곳(${housingSiteProblem(e.lngLat.lng, e.lngLat.lat, 's')})을 피해 ${site.moved.toFixed(1)}km 떨어진 평지로 옮겼습니다.`);
+  }
+  openHousingDialog({ lon: site.lon, lat: site.lat, zi0 });
+}
+
+/**
+ * 택지지구 도로망: 단지 가운데에서 네 방향으로 4차로 간선도로(십자 축)를 경계까지 깔고,
+ * 경계 끝마다 바깥 4km 안의 가장 가까운 간선도로 노드에 잇는다. 광역교통개선대책이 있으면 연결도로를 4차로로,
+ * 고속도로 IC까지 따로 잇는다(12km 안). 연결도로 공사비(억원)와 링크·노드 계획을 돌려준다 (아직 망에 넣지 않는다)
+ */
+function housingRoadPlan({ lon, lat, ring, R, name, levy }) {
+  const kx = 111.32 * Math.cos((lat * Math.PI) / 180), ky = 110.57;
+  const seed = Math.abs(Math.round((lon * 1000 + lat * 777) % 90));
+  const ang0 = (seed * Math.PI) / 180;
+  // 경계까지 거리: 그린 경계면 반직선과 다각형의 교점, 아니면 원 반지름의 0.95배
+  const edgeAt = (a) => {
+    const ux = Math.cos(a), uy = Math.sin(a);
+    if (!ring) return [lon + (R * 0.95 * ux) / kx, lat + (R * 0.95 * uy) / ky];
+    let best = null;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const ax = (ring[j][0] - lon) * kx, ay = (ring[j][1] - lat) * ky, bx = (ring[i][0] - lon) * kx, by = (ring[i][1] - lat) * ky;
+      const dx = bx - ax, dy = by - ay, den = ux * dy - uy * dx;
+      if (Math.abs(den) < 1e-9) continue;
+      const t = (ax * dy - ay * dx) / den, s = (ax * uy - ay * ux) / den;
+      if (t > 0 && s >= 0 && s <= 1 && (!best || t < best)) best = t;
+    }
+    const t = (best || R) * 0.95;
+    return [lon + (t * ux) / kx, lat + (t * uy) / ky];
+  };
+  // 바깥 간선도로 노드 (고속도로 본선 노드는 IC로만 드나든다)
+  const roadNodes = new Map();
+  allLinks().forEach((l, i) => {
+    const e = linkAt(base, state, i);
+    if (e.mode !== 0 || e.ext || e.cls === 'motorway' || state.replaced?.[i] || (i >= base.links.length && !l.built)) return;
+    if (!['trunk', 'primary', 'secondary'].includes(e.cls)) return;
+    for (const n of [l.a, l.b]) roadNodes.set(n, nodeCoord(n));
+  });
+  const nearestRoad = (p, dir) => {
+    let best = null, bd = 4;
+    for (const [n, c] of roadNodes) {
+      if (!c) continue;
+      const d = kmBetween(p[0], p[1], c[0], c[1]);
+      if (d >= bd || d < 0.05) continue;
+      const vx = (c[0] - p[0]) * kx, vy = (c[1] - p[1]) * ky, vl = Math.hypot(vx, vy) || 1;
+      if ((vx * Math.cos(dir) + vy * Math.sin(dir)) / vl < 0.2) continue;   // 단지 바깥쪽으로
+      bd = d; best = n;
+    }
+    return best;
+  };
+  const arms = [], links = [];
+  let connKm = 0;
+  for (let k = 0; k < 4; k++) {
+    const a = ang0 + (k * Math.PI) / 2, e = edgeAt(a);
+    arms.push(e);
+    links.push({ from: 'C', to: `E${k}`, pts: [[lon, lat], e], attrs: { cls: 'primary', lanes: 4, speed: 50, name: `${name.replace(/지구$/, '')}대로` } });
+    const n = nearestRoad(e, a);
+    if (n != null) {
+      const c = nodeCoord(n);
+      connKm += kmBetween(e[0], e[1], c[0], c[1]);
+      links.push({ from: `E${k}`, to: n, pts: [e, c], attrs: levy ? { cls: 'trunk', lanes: 4, speed: 60, name: `${name} 연결도로` } : { cls: 'secondary', lanes: 2, speed: 50, name: `${name} 연결도로` } });
+    }
+  }
+  // 광역교통개선대책: 가장 가까운 고속도로 IC까지 4차로 연결도로
+  if (levy) {
+    let best = null;
+    for (const [nm, n] of base.junctions) {
+      if (/JCT|분기점|휴게소|졸음쉼터/.test(nm)) continue;
+      const c = nodeCoord(n);
+      if (!c) continue;
+      arms.forEach((e, k) => { const d = kmBetween(e[0], e[1], c[0], c[1]); if (d < 12 && (!best || d < best.d)) best = { d, k, n, nm }; });
+    }
+    if (best && best.d > 0.3) {
+      const e = arms[best.k], c = nodeCoord(best.n);
+      connKm += best.d;
+      links.push({ from: `E${best.k}`, to: best.n, pts: [e, c], attrs: { cls: 'trunk', lanes: 4, speed: 70, name: `${name} IC 연결도로` }, ic: best.nm });
+    }
+  }
+  const perKm = levy ? NEW_BUILDS.trunk.perKm : 100;
+  return { links, center: [lon, lat], arms, connKm, connCost: Math.round(connKm * 1.1 * perKm * (isKP(lat, lon) ? KP_COST_FACTOR : 1)) };
+}
+
+/** 계획을 망에 넣는다: 새 노드(C·E0~3)를 만들고 링크를 아직 짓지 않은 상태로 둔다. 링크 id 목록 */
+function addHousingRoads(plan) {
+  const node = { C: addNewNode(base, state, plan.center[0], plan.center[1]) };
+  plan.arms.forEach((e, k) => { node[`E${k}`] = addNewNode(base, state, e[0], e[1]); });
+  return plan.links.map((r) => addPlannedRoad(base, state, node[r.from], typeof r.to === 'string' ? node[r.to] : r.to, r.pts, r.attrs));
+}
+
+/** 택지지구 사업안 창: 입지 점수, 크기(누른 곳) 또는 그린 경계의 세대 수, 단계, 광역교통개선대책, 사업비 */
+function openHousingDialog({ lon, lat, zi0 = -1, ring = null, km2 = null, households = null }) {
   const zi = zoneAtPoint(lon, lat) >= 0 ? zoneAtPoint(lon, lat) : zi0;
   const zp = zoneProps[zi];
   const name = housingName(lon, lat, zi);
-  if (site.moved) {
-    map.easeTo({ center: [lon, lat], duration: 600 });
-    toast(`누른 곳(${housingSiteProblem(e.lngLat.lng, e.lngLat.lat, 's')})을 피해 ${site.moved.toFixed(1)}km 떨어진 평지로 옮겼습니다.`);
-  }
-  const access = result.zones.access[zi] / median(Array.from(result.zones.access));
+  const sc = siteScore(lon, lat);
+  const R = ring ? Math.sqrt(km2 / Math.PI) : null;
   endHousingPick();
-  const rows = Object.entries(HOUSING.sizes).map(([k, sz]) => {
-    const pl = housingPlan({ size: k, zone: zp, lat, lon, access });
-    const why = housingSiteProblem(lon, lat, k);
-    if (why && LANG !== 'en') return `<div class="item"><div class="t">${sz.label} · ${sz.households.toLocaleString()}세대</div><div class="m">이 자리에는 들어가지 않습니다 (${why}).</div></div>`;
-    return LANG === 'en'
-      ? `<div class="item"><div class="t">${{ s: 'Small', m: 'Medium', l: 'New town' }[k]} · ${sz.households.toLocaleString('en')} homes</div>
-      <div class="m">Cost ${formatWon(pl.cost)} · ${pl.years} yrs · ${pl.persons.toLocaleString('en')} residents (${pl.net.toLocaleString('en')} net growth) · sales revenue ${formatWon(pl.revenue)}</div>
-      <button class="small primary" data-housing="${k}">Start construction</button></div>`
-      : `<div class="item"><div class="t">${sz.label} · ${sz.households.toLocaleString()}세대</div>
-      <div class="m">사업비 ${formatWon(pl.cost)} · ${pl.years}년 · 입주 ${fmtPeople(pl.persons)} (그중 순증 ${fmtPeople(pl.net)}) · 분양 수익 ${formatWon(pl.revenue)}</div>
-      <button class="small primary" data-housing="${k}">착공</button></div>`;
+  const options = ring
+    ? [{ key: 'drawn', label: `그린 구역 ${km2.toFixed(1)}km²`, households, R }]
+    : Object.entries(HOUSING.sizes).map(([k, sz]) => ({ key: k, label: sz.label, households: sz.households, R: HOUSING_SITE.r[k], why: housingSiteProblem(lon, lat, k) }));
+  const scoreTxt = `입지 점수 ${Math.round(sc.score * 100)}점 · 철도역 ${sc.railKm >= 15 ? '15km 넘게' : `${sc.railKm.toFixed(1)}km`} · 고속도로 IC ${sc.icKm >= 15 ? '15km 넘게' : `${sc.icKm.toFixed(1)}km`} · 8km 안 인구 ${fmtPeople(sc.pop)}`;
+  const rows = options.map((o) => {
+    if (o.why) return `<div class="item"><div class="t">${o.label} · ${o.households.toLocaleString()}세대</div><div class="m">이 자리에는 들어가지 않습니다 (${o.why}).</div></div>`;
+    const pl = housingPlan({ households: o.households, zone: zp, lat, lon, score: sc.score });
+    const rp = housingRoadPlan({ lon, lat, ring, R: o.R, name, levy: pl.levy > 0 });
+    const roadCost = Math.max(0, rp.connCost - pl.levy);   // 연결도로는 분담금으로 놓고, 모자라면 더 낸다
+    const phaseSel = o.households >= HOUSING.levyMin
+      ? `<label class="m"><input type="checkbox" data-phase="${o.key}"> 2단계로 나눠 짓기 (절반은 ${HOUSING.phase2Lag}년 늦게 준공)</label>` : '';
+    return `<div class="item"><div class="t">${o.label} · ${o.households.toLocaleString()}세대 · 입주 ${fmtPeople(pl.persons)} (모두 순증)</div>
+      <div class="m">택지 조성 ${formatWon(pl.cost)}${pl.levy ? ` + 광역교통개선대책 분담금 ${formatWon(pl.levy)}` : ''}${roadCost ? ` + 연결도로 ${formatWon(roadCost)}` : ''} · ${pl.years}년 · 분양 수익 ${formatWon(pl.revenue)}</div>
+      <div class="m">도로망: 단지 안 4차로 간선 십자 축, 둘레 간선도로 연결 ${rp.links.filter((r) => /연결도로$/.test(r.attrs.name) && !r.ic).length}곳${rp.links.find((r) => r.ic) ? ` · ${esc(rp.links.find((r) => r.ic).ic)}까지 4차로` : ''} (연결도로 ${rp.connKm.toFixed(1)}km)</div>
+      ${phaseSel}
+      <button class="small primary" data-housing="${o.key}">착공</button></div>`;
   }).join('');
   const wrap = document.createElement('div');
   wrap.className = 'setup-wrap';
-  wrap.innerHTML = `<div class="setup" role="dialog" aria-modal="true"><h2>${t('택지지구 개발', 'Housing district')} · ${esc(name)}</h2>
-    <p class="setup-intro">${t(`주택 단지를 조성해 입주민을 받습니다. 입주 인구 가운데 일부는 새로 늘어나는 인구(새 가구·출산·해외 유입)이고, 나머지는 다른 시군에서 옮겨 옵니다.
-      지금 반경 3km 인구 ${fmtPeople(popNear(lon, lat, 3))} · 교통 접근성 ${access.toFixed(2)} (전국 중앙값 1, 낮으면 분양이 덜 됩니다)`,
-      `Build a housing estate. Part of the new residents is net population growth (new households, births, immigration); the rest moves in from other counties.
-      Population within 3 km now: ${Math.round(popNear(lon, lat, 3)).toLocaleString('en')} · accessibility ${access.toFixed(2)} (national median 1; lower sells worse)`)}</p>
-    <div class="setup-body">${rows}</div>
-    <div class="setup-btns"><span style="flex:1"></span><button class="small" data-housing="cancel">닫기</button></div></div>`;
+  wrap.innerHTML = `<div class="setup" role="dialog" aria-modal="true"><h2>택지지구 개발 · ${esc(name)}</h2>
+    <p class="hint">${esc(zoneName(zi))} · ${scoreTxt}<br>지은 세대만큼 인구가 늘고(다 지은 뒤 3년에 걸쳐 입주), 입지 점수가 높을수록 분양 수익이 큽니다.
+      ${HOUSING.levyMin.toLocaleString()}세대 넘는 지구는 광역교통개선대책 분담금으로 둘레 간선도로·고속도로 IC까지 4차로 연결도로를 함께 놓습니다.
+      ${sc.railKm > HOUSING.complaintKm ? `<br><b>철도역이 ${sc.railKm.toFixed(1)}km 떨어져 있어 입주 뒤 교통 대책 민원이 생깁니다</b> (${HOUSING.complaintKm}km 안에 역을 놓으면 풀립니다).` : ''}</p>
+    <div class="list">${rows}</div>
+    <div class="setup-btns">${sc.railKm > 2 ? '<button class="small" data-housing="rail">연결 철도 그리기</button>' : ''}<span style="flex:1"></span><button class="small" data-housing="cancel">닫기</button></div></div>`;
   document.body.appendChild(wrap);
   wrap.addEventListener('click', (ev) => {
     const b = ev.target.closest('[data-housing]');
     if (!b) return;
-    if (b.dataset.housing !== 'cancel') {
-      const plan = housingPlan({ size: b.dataset.housing, zone: zp, lat, lon, access });
-      const r = startHousing(state, { name, zone: zi, lon, lat, size: b.dataset.housing, plan });
-      if (!r.ok) { alert(r.reason); return; }
-      save(state); renderAll();
-      toast(`${name} 택지지구 착공 (${plan.years}년 뒤 입주)`);
+    const k = b.dataset.housing;
+    if (k === 'rail') {
+      // 지구 가운데에서 시작하는 철도 그리기 (가까운 역까지 이어 그린다)
+      wrap.remove();
+      startDraft('rail1');
+      if (draft) { draft.points.push({ node: null, lon, lat, split: null }); nameDraftPoint(draft.points[0], 0); drawDraft(); renderBuild(); }
+      map.easeTo({ center: [lon, lat], zoom: 11, duration: 600 });
+      toast('지구 가운데에서 시작합니다. 이을 역을 누르세요.');
+      return;
+    }
+    if (k !== 'cancel') {
+      const o = options.find((x) => x.key === k);
+      const pl = housingPlan({ households: o.households, zone: zp, lat, lon, score: sc.score });
+      const rp = housingRoadPlan({ lon, lat, ring, R: o.R, name, levy: pl.levy > 0 });
+      const roadCost = Math.max(0, rp.connCost - pl.levy);
+      const phases = wrap.querySelector(`[data-phase="${k}"]`)?.checked ? 2 : 1;
+      const n0 = state.newNodes.length, l0 = state.newLinks.length;
+      const roads = addHousingRoads(rp);
+      const r = startHousing(state, { name, zone: zi, lon, lat, size: ring ? null : k, ring, households: o.households, plan: pl, phases, roads, roadCost, score: sc.score, railKm: sc.railKm });
+      if (!r.ok) { state.newNodes.length = n0; state.newLinks.length = l0; alert(r.reason); return; }
+      const h = state.housing[state.housing.length - 1];
+      if (ring) h.R = o.R;
+      save(state); refreshLinks(); renderAll();
+      toast(`${name} 택지지구 착공 (${pl.years}년 뒤 준공, 그 뒤 3년에 걸쳐 입주)`);
     }
     wrap.remove();
   });
+}
+
+/** 해마다 입주를 마친 택지지구의 교통 민원: 철도역이 멀면 지구 주민 행복도가 깎이고, 가까이 역이 생기면 풀린다 */
+function housingComplaints() {
+  for (const h of state.housing || []) {
+    if (!h.done || !h.phases) continue;
+    const km = siteScore(h.lon, h.lat).railKm;
+    h.railKm = km;
+    if (!h.complaint && km > HOUSING.complaintKm) {
+      h.complaint = true;
+      state.happyBonus[h.zone] = (state.happyBonus[h.zone] || 0) - 1;
+      state.log.unshift(`${state.year}년 ${h.name} 주민 교통 대책 민원: 가장 가까운 철도역이 ${km.toFixed(1)}km (${HOUSING.complaintKm}km 안에 역을 놓으면 풀립니다)`);
+    } else if (h.complaint && km <= HOUSING.complaintKm) {
+      h.complaint = false;
+      state.happyBonus[h.zone] = (state.happyBonus[h.zone] || 0) + 1;
+      state.log.unshift(`${state.year}년 ${h.name} 교통 대책 민원 해소: 철도역 ${km.toFixed(1)}km`);
+    }
+  }
 }
 
 let pointAdd = null;   // {kind: 'station'|'ic', pick: {link, lon, lat, mode, name, road}}

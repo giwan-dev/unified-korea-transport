@@ -231,6 +231,13 @@ table.cmp th.asc, table.cmp th.desc { color: var(--ink); }
   padding: 8px; display: flex; flex-direction: column; gap: 4px; min-width: 190px; }
 .st-menu .t { font-weight: 600; margin-bottom: 2px; }
 .st-menu button { text-align: left; }
+/* 택지지구 고르는 동안 지도 위 도구 */
+#map { position: relative; }
+.map-tool { position: absolute; top: 10px; left: 56px; z-index: 5; max-width: 360px; background: var(--panel, #fff); border: 1px solid var(--line, #ccc);
+  border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.18); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.map-tool .m { color: var(--muted, #666); font-size: 12px; }
+.map-tool .btns { display: flex; flex-wrap: wrap; gap: 4px; }
+@media (max-width: 600px) { .map-tool { left: 8px; right: 8px; max-width: none; } }
 .select-box { position: absolute; border: 1.5px dashed var(--accent); background: rgba(31, 95, 191, .08); pointer-events: none; z-index: 5; }
 
 /* 처음 불러오기 화면 */
