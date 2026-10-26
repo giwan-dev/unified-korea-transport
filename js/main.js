@@ -2100,7 +2100,8 @@ function foldSections(el, key, tag) {
       box = document.createElement('details');
       box.className = 'fold';
       box.open = folds[id] ?? !(FOLD_CLOSED.has(id) || FOLD_CLOSED_PANELS.has(key));
-      box.ontoggle = () => { folds[id] = box.open; try { localStorage.setItem(FOLD_KEY, JSON.stringify(folds)); } catch { /* 저장 못 해도 된다 */ } };
+      // box는 반복문에서 다음 묶음으로 바뀌므로, 이벤트가 발생한 묶음의 상태를 읽는다.
+      box.ontoggle = (e) => { folds[id] = e.currentTarget.open; try { localStorage.setItem(FOLD_KEY, JSON.stringify(folds)); } catch { /* 저장 못 해도 된다 */ } };
       const sum = document.createElement('summary');
       sum.innerHTML = c.innerHTML;
       el.insertBefore(box, c);
