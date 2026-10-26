@@ -101,6 +101,7 @@ p.hint { color: var(--muted); font-size: 12px; margin: var(--s2) 0; line-height:
 table.kv { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
 table.kv td { padding: 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
 table.kv td:last-child { text-align: right; padding-left: var(--s3); }
+table.kv td:first-child:not(:last-child) { white-space: nowrap; }   /* 항목 이름이 한 글자씩 줄바꿈되지 않게 (폐선 패널의 "옛 역" 등) */
 table.kv td .m { display: block; }
 table.cmp { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 12.5px; margin: var(--s1) 0 var(--s2); }
 table.cmp th {

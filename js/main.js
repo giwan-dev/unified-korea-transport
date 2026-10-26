@@ -5207,10 +5207,10 @@ function openHousingDialog({ lon, lat, zi0 = -1, ring = null, km2 = null, househ
   const wrap = document.createElement('div');
   wrap.className = 'setup-wrap';
   wrap.innerHTML = `<div class="setup" role="dialog" aria-modal="true"><h2>택지지구 개발 · ${esc(name)}</h2>
-    <p class="hint">${esc(zoneName(zi))} · ${scoreTxt}<br>지은 세대만큼 인구가 늘고(다 지은 뒤 3년에 걸쳐 입주), 입지 점수가 높을수록 분양 수익이 큽니다.
+    <p class="setup-intro hint">${esc(zoneName(zi))} · ${scoreTxt}<br>지은 세대만큼 인구가 늘고(다 지은 뒤 3년에 걸쳐 입주), 입지 점수가 높을수록 분양 수익이 큽니다.
       ${HOUSING.levyMin.toLocaleString()}세대 넘는 지구는 광역교통개선대책 분담금으로 둘레 간선도로·고속도로 IC까지 4차로 연결도로를 함께 놓습니다.
       ${sc.railKm > HOUSING.complaintKm ? `<br><b>철도역이 ${sc.railKm.toFixed(1)}km 떨어져 있어 입주 뒤 교통 대책 민원이 생깁니다</b> (${HOUSING.complaintKm}km 안에 역을 놓으면 풀립니다).` : ''}</p>
-    <div class="list">${rows}</div>
+    <div class="setup-body"><div class="list">${rows}</div></div>
     <div class="setup-btns">${sc.railKm > 2 ? '<button class="small" data-housing="rail">연결 철도 그리기</button>' : ''}<span style="flex:1"></span><button class="small" data-housing="cancel">닫기</button></div></div>`;
   document.body.appendChild(wrap);
   wrap.addEventListener('click', (ev) => {
