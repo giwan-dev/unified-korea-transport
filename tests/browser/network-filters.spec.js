@@ -17,6 +17,17 @@ test('transport groups, individual types and congestion can be toggled independe
   await expect(group('rail').locator('../..').locator('[data-network-filter=metro]')).toHaveCount(0);
   expect(await page.evaluate(() => ['roads', 'rails', 'metro', 'airroutes'].map(id => ukt.map.getPaintProperty(id, 'line-color')))).toEqual(['#c46b24', '#6c3fa0', '#1a9a6c', '#2478c8']);
   await expect(page.locator('#layerview')).toHaveCount(0);
+  await expect(toggle('air')).not.toBeChecked();
+  await expect(group('air')).not.toBeChecked();
+  for (const id of ['airroutes', 'airports', 'airport-labels']) {
+    expect(await page.evaluate(id => ukt.map.getLayoutProperty(id, 'visibility'), id)).toBe('none');
+  }
+  await page.screenshot({path: 'test-results/network-filters-default.png'});
+  await toggle('air').check();
+  await expect(group('air')).toBeChecked();
+  for (const id of ['airroutes', 'airports', 'airport-labels']) {
+    expect(await page.evaluate(id => ukt.map.getLayoutProperty(id, 'visibility'), id)).toBe('visible');
+  }
   await expect(toggle('roadCongestion')).not.toBeChecked();
   expect(await page.evaluate(() => ukt.map.getPaintProperty('roads', 'line-color'))).toBe('#c46b24');
   for (const key of ['motorway', 'road', 'hsr', 'rail', 'narrow', 'metro', 'air']) {

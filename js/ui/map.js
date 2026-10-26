@@ -716,7 +716,7 @@ export const NETWORK_GROUPS = {
   metro: { label: '도시 철도', types: { metro: '도시 철도' } },
   air: { label: '항공', types: { air: '항공 노선' } },
 };
-export const DEFAULT_NETWORK_FILTERS = { motorway: true, road: true, hsr: true, rail: true, narrow: true, metro: true, air: true, roadCongestion: false, railCongestion: false };
+export const DEFAULT_NETWORK_FILTERS = { motorway: true, road: true, hsr: true, rail: true, narrow: true, metro: true, air: false, roadCongestion: false, railCongestion: false };
 // 배경 도로를 제외한 실제 계산망의 도로: 클릭·드래그 선택·스냅에서 같은 목록을 쓴다.
 export const ROAD_PICK_LAYERS = ['roads-motorway', 'roads-casing', 'roads', 'roads-minor'];
 const NETWORK_TYPE = ['case', ['==', ['get', 'mode'], 0], ['case', ['==', ['get', 'cls'], 'motorway'], 'motorway', 'road'],
