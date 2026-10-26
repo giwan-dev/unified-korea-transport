@@ -39,7 +39,6 @@ import { newlyUnlocked, unlockedTourKP, unlockAt } from './game/tourism.js';
 import { showNotice } from './ui/notice.js';
 import { placeIntroHTML } from './game/cities.js';
 import { parseRequest, metroPlan, cityCenter } from './game/recommend.js';
-import { addTrainsLayer, setTrainsProvider, invalidateTrains, setTrains, trainsLegend } from './ui/trainsmap.js';
 import { registerSentimentMetrics, initSubBase, subGains, zoneGains, nationalFactor, updateMayorApproval, pShare, subValue } from './game/sentiment.js';
 import { addPlansLayer, showPlanLine } from './ui/plansmap.js';
 import { addRailKindLayer, railKindLegend, railStd, syncRailKind } from './ui/railkind.js';
@@ -73,7 +72,7 @@ const POLICY_LABEL = { free: '자유 이주', limited: '이주 제한 (허가제
 
 let map, base, zonesFC, zoneProps, places, grid, subsFC, subPop0, namer, worker;
 let state, result = null, prevSummary = null, requests = [];
-let metric = 'pop';
+let metric = 'none';
 let selection = null;      // {type:'link'|'zone'|'node', id}
 let draft = null;          // 그리기 중인 신설 사업
 let busy = false;
@@ -262,8 +261,6 @@ async function init() {
     mark('layers added');
     addRailKindLayer(map);
     addPlansLayer(map);
-    addTrainsLayer(map);
-    setTrainsProvider(trainsData);
     setNameResolver((level, id, original) => placeName(state, level, id, original));
     setLabelGroup((z) => ({ key: countyKey(z), weight: zoneProps[z]?.area || 0 }));
     refreshNames(map);
@@ -456,7 +453,6 @@ function applyResult(res) {
   pendingStep = false;
   result = res;
   state.snapshot = res.snapshot;
-  invalidateTrains();
   initSubBase(state, res.subs);
   gains = subGains(state, res.subs);
 
@@ -878,7 +874,6 @@ function smoothParts(l, i) {
 function refreshLinks() {
   nodeAdj = null;   // 새 구간이 생기면 노드에서 곧게 이어지는 구간이 바뀐다
   setLinks(map, linksFC());
-  invalidateTrains();
   if (result) paintVolumes();
 }
 
@@ -1183,13 +1178,6 @@ function startDraft(type) {
   loadTerrain().then(() => { if (draft) renderBuild(); });
   map.getCanvas().style.cursor = 'crosshair';
   map.doubleClickZoom.disable();
-  // 철도를 그리는 동안은 어디에 사람이 많은지 보이게 읍면동 인구 밀도로 칠한다 (끝나면 원래 보기로)
-  if (NEW_BUILDS[type]?.mode >= 1 && metric !== 'subDensity' && metric !== 'density') {
-    metricBeforeDraft = metric;
-    metric = 'subDensity';
-    paintZones(); renderLegend();
-    toast('노선을 그리는 동안 읍면동 인구 밀도를 보여 줍니다. 커서 옆 숫자는 역 반경 인구입니다.');
-  }
   switchTab('build');
   renderBuild();
 }
@@ -1920,10 +1908,7 @@ function bindUI() {
       try { localStorage.setItem('ukt-svc-lines', showServices ? '1' : '0'); } catch { /* 저장 못 해도 이번에는 적용 */ }
       drawServices();
     }
-    if (e.target.id === 'trains-toggle') {
-      if (e.target.checked && !confirm('지도에 열차 위치를 그리면 컴퓨터 부하가 커집니다 (화면에 보이는 열차를 1초에 5번 다시 그립니다). 느려지면 다시 끄세요. 켤까요?')) { e.target.checked = false; return; }
-      setTrains(map, e.target.checked);
-    }
+
   });
   document.addEventListener('keydown', (e) => {
     if (!draft || e.target.tagName === 'INPUT') return;
@@ -2175,7 +2160,7 @@ let layerView = 'all';
 let basemap = (() => { try { return localStorage.getItem('ukt-basemap') || 'plain'; } catch { return 'plain'; } })();
 function renderLegend() {
   // 좁은 화면에서는 고르기 칸과 색 띠만 보이고, 나머지는 '범례 더 보기'로 편다 (지도를 덜 가리게)
-  $('#legend').innerHTML = legendHTML(metric, layerView, basemap) + `<div class="lg-extra">${railKindLegend()}${trainsLegend()}
+  $('#legend').innerHTML = legendHTML(metric, layerView, basemap) + `<div class="lg-extra">${railKindLegend()}
     <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:4px"><input type="checkbox" id="svc-lines-toggle" ${showServices ? 'checked' : ''}> 운행 계통 노선 보기</label></div>`
     + `<button type="button" class="small lg-toggle">${$('#legend').classList.contains('open') ? '범례 접기' : '범례 더 보기'}</button>`;
 }

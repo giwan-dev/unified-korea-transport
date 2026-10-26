@@ -265,7 +265,7 @@ function enableUnits(map) {
 export const VC_STOPS = [[0, '#3f9e63'], [0.6, '#c5c23a'], [1, '#f0a030'], [2, '#e0582c'], [4, '#c21f2f'], [7, '#7e1048'], [10, '#2e0a3f']];
 
 export const METRICS = {
-  none: { label: '표시 안 함' },
+  none: { label: '기본 배경 (남북 같은 색)' },
   density: { label: '인구 밀도 (1km 격자)' },
   pop: { label: '시군구 인구 (합계)', ramp: ['#f7f4ea', '#f2c48d', '#d9682e', '#8f2318'], stops: [0, 100000, 400000, 1000000], fmt: (v) => `${Math.round(v / 1000).toLocaleString()}천` },
   subDensity: { label: '읍면동 인구 밀도 (노선 놓을 곳 찾기)', sub: true, ramp: ['#f7f4ea', '#f6c27a', '#e0662c', '#9b1d14', '#4a0c0a'], stops: [100, 1000, 5000, 15000, 30000], fmt: (v) => `${Math.round(v).toLocaleString()}/km²` },
@@ -290,6 +290,8 @@ export async function createMap(container) {
       customAttribution: '행정동 경계 © 통계청 SGIS(공공누리 1유형)·vuski/admdongkor (CC BY 4.0) · 도로·철도·북측 경계 © OpenStreetMap 기여자 (ODbL) · WorldPop (CC BY 4.0) · Natural Earth',
     },
   });
+  map.scrollZoom.setWheelZoomRate(1 / 180);
+  map.scrollZoom.setZoomRate(1 / 50);
   // 출처 표기는 접어 둔 채(ⓘ) 시작한다: 넓은 화면에서 펼쳐진 채로 뜨면 지도 아래를 한 줄 가린다. 누르면 펼쳐진다
   map.once('load', () => container && document.querySelector('.maplibregl-ctrl-attrib.maplibregl-compact-show')?.classList.remove('maplibregl-compact-show'));
   // 나침반 단추: 지도를 돌리거나 기울였을 때 누르면 북쪽이 위로 돌아온다 (바늘이 지금 방위를 보여 준다)
@@ -613,7 +615,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
 
   map.addSource('draft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({ id: 'draft-line', type: 'line', source: 'draft', filter: ['==', ['geometry-type'], 'LineString'],
-    paint: { 'line-color': '#1f5fbf', 'line-width': 3, 'line-dasharray': [1.5, 1] } });
+    paint: { 'line-color': ['case', ['==', ['get', 'reused'], 1], '#168565', '#1f5fbf'], 'line-width': ['case', ['==', ['get', 'reused'], 1], 4, 3], 'line-dasharray': [1.5, 1] } });
   map.addLayer({ id: 'draft-pts', type: 'circle', source: 'draft', filter: ['==', ['geometry-type'], 'Point'],
     paint: { 'circle-radius': 5, 'circle-color': '#1f5fbf', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
 }
