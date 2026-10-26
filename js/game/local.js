@@ -157,9 +157,10 @@ export function governorTitle(region) {
   return `${region.replace(/(특별자치도|도)$/, '')}도지사`;
 }
 
-/** 시군 단체장 직함: 광역시로 승격한 도시 전체인 시군은 그 광역시의 구청장 (함흥시 → 함흥광역시 구청장) */
+/** 시군 단체장 직함. 광역시로 승격한 도시 전체가 한 시군(존)이면 따로 뽑는 기초단체장이 없다
+ *  (청진시 → 청진광역시: 그 땅의 단체장은 청진광역시장뿐, "청진광역시 구청장"은 없는 직책): null */
 export function countyTitle(name, region) {
-  if (/광역시$/.test(region) && name.replace(/시$/, '') === region.replace(/광역시$/, '')) return `${region} 구청장`;
+  if (/광역시$/.test(region) && name.replace(/시$/, '') === region.replace(/광역시$/, '')) return null;
   return mayorTitle(name);
 }
 

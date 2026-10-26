@@ -3774,7 +3774,8 @@ function holdElection(only = 'all', reason = '') {
         if (Array.isArray(only)) break;   // 광역 단체만 새로 뽑는 경우 (행정구역 개편·독립)
         if (only === 'kp' && zoneProps[i].country !== 'KP') continue;
         if (countyRep(i) !== i) continue;   // 한 시군에 단체장은 하나 (옛 군 땅을 떼어 낸 계산용 조각은 몸통 단체장이 맡는다)
-        may[electMayor(i, mood)]++;
+        const won = electMayor(i, mood);
+        if (won) may[won]++;
       }
     }
   }
@@ -3825,6 +3826,7 @@ function zoneOfLink(id) {
 /** 시군 단체장 선거 (존 i가 그 시군의 대표 존). 이긴 정당을 돌려준다 */
 function electMayor(i, mood = 0) {
   const L = state.local, mk = `m:${i}`, mc = L.offices[mk];
+  if (!countyTitle(zoneName(i), regionOf(state, zoneProps[i]))) { delete L.offices[mk]; return null; }   // 광역시 전체인 시: 기초단체장 없음
   const rm = runElection(leanP(zoneProps[i]), mc, rng, mood);
   if (mc && mc.party === rm.party) { mc.approval = 50 + (mc.approval - 50) / 2; mc.terms = (mc.terms || 1) + 1; mc.title = countyTitle(zoneName(i), regionOf(state, zoneProps[i])); }
   else L.offices[mk] = { title: countyTitle(zoneName(i), regionOf(state, zoneProps[i])), zone: i, party: rm.party, since: state.year, approval: 50, accepted: 0, delivered: 0, terms: 1 };
@@ -3853,10 +3855,11 @@ function syncMayors() {
   for (const k of Object.keys(L.offices)) {
     if (!k.startsWith('m:')) continue;
     const i = +k.slice(2);
-    if (countyRep(i) !== i || !hasAutonomy(state, zoneProps[i])) { delete L.offices[k]; continue; }
-    L.offices[k].title = countyTitle(zoneName(i), regionOf(state, zoneProps[i]));
+    const title = countyTitle(zoneName(i), regionOf(state, zoneProps[i]));
+    if (countyRep(i) !== i || !hasAutonomy(state, zoneProps[i]) || !title) { delete L.offices[k]; continue; }
+    L.offices[k].title = title;
   }
-  for (const [, zs] of regions()) for (const i of zs) if (countyRep(i) === i && !L.offices[`m:${i}`]) electMayor(i);
+  for (const [, zs] of regions()) for (const i of zs) if (countyRep(i) === i && !L.offices[`m:${i}`] && countyTitle(zoneName(i), regionOf(state, zoneProps[i]))) electMayor(i);
 }
 
 /** 단체장 제안: 자기 지역의 혼잡 민원 가운데 가장 급한 것 (광역단체장은 해마다 1건, 시군구청장은 전국에서 6건) */
@@ -4087,7 +4090,7 @@ function bindLocalSettings(el) {
       const parent = zc ? regionOf(state, zc) : null;
       L.independent.push(c);
       holdElection([metroName(c), parent].filter(Boolean), `${metroName(c)} ${L.historic ? '독립' : '광역시 승격'} 선거`);
-      syncMayors();   // 승격한 도시 전체인 시군의 단체장은 구청장으로
+      syncMayors();   // 승격한 도시 전체가 한 시군이면 그 시군 단체장은 없어진다 (광역시장이 맡는다)
       save(state); renderAll();
     };
   });
@@ -4787,16 +4790,47 @@ let housingPick = false;
 function startHousingPick() {
   cancelDraft();
   housingPick = true;
-  loadTerrain();   // 평지인지 보려고 지형 격자를 받아 둔다
   map.getCanvas().style.cursor = 'crosshair';
   if (metric !== 'subDensity' && metric !== 'density') { metricBeforeDraft = metric; metric = 'subDensity'; paintZones(); renderLegend(); }
-  toast('택지지구를 놓을 곳을 지도에서 누르세요 (Esc: 취소). 교통이 좋은 곳일수록 분양이 잘 됩니다.');
+  toast('초록색 칸이 택지지구를 놓을 수 있는 곳입니다 (진할수록 큰 신도시까지). 누르면 그 자리에 놓습니다 (Esc: 취소). 교통이 좋은 곳일수록 분양이 잘 됩니다.');
+  // 평지인지 보려고 지형 격자를 받은 뒤 지금 보이는 곳의 가능 구역을 칠한다 (지도를 옮기면 다시)
+  loadTerrain().then(() => { if (housingPick) drawHousingSites(); });
+  map.on('moveend', drawHousingSites);
 }
 function endHousingPick() {
   if (!housingPick) return;
   housingPick = false;
   map.getCanvas().style.cursor = '';
+  map.off('moveend', drawHousingSites);
+  map.getSource('housing-sites')?.setData({ type: 'FeatureCollection', features: [] });
   endDraftView();
+}
+
+/** 지금 보이는 곳을 칸으로 나눠 택지지구를 놓을 수 있는 칸을 칠한다 (누를 때와 같은 판정: housingSiteProblem) */
+function drawHousingSites() {
+  if (!housingPick || !map) return;
+  if (!map.getSource('housing-sites')) {
+    map.addSource('housing-sites', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'housing-sites', type: 'fill', source: 'housing-sites',
+      paint: { 'fill-color': ['match', ['get', 'k'], 'l', '#1e8a3c', 'm', '#3fb05c', '#8fd49f'], 'fill-opacity': 0.55, 'fill-outline-color': 'rgba(0,0,0,0)' } },
+    map.getLayer('points') ? 'points' : undefined);
+  }
+  const z = map.getZoom();
+  if (z < 8) { map.getSource('housing-sites').setData({ type: 'FeatureCollection', features: [] }); toast('가능 구역을 보려면 지도를 더 확대하세요.'); return; }
+  const b = map.getBounds();
+  const cellKm = z >= 11 ? 0.5 : z >= 9.5 ? 1 : 2;
+  const lat0 = (b.getSouth() + b.getNorth()) / 2;
+  const dy = cellKm / 110.57, dx = cellKm / (111.32 * Math.cos((lat0 * Math.PI) / 180));
+  const feats = [];
+  for (let y = Math.floor(b.getSouth() / dy) * dy; y < b.getNorth(); y += dy) {
+    for (let x = Math.floor(b.getWest() / dx) * dx; x < b.getEast(); x += dx) {
+      const cx = x + dx / 2, cy = y + dy / 2;
+      if (isForeign(cx, cy) || housingSiteProblem(cx, cy, 's')) continue;   // 바다·물은 지형 판정이 거른다
+      const k = !housingSiteProblem(cx, cy, 'l') ? 'l' : !housingSiteProblem(cx, cy, 'm') ? 'm' : 's';
+      feats.push({ type: 'Feature', properties: { k }, geometry: { type: 'Polygon', coordinates: [[[x, y], [x + dx, y], [x + dx, y + dy], [x, y + dy], [x, y]]] } });
+    }
+  }
+  map.getSource('housing-sites').setData({ type: 'FeatureCollection', features: feats });
 }
 
 // 택지지구 자리: 기존 시가지(반경 1km 인구밀도) 밖, 평지(단지 범위 안 표고 차·거칠기), 물·다른 택지지구와 겹치지 않는 곳
@@ -4826,7 +4860,7 @@ function urbanFabric(lon, lat) {
 /** 이 자리에 이 크기의 택지지구를 놓을 수 있는가: null(된다) 또는 안 되는 까닭 */
 function housingSiteProblem(lon, lat, size) {
   const R = HOUSING_SITE.r[size];
-  if (popWithin(lon, lat, 1) / Math.PI > HOUSING_SITE.urbanDensity || urbanFabric(lon, lat)) return '이미 시가지';
+  if (popNear(lon, lat, 1) / Math.PI > HOUSING_SITE.urbanDensity || urbanFabric(lon, lat)) return '이미 시가지';
   for (const h of state.housing || []) if (kmBetween(lon, lat, h.lon, h.lat) < R + (HOUSING_SITE.r[h.size] || 1)) return '다른 택지지구와 겹침';
   if (terrainReady()) {
     const kx = 111.32 * Math.cos((lat * Math.PI) / 180);
