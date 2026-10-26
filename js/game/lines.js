@@ -51,7 +51,7 @@ function abbr(stem) {
 export function autoLineName(type, from, to, used) {
   const a = cityStem(from), b = cityStem(to);
   let base;
-  if (type === 'metro' || type === 'lrt') {
+  if (type === 'metro' || type === 'lrt' || type === 'lrtug') {
     let n = 1;
     while (used.has(`${a} 도시철도 ${n}호선`)) n++;
     return `${a} 도시철도 ${n}호선`;
