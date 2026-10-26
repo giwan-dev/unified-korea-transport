@@ -74,6 +74,27 @@ export const UPGRADES = [
     applies: (l) => l.cls === 'conv' && l.speed < 200,
     apply: (l) => ({ speed: 200, tracks: Math.max(2, l.tracks), power: 'AC' }),
   },
+  // 북측 철도를 한 번에 남측 규격으로: 선형·노반 보강 + 복선 + 교류 25kV + 표준궤 (따로 하는 개량들의 합)
+  {
+    id: 'kpstd', mode: 1, label: '남측 규격 일괄 개량 (복선·교류 25kV·120km/h·표준궤)', years: 5,
+    perKm: (l) => 70 + (l.tracks < 2 ? 140 : 0) + (l.power === 'AC' ? 0 : l.power === 'DC' ? 15 : 25),
+    applies: (l) => !!l.kp && l.cls === 'conv' && (l.speed < 120 || l.tracks < 2 || l.power !== 'AC' || !l.std),
+    apply: (l) => ({ speed: Math.max(l.speed, 120), tracks: Math.max(2, l.tracks), power: 'AC' }),
+  },
+  // 고속도로 재건축: 북측 고속도로(시속 60km급)는 남측 규격으로, 남측의 2차로 고속도로는 4차로로 다시 짓는다
+  {
+    id: 'mwrebuild', mode: 0, years: 4,
+    label: (l) => (l.kp ? '남측 규격 고속도로로 재건축 (4차로 이상·95km/h)' : '고속도로 재건축 (4차로 이상·95km/h)'),
+    perKm: (l) => (l.lanes < 4 ? 300 : 220),
+    applies: (l) => l.cls === 'motorway' && (l.speed < 95 || l.lanes < 4 || !l.paved),
+    apply: (l) => ({ speed: Math.max(l.speed, 95), lanes: Math.max(4, l.lanes), paved: 1 }),
+  },
+  // 폐도·폐선: 완공되면 구간을 걷어 낸다 (지도와 계산에서 빠지고, 선로가 다 없어진 역은 닫힌다)
+  ...[[0, '폐도 (도로 철거)'], [1, '폐선 (선로 철거)'], [2, '폐선 (도시철도 운행 중단·철거)']].map(([mode, label]) => ({
+    id: `retire${mode}`, mode, label, perKm: 5, years: 1, retire: true,
+    applies: () => true,
+    apply: () => ({}),
+  })),
 ];
 
 /** 신설 사업 */

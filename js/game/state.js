@@ -511,6 +511,8 @@ export function startUpgrade(base, state, linkIds, upgradeId) {
   startProject(state, {
     id: crypto.randomUUID(), kind: 'upgrade', upgrade: u.id, links: targets, cost, years: u.years, fund,
     label: `${first.name || '무명 구간'} ${resolve(u.label, first)} (${km.toFixed(0)}km)`,
+    // 폐도·폐선은 완공 때 걷어 낼 구간 (직선화의 옛 구간과 같이 처리한다: 저장 정리·운행 계통 다시 짜기)
+    ...(u.retire ? { retire: targets.slice() } : {}),
   });
   return { ok: true };
 }
@@ -903,6 +905,11 @@ function completeProject(base, state, p) {
   if (p.kind === 'upgrade') {
     const u = UPGRADES.find((x) => x.id === p.upgrade);
     for (const id of p.links) {
+      if (u.retire) {
+        if (id < base.links.length) (state.replaced ||= {})[id] = true;
+        else state.newLinks[id - base.links.length].replaced = true;
+        continue;
+      }
       const link = linkAt(base, state, id);
       state.overrides[id] = { ...(state.overrides[id] || {}), ...upgradeAttrs(u, link) };
     }

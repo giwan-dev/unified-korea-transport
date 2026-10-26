@@ -2865,6 +2865,7 @@ function renderSelection() {
   el.querySelectorAll('[data-up]').forEach((b) => {
     b.onclick = () => {
       const ids = wholeRoute ? sameRoute(selection.id) : (selection.section?.ids || [selection.id]);
+      if (!confirmRetire(b.dataset.up, ids)) return;
       const r = startUpgrade(base, state, ids, b.dataset.up);
       if (!r.ok) return alert(r.reason);
       save(state); refreshLinks(); renderAll();
@@ -2883,6 +2884,7 @@ function renderSelection() {
   bindRestore(el);
   el.querySelectorAll('[data-mup]').forEach((b) => {
     b.onclick = () => {
+      if (!confirmRetire(b.dataset.mup, JSON.parse(b.dataset.ids))) return;
       const r = startUpgrade(base, state, JSON.parse(b.dataset.ids), b.dataset.mup);
       if (!r.ok) return alert(r.reason);
       save(state); refreshLinks(); renderAll();
@@ -5046,7 +5048,10 @@ function warmPreview() {
 function buildNow(clone, p) {
   if (p.kind === 'upgrade') {
     const u = UPGRADES.find((x) => x.id === p.upgrade);
-    for (const lid of p.links) clone.overrides[lid] = { ...(clone.overrides[lid] || {}), ...upgradeAttrs(u, linkAt(base, clone, lid)) };
+    for (const lid of p.links) {
+      if (u.retire) { if (lid < base.links.length) (clone.replaced ||= {})[lid] = true; else clone.newLinks[lid - base.links.length].replaced = true; continue; }
+      clone.overrides[lid] = { ...(clone.overrides[lid] || {}), ...upgradeAttrs(u, linkAt(base, clone, lid)) };
+    }
   } else {
     for (const lid of p.links) clone.newLinks[lid - base.links.length].built = true;
     for (const s of p.stations || []) if (!clone.newStations.includes(s)) clone.newStations.push(s);
@@ -5973,10 +5978,11 @@ function linkPanel(id) {
     : isRoad
     ? `<tr><td>차로</td><td>${l.lanes}차로${l.paved ? '' : ' (비포장)'}</td></tr>
        <tr><td>설계·실제 속도</td><td>${l.speed} / ${speed.toFixed(0)} km/h</td></tr>
+       ${l.cls === 'motorway' && l.kp ? `<tr><td>규격</td><td>${l.speed < 95 ? '북측 규격 (아래 재건축으로 남측 규격)' : '남측 규격'}</td></tr>` : ''}
        <tr><td>교통량</td><td>${Math.round(vol).toLocaleString()} PCU/일</td></tr>`
     : `<tr><td>선로</td><td>${l.tracks === 1 ? '단선' : l.tracks === 2 ? '복선' : l.tracks + '선'}</td></tr>
        <tr><td>전력</td><td>${{ AC: '교류 25kV', DC: '직류 3kV', none: '비전철' }[l.power]}</td></tr>
-       <tr><td>규격</td><td>${railStd(l) ? '개량 전 북측 철도 (교류 25kV 전철화하면 남측 규격)' : '남측 규격'}</td></tr>
+       <tr><td>규격</td><td>${railStd(l) ? '개량 전 북측 철도 (아래 "남측 규격 일괄 개량"으로 한 번에 바꿀 수 있습니다)' : '남측 규격'}</td></tr>
        <tr><td>최고 운행 속도</td><td>${l.speed} km/h</td></tr>
        <tr><td>이용객</td><td>${Math.round(vol).toLocaleString()} 명/일</td></tr>`;
   // 누른 곳이 속한 역–역(IC–IC) 구간
@@ -6015,8 +6021,19 @@ function linkPanel(id) {
       return `<div class="item opt"><div class="opt-row">
         <span>${resolve(u.label, l)}${ids.length > 1 ? ` · ${ids.length}개 구간` : ''}</span>
         <span class="btns"><button class="small" data-prev-up="${u.id}" title="다 지었을 때 효과">미리보기</button>
-        <button class="small ${ok ? 'primary' : ''}" data-up="${u.id}" ${ok ? '' : 'disabled'}>${formatWon(cost)} · ${u.years}년</button></span></div></div>`;
+        <button class="small ${ok && !u.retire ? 'primary' : ''}" data-up="${u.id}" ${ok ? '' : 'disabled'}>${formatWon(cost)} · ${u.years}년</button></span></div></div>`;
     }).join('') || '<p class="hint">가능한 개량이 없습니다.</p>'}</div>`}`;
+}
+
+/** 폐도·폐선은 되돌릴 수 없으니 한 번 더 묻는다 (지나는 운행 계통 수도 알려 준다) */
+function confirmRetire(upId, ids) {
+  const u = UPGRADES.find((x) => x.id === upId);
+  if (!u?.retire) return true;
+  const set = new Set(ids);
+  const km = ids.reduce((s0, i) => s0 + linkAt(base, state, i).len, 0);
+  const svc = (state.services || []).filter((s) => s.segs?.some((sg) => sg.via.some((i) => set.has(i)))).map((s) => s.name);
+  return confirm(`${km.toFixed(1)}km를 ${u.mode === 0 ? '폐도' : '폐선'}합니다. 내년에 걷어 내며 되돌릴 수 없습니다.${svc.length ? `
+이 구간을 지나는 운행 계통 ${svc.length}개(${svc.slice(0, 4).join(', ')}${svc.length > 4 ? ' 등' : ''})는 다른 길로 다시 짜고, 길이 없으면 멈춥니다.` : ''}`);
 }
 
 /** 드래그로 고른 여러 구간: 가장 긴 수단 기준으로 개량을 한꺼번에 */
@@ -6048,7 +6065,7 @@ function multiPanel(ids) {
       const ok = canAfford(state, cost, u.years);
       return `<div class="item opt"><div class="opt-row">
         <span>${resolve(u.label, linkAt(base, state, app[0]))} · ${app.length}개 구간 ${len.toFixed(0)}km</span>
-        <button class="small ${ok ? 'primary' : ''}" data-mup="${u.id}" data-ids="${JSON.stringify(app)}" ${ok ? '' : 'disabled'}>${formatWon(cost)} · ${u.years}년</button></div></div>`;
+        <button class="small ${ok && !u.retire ? 'primary' : ''}" data-mup="${u.id}" data-ids="${JSON.stringify(app)}" ${ok ? '' : 'disabled'}>${formatWon(cost)} · ${u.years}년</button></div></div>`;
     }).join('') || '<p class="hint">고른 구간에 가능한 개량이 없습니다.</p>'}</div>`;
 }
 
