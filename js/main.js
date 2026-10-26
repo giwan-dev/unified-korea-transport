@@ -1062,7 +1062,10 @@ function bindMap() {
     if (pointAdd) { pointAddClick(e.lngLat); return; }
     if (housingPick) { housingClick(e); return; }
     if (draft?.type === 'airport') { placeAirport(e.lngLat); return; }
-    if (draft) { addDraftPoint(e.lngLat); return; }
+    if (draft) {
+      const hit = NEW_BUILDS[draft.type]?.mode >= 1 ? map.queryRenderedFeatures([[e.point.x - 9, e.point.y - 9], [e.point.x + 9, e.point.y + 9]], {layers: ['points']}).find(f => f.properties.kind === 'station') : null;
+      addDraftPoint(e.lngLat, hit ? +hit.properties.node : null); return;
+    }
     const box = [[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]];
     const pl = shownPlan ? map.queryRenderedFeatures(box, { layers: ['plans-line'] })[0] : null;
     if (pl) { openPlan(pl.properties.id); return; }
@@ -1178,12 +1181,14 @@ function startDraft(type) {
   loadTerrain().then(() => { if (draft) renderBuild(); });
   map.getCanvas().style.cursor = 'crosshair';
   map.doubleClickZoom.disable();
+  setPlanningStations(true);
   switchTab('build');
   renderBuild();
 }
 
 let metricBeforeDraft = null;
 function endDraftView() {
+  setPlanningStations(false);
   catchLabel(null);
   if (metricBeforeDraft == null) return;
   metric = metricBeforeDraft;
@@ -1429,12 +1434,14 @@ function draftInsertAt(lngLat) {
   return best;
 }
 
-function addDraftPoint(lngLat) {
+function addDraftPoint(lngLat, explicitStation = null) {
   const spec = NEW_BUILDS[draft.type];
   // 새 노선 위를 누르면 끝에 잇지 않고 그 자리에 역(도로는 IC)을 끼운다
   const ins = draftInsertAt(lngLat);
+  const station = explicitStation ?? (spec.mode >= 1 && snap.node ? nearestDraftStation(lngLat, 12) : null);
   if (ins) {
-    const pt = { node: null, lon: ins.lon, lat: ins.lat, split: null, inserted: true };
+    const c = station != null ? nodeCoord(station) : [ins.lon, ins.lat];
+    const pt = { node: station, lon: c[0], lat: c[1], split: null, inserted: true };
     draft.points.splice(ins.index, 0, pt);
     nameDraftPoint(pt, ins.index);
     drawDraft();
@@ -1442,7 +1449,7 @@ function addDraftPoint(lngLat) {
     return;
   }
   // 노드는 화면 24px, 선은 16px 안이면 붙인다 (정확히 누르지 않아도 되게)
-  let node = snap.node ? nearestNode(lngLat, spec.mode, 24) : null;
+  let node = station ?? (snap.node ? nearestNode(lngLat, spec.mode, 24) : null);
   // 도시철도는 일반철도역에도 붙일 수 있다: 그 역에서 일반철도와 바로 갈아탄다 (환승 연결로 친다)
   if (node == null && snap.node && spec.mode === 2) node = nearestRailStation(lngLat, 24);
   let split = null;
@@ -1902,7 +1909,7 @@ function bindUI() {
       basemap = e.target.value; setBasemap(map, basemap);
       try { localStorage.setItem('ukt-basemap', basemap); } catch { /* 저장 못 해도 된다 */ }
     }
-    if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); syncRailKind(map); renderLegend(); }
+    if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); setPlanningStations(!!draft); syncRailKind(map); renderLegend(); }
     if (e.target.id === 'svc-lines-toggle') {
       showServices = e.target.checked;
       try { localStorage.setItem('ukt-svc-lines', showServices ? '1' : '0'); } catch { /* 저장 못 해도 이번에는 적용 */ }
@@ -1911,7 +1918,7 @@ function bindUI() {
 
   });
   document.addEventListener('keydown', (e) => {
-    if (!draft || e.target.tagName === 'INPUT') return;
+    if (!draft || ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
     if (e.key === 'Escape') { cancelDraft(); endHousingPick(); }
     if (e.key === 'Enter') commitDraft();
     if (e.key === 'Backspace') removeLastPoint();
@@ -2264,6 +2271,7 @@ function renderBuild() {
       ${draft.points.length > 1 ? `<p class="hint">${draft.extendOf ? `기존선 연장: ${esc(draft.extendOf)}의 종점에서 이어 같은 노선 이름을 씁니다.` : '신설 노선: 새 노선 이름을 붙입니다.'}</p>` : ''}
       <p class="hint">기존 ${spec.mode ? '선로' : '도로'} 근처를 누르면 연결됩니다. ${spec.mode ? '각 점은 역이 됩니다.' : '끝점이 기존 도로 0.5km 안이면 그 도로에 이어지고, 더 멀면 막다른 도로로 그 자리에서 끝납니다.'}
       Backspace: 마지막 점 지우기 · Enter: 착공 · Esc: 취소</p>
+      ${spec.mode >= 1 ? draftStationPicker() : ''}
       <div>${draft.points.map((p, i) => (p.via ? '' : pointRow(p, i))).join('') || '<p class="hint">시작점을 누르세요.</p>'}</div>
       ${draft.points.some((p) => p.via) ? `<p class="hint">선형을 잡는 경유점 ${draft.points.filter((p) => p.via).length}개 (역·IC 없음)</p>` : ''}
       ${(() => { const pl = draft.plan && plans.find((x) => x.id === draft.plan); return pl?.source ? `<p class="hint"><b>계획 근거</b>: ${esc(pl.source)}${pl.stationSource ? `<br>역: ${esc(pl.stationSource)}` : ''}</p>` : ''; })()}
@@ -2308,6 +2316,7 @@ function renderBuild() {
   el.querySelector('#rec-text')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.stopPropagation(); recGo(); } });
   el.querySelectorAll('[data-build]').forEach((b) => { b.onclick = () => startDraft(b.dataset.build); });
   if (draft) {
+    bindDraftStationPicker();
     $('#draft-ok').onclick = commitDraft;
     $('#draft-prev').onclick = previewDraft;
     const tb = $('#draft-terrain');
@@ -2341,6 +2350,78 @@ function renderBuild() {
       };
     });
   }
+}
+
+/** 그리기 중에는 역을 확대 수준에 맞춰 더 일찍 보이게 한다. */
+function setPlanningStations(on) {
+  if (!map?.getLayer('points')) return;
+  setLayerView(map, layerView);
+  if (!on || !(NEW_BUILDS[draft?.type]?.mode >= 1)) return;
+  for (const [id, zoom] of [['points', 6.5], ['point-labels', 8]]) {
+    const normal = map.getFilter(id);
+    map.setFilter(id, ['any', normal, ['all', ['==', ['get', 'kind'], 'station'], ['>=', ['zoom'], zoom]]]);
+  }
+}
+
+function draftStationEntries() {
+  const net = effectiveNetwork(base, state), live = new Set(), lines = new Map();
+  net.links.slice(0, net.physCount).forEach((l) => {
+    if (!l.active || (l.mode !== 1 && l.mode !== 2)) return;
+    for (const n of [l.a, l.b]) {
+      live.add(n); if (!lines.has(n)) lines.set(n, new Set());
+      if (l.name) lines.get(n).add(l.name);
+    }
+  });
+  return [...nodeNames()].filter(([node, v]) => typeof node === 'number' && v.kind === 'station' && live.has(node))
+    .map(([node, v]) => ({node, name: v.name, lines: [...(lines.get(node) || [])], coord: nodeCoord(node)}));
+}
+
+function nearestDraftStation(lngLat, maxPx) {
+  const p = map.project(lngLat); let node = null, gap = maxPx;
+  for (const item of draftStationEntries()) {
+    const q = map.project(item.coord), d = Math.hypot(q.x - p.x, q.y - p.y);
+    if (d < gap) { gap = d; node = item.node; }
+  }
+  return node;
+}
+
+function draftStationPicker() {
+  return `<div class="draft-station-picker"><label for="draft-station-query">기존 역을 경유지에 추가</label>
+    <div class="name-row"><input id="draft-station-query" type="search" placeholder="역 이름·노선 검색 (예: 서울, 행신)" value="${esc(draft.stationQuery || '')}" style="flex:1"></div>
+    <select id="draft-station-select" aria-label="추가할 기존 역" size="4" style="width:100%"></select>
+    <div class="name-row"><span class="hint" id="draft-station-count"></span><button class="small" id="draft-station-add">기존 역 추가</button></div>
+    <p class="hint">지도에서 역 표식을 눌러도 추가됩니다. 노선 가까이 누르면 두 경유지 사이에 끼워집니다.</p></div>`;
+}
+
+function bindDraftStationPicker() {
+  const input = $('#draft-station-query'), select = $('#draft-station-select');
+  if (!input || !select) return;
+  const entries = draftStationEntries(), center = map.getCenter();
+  const update = () => {
+    draft.stationQuery = input.value;
+    const query = input.value.trim().replace(/역$/, '').toLowerCase();
+    const found = entries.filter(s => !query || `${s.name} ${s.lines.join(' ')}`.toLowerCase().includes(query));
+    found.sort((a, b) => {
+      if (query) { const exact = (b.name.replace(/역$/, '') === query) - (a.name.replace(/역$/, '') === query); if (exact) return exact; }
+      return kmBetween(center.lng, center.lat, ...a.coord) - kmBetween(center.lng, center.lat, ...b.coord);
+    });
+    select.innerHTML = found.slice(0, 80).map(s => `<option value="${s.node}">${esc(s.name)}역 · ${esc(s.lines.slice(0, 3).join(' / '))} (#${s.node})</option>`).join('');
+    if (select.options.length) select.selectedIndex = 0;
+    $('#draft-station-count').textContent = found.length > 80 ? `${found.length}개 중 가까운 80개` : `${found.length}개 역`;
+    $('#draft-station-add').disabled = !found.length;
+  };
+  const add = () => {
+    const item = entries.find(s => s.node === +select.value);
+    if (!item) return;
+    const ins = draftInsertAt({lng: item.coord[0], lat: item.coord[1]});
+    if (draft.points.some(p => p.node === item.node)) { toast('이미 경유지에 있는 역입니다.'); return; }
+    addDraftPoint({lng: item.coord[0], lat: item.coord[1]}, item.node);
+    map.easeTo({center: item.coord, zoom: Math.max(map.getZoom(), 9), duration: 250});
+  };
+  input.oninput = update;
+  for (const el of [input, select]) el.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); add(); } };
+  $('#draft-station-add').onclick = add;
+  update();
 }
 
 function pointRow(p, i) {

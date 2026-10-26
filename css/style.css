@@ -517,3 +517,10 @@ details > summary.flash { animation: flash 1.4s ease-out; }
 /* 되돌릴 수 없는 동작 (사업 취소 등) */
 button.danger { color: #b3261e; border-color: #e3b4b0; }
 button.danger:hover:not(:disabled) { background: #fdecea; }
+
+/* 포크 개선: 기존 역 선택과 기존선 재사용 표시 */
+.draft-station-picker { margin: 10px 0; padding: 10px; border: 1px solid var(--border, #cdd6ce); border-radius: 6px; }
+.draft-station-picker > label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+#draft-station-select { min-height: 92px; font-size: 11px; }
+#draft-station-select option { padding: 5px; }
+.reuse-note, .reuse-summary { color: #168565; }
