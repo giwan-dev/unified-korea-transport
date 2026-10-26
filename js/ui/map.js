@@ -634,7 +634,9 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addSource('services', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({ id: 'services-line', type: 'line', source: 'services',
     layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': ['get', 'color'], 'line-offset': ['get', 'off'], 'line-opacity': ['case', ['==', ['get', 'built'], 1], 0.9, 0.5],
+    // off: 같은 자리를 함께 지나는 계통 사이 칸 번호 (선 굵기만큼 비켜 나란히)
+    paint: { 'line-color': ['get', 'color'], 'line-offset': ['interpolate', ['linear'], ['zoom'], 6, ['*', ['get', 'off'], 2], 10, ['*', ['get', 'off'], 3.5], 13, ['*', ['get', 'off'], 5]],
+      'line-opacity': ['case', ['==', ['get', 'built'], 1], 0.9, 0.5],
       'line-width': ['interpolate', ['linear'], ['zoom'], 6, 2, 10, 3.5, 13, 5] } }, 'points');
 
   map.addSource('draft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });

@@ -289,7 +289,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { planStraighten: () => planStraighten(), openPlan, refreshPoints, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { planStraighten: () => planStraighten(), openPlan, refreshPoints, openServiceEditor, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
@@ -2946,12 +2946,12 @@ function renderOps() {
   if (!el) return;
   if (!result) { el.innerHTML = '<p class="hint">계산 중입니다…</p>'; return; }
   const svcRows = svcStats().map((x) => `<tr><td>${esc(x.s.name)} <span class="m">${x.s.name.includes(SERVICE_KINDS[x.s.kind].label) ? '' : `${SERVICE_KINDS[x.s.kind].label} · `}${x.s.stops.length}역</span></td>
-    <td>${x.s.trains}</td><td>${Math.round(x.peak).toLocaleString()}</td><td>${Math.round(x.load * 100)}%</td><td class="${x.ratio > 100 ? 'neg' : ''}">${fmtRatio(x.ratio)}</td></tr>`).join('');
+    <td>${x.s.trains}</td><td>${Math.round(x.riders).toLocaleString()}</td><td>${Math.round(x.peak).toLocaleString()}</td><td>${Math.round(x.load * 100)}%</td><td class="${x.ratio > 100 ? 'neg' : ''}">${fmtRatio(x.ratio)}</td></tr>`).join('');
   el.innerHTML = `
     <h3>철도 운행 계통</h3>
     <div class="actions"><button class="small primary svc-pick-b">역 골라 특급·급행 짜기</button></div>
     <p class="hint">역을 누르면 그 역을 지나는 노선의 노선도·운행 계통을 보고 고칠 수 있습니다.</p>
-    ${svcRows ? `<table class="cmp"><tr><th>계통</th><th>회/일</th><th>최대 구간</th><th>승차율</th><th>영업계수</th></tr>${svcRows}</table>` : '<p class="hint">아직 짠 계통이 없습니다.</p>'}
+    ${svcRows ? `<table class="cmp"><tr><th>계통</th><th>회/일</th><th title="하루 이용객 (어림: 구간 이용객이 늘어난 만큼 탄 것으로 셈)">이용객/일</th><th title="가장 붐비는 구간의 하루 이용객">최대 구간</th><th>승차율</th><th>영업계수</th></tr>${svcRows}</table>` : '<p class="hint">아직 짠 계통이 없습니다.</p>'}
     ${railStatsHTML()}
     ${econPanelHTML()}
     <h3 style="margin-top:16px">항공</h3>
@@ -3292,6 +3292,12 @@ function servicePanel() {
       <tr><td>표정 속도</td><td>${(plan.km / (plan.runMin / 60)).toFixed(0)} km/h</td></tr>
       <tr><td>하루 운행 (24시간)</td><td>${trains}회 · 한 방향 약 ${Math.max(1, Math.round(SERVICE_DAY_MIN / Math.max(1, trains / 2)))}분 간격</td></tr>
       <tr><td>하루 수송력</td><td>${(trains * TRAIN_TYPES[e.type].cap).toLocaleString()}명</td></tr>
+      ${(() => {
+        const st = e.id && svcStats().find((x) => x.s.id === e.id);
+        if (!st) return `<tr><td>하루 이용객</td><td class="m">${e.id ? '다음 해 계산부터 나옵니다' : '운행을 시작하면 다음 해부터 나옵니다'}</td></tr>`;
+        return `<tr><td>하루 이용객 (어림)</td><td>${Math.round(st.riders).toLocaleString()}명 <span class="m">평균 ${st.avgKm.toFixed(0)}km 탐</span></td></tr>
+          <tr><td>가장 붐비는 구간 · 승차율</td><td>${Math.round(st.peak).toLocaleString()}명 · ${Math.round(st.load * 100)}%</td></tr>`;
+      })()}
       <tr><td>차량 구입비</td><td>${cost ? formatWon(cost) : '없음'}${cur ? ` (보유 ${cur.sets}편성)` : ''}</td></tr>` : '<tr><td colspan="2">정차역을 둘 이상 고르세요.</td></tr>'}
     </table>
     <p class="hint">특급·급행은 고른 역에만 서서 통과역마다 정차 시간을 줄이고, 정차역의 배차 간격이 짧아집니다. 열차는 같은 선로 용량을 나눠 씁니다. 고친 내용은 다음 해부터 반영됩니다.</p>
@@ -3384,17 +3390,24 @@ function svcStats() {
   let k = 0;
   return built.map((s) => {
     let pkm = 0, peak = 0;
+    const vs = [];
     for (const seg of s.segs) {
       const v = sv[k++] || 0;
+      vs.push(v);
       pkm += v * seg.via.reduce((a, i) => a + linkAt(base, state, i).len, 0);
       peak = Math.max(peak, v);
     }
+    // 하루 이용객(어림): 구간 이용객(양방향)이 늘어난 만큼 그 역에서 탔다고 본다.
+    // 한 방향마다 첫 구간 + 늘어난 몫을 더하면 (v₁ + vₙ + Σ|vₖ − vₖ₋₁|) / 2 (같은 역에서 내리고 타는 사람은 빠져 조금 적게 나온다)
+    let riders = vs.length ? (vs[0] + vs[vs.length - 1]) / 2 : 0;
+    for (let j = 1; j < vs.length; j++) riders += Math.abs(vs[j] - vs[j - 1]) / 2;
+    const avgKm = riders > 0 ? pkm / riders : 0;
     const cls = s.cls === 'hsr' ? 'hsr' : 'conv', fare = OPERATING.fareKm[cls] * SERVICE_KINDS[s.kind].fareFactor;
     const rev = pkm * fare * 365;
     // 비용: 열차-km 운행비 + 차량 감가상각(25년)
     const tt = TRAIN_TYPES[s.type] || TRAIN_TYPES.intercity;
     const cost = s.trains * s.km * tt.kmCost * 365 + (s.sets * tt.setCost * 1e8) / 25;
-    return { s, peak, load: pkm / Math.max(1, s.trains * tt.cap * s.km), rev, cost,
+    return { s, peak, riders, avgKm, load: pkm / Math.max(1, s.trains * tt.cap * s.km), rev, cost,
       ratio: rev > 0 ? (cost / rev) * 100 : Infinity, premium: pkm * OPERATING.fareKm[cls] * (SERVICE_KINDS[s.kind].fareFactor - 1) * 365 };
   });
 }
@@ -3472,9 +3485,19 @@ function openLineDiagram(id) {
   if (!result) return;
   const l0 = linkAt(base, state, id);
   const mode = l0.mode, line = l0.name;
-  const net = effectiveNetwork(base, state);
-  const stSet = mode === 2 ? new Set((base.metro_stations || []).map(([, n]) => n)) : railStationSet();
-  const nodes = lineStations(net, stSet, line, mode);
+  const net0 = effectiveNetwork(base, state);
+  // 도시철도도 새로 놓은 역(railStationSet에 든다)을 역으로 센다 (예전에는 자료의 도시철도역만 세어 새 노선은 역이 없다고 나왔다)
+  const stSet = mode === 2 ? new Set([...(base.metro_stations || []).map(([, n]) => n), ...railStationSet()]) : railStationSet();
+  let net = net0, nodes = lineStations(net, stSet, line, mode), building = false;
+  if (nodes.length < 2) {
+    // 공사 중인 노선: 아직 열리지 않은 그 사업의 구간과 새 역으로 그린다
+    const work = state.projects.filter((p) => p.status === 'building' && (p.links || []).some((i) => net0.links[i]?.name === line && net0.links[i]?.mode === mode));
+    const ids = new Set(work.flatMap((p) => p.links));
+    for (const p of work) for (const n of p.stations || []) stSet.add(n);
+    net = { ...net0, links: net0.links.map((l, i) => (ids.has(i) && !l.active ? { ...l, active: true } : l)) };
+    nodes = lineStations(net, stSet, line, mode);
+    building = nodes.length >= 2;
+  }
   if (nodes.length < 2) { alert('이 노선에는 역이 둘 이상 있어야 노선도를 그릴 수 있습니다.'); return; }
   const nn = nodeNames(), { vol, vc } = result.links;
   const stations = [], segs = [], segTime = [];
@@ -3526,7 +3549,7 @@ function openLineDiagram(id) {
   rows.push({ name: `${autoName} (자동)`, brand: autoName, from: stations[0].name, to: stations[stations.length - 1].name, kind: 'base', first: 0, last: nodes.length - 1, stops: all, trains: baseTrains,
     times: timesFor(0, nodes.length - 1, all, 1), segVC: null, label: `모든 역 · 24시간 · ${baseTrains}회/일` });
   showLineDiagram($('#linediagram'), {
-    title: `${line} · ${km.toFixed(0)}km · ${nodes.length}역`, badge: opBadge(state, operatorOf(state, l0)), stations, segs, rows,
+    title: `${line} · ${km.toFixed(0)}km · ${nodes.length}역${building ? ' · 공사 중' : ''}`, badge: opBadge(state, operatorOf(state, l0)), stations, segs, rows,
     onStation: (i) => { flyToNode(stations[i].node); select({ type: 'node', id: stations[i].node }); },
   });
 }
@@ -6419,17 +6442,87 @@ function serviceCoords(links, segs) {
   return out;
 }
 
-/** 운행 계통을 계통 색의 노선으로 그린다 (차량 제작 중이면 옅게, 같은 선로를 지나는 계통은 옆으로 비켜) */
+/**
+ * 운행 계통을 계통 색의 노선으로 그린다 (차량 제작 중이면 옅게).
+ * 같은 자리를 지나는 계통은 그 자리에서만 나란히 비켜 그린다: 300m 남짓 조각마다 그곳을 함께 지나는 계통 수만큼 칸을 나눠
+ * 선로를 가운데에 두고 늘어놓는다 (경의·중앙선과 GTX-A처럼 선로가 달라도 겹쳐 지나면 같은 자리로 친다).
+ * 예전에는 계통 번호로 정한 한 칸을 노선 전체에 써서, 번호가 다섯 차이 나는 계통끼리 겹치고 혼자 다니는 곳에서도 비켜 그렸다
+ */
+const SVC_CELL = 0.003;   // 겹침을 보는 칸 (경위도, 약 300m)
 function drawServices() {
   const src = map?.getSource('services');
   if (!src || !state) return;
   const f = [];
   if (showServices && state.services?.length) {
     const links = effectiveNetwork(base, state).links;
-    state.services.forEach((s, k) => {
-      if (svcEdit?.id === s.id) return;   // 고치는 중인 계통은 편집 미리보기로
-      const c = serviceCoords(links, s.segs || []);
-      if (c.length > 1) f.push({ type: 'Feature', properties: { id: s.id, color: svcColor(s, k), off: ((k % 5) - 2) * 2.5, built: s.built ? 1 : 0 }, geometry: { type: 'LineString', coordinates: c } });
+    const all = allLinks();
+    const list = state.services.map((s, k) => ({ s, k })).filter(({ s }) => svcEdit?.id !== s.id && s.segs?.length);
+    // 링크가 덮는 칸 (300m 간격으로 짚은 점)
+    const cellMemo = new Map();
+    const cellsOf = (i) => {
+      let c = cellMemo.get(i);
+      if (c) return c;
+      c = new Set();
+      const g = all[i]?.geom || [];
+      for (let k = 0; k + 3 < g.length; k += 2) {
+        const [x0, y0, x1, y1] = [g[k], g[k + 1], g[k + 2], g[k + 3]];
+        if (Number.isNaN(x0) || Number.isNaN(x1)) continue;
+        const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / SVC_CELL));
+        for (let t = 0; t <= n; t++) c.add(`${Math.round((x0 + ((x1 - x0) * t) / n) / SVC_CELL)},${Math.round((y0 + ((y1 - y0) * t) / n) / SVC_CELL)}`);
+      }
+      cellMemo.set(i, c);
+      return c;
+    };
+    const svcCells = list.map(({ s }) => { const set = new Set(); for (const sg of s.segs) for (const i of sg.via) for (const c of cellsOf(i)) set.add(c); return set; });
+    const byCell = new Map();
+    svcCells.forEach((set, t) => { for (const c of set) { if (!byCell.has(c)) byCell.set(c, []); byCell.get(c).push(t); } });
+    // 링크의 기준 방향: 양 끝을 이은 방향이 동쪽(정북 포함)이면 a→b. 칸 번호는 이 방향의 오른쪽을 +로 센다
+    // (나란한 다른 선로라도 같은 쪽을 같은 부호로: 반대로 지나는 계통끼리 같은 쪽에 겹치지 않게)
+    const canonMemo = new Map();
+    const canon = (i) => {
+      if (canonMemo.has(i)) return canonMemo.get(i);
+      const g = all[i]?.geom || [], n = g.length;
+      const dx = n >= 4 ? g[n - 2] - g[0] : 0, dy = n >= 4 ? g[n - 1] - g[1] : 0;
+      const v = dx > 0 || (dx === 0 && dy > 0);
+      canonMemo.set(i, v);
+      return v;
+    };
+    // 그 자리(칸과 둘레 8칸)를 지나는 계통
+    const groupAt = (x, y) => {
+      const cx = Math.round(x / SVC_CELL), cy = Math.round(y / SVC_CELL), g = new Set();
+      for (let u = -1; u <= 1; u++) for (let v = -1; v <= 1; v++) for (const t of byCell.get(`${cx + u},${cy + v}`) || []) g.add(t);
+      return [...g].sort((a, b) => a - b);
+    };
+    list.forEach(({ s, k }, j) => {
+      const props = { id: s.id, color: svcColor(s, k), built: s.built ? 1 : 0 };
+      let cur = null;
+      const flush = () => { if (cur && cur.c.length > 1) f.push({ type: 'Feature', properties: { ...props, off: cur.off }, geometry: { type: 'LineString', coordinates: cur.c } }); };
+      const put = (p, q, off) => {
+        if (cur && cur.off === off) cur.c.push(q);
+        else { flush(); cur = { off, c: [p, q] }; }
+      };
+      for (const sg of s.segs) {
+        let node = sg.a;
+        for (const i of sg.via) {
+          const c = pathCoords(links, [i], node);
+          const l = links[i];
+          const fwd = l.a === node;
+          node = fwd ? l.b : l.a;
+          const sign = fwd === canon(i) ? 1 : -1;
+          // 300m 남짓 조각마다 그 자리를 함께 지나는 계통 수로 칸을 정한다 (일부만 나란히 가는 긴 구간도 그 부분만 비켜)
+          for (let m = 0; m + 1 < c.length; m++) {
+            const [x0, y0] = c[m], [x1, y1] = c[m + 1];
+            const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / SVC_CELL));
+            for (let t = 0; t < n; t++) {
+              const p = [x0 + ((x1 - x0) * t) / n, y0 + ((y1 - y0) * t) / n], q = [x0 + ((x1 - x0) * (t + 1)) / n, y0 + ((y1 - y0) * (t + 1)) / n];
+              const group = groupAt((p[0] + q[0]) / 2, (p[1] + q[1]) / 2);
+              if (!group.includes(j)) group.push(j);
+              put(p, q, sign * (group.indexOf(j) - (group.length - 1) / 2));
+            }
+          }
+        }
+      }
+      flush();
     });
   }
   src.setData({ type: 'FeatureCollection', features: f });
