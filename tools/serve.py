@@ -30,8 +30,14 @@ class DevHandler(SimpleHTTPRequestHandler):
         self.end_headers()
 
 
+class DevServer(ThreadingHTTPServer):
+    # modulepreload와 지도 데이터가 한꺼번에 요청돼도 연결을 거절하지 않는다.
+    request_queue_size = 128
+    daemon_threads = True
+
+
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
     handler = partial(DevHandler, directory=str(ROOT))
     print(f"http://localhost:{port}")
-    ThreadingHTTPServer(("127.0.0.1", port), handler).serve_forever()
+    DevServer(("127.0.0.1", port), handler).serve_forever()
