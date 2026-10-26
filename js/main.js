@@ -1,5 +1,5 @@
 // 게임 진행과 화면 패널.
-import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView, LAYER_VIEWS, setBasemap } from './ui/map.js';
+import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView, LAYER_VIEWS, setBasemap, ROAD_PICK_LAYERS } from './ui/map.js';
 import { Namer, stem } from './game/naming.js';
 import {
   reusableRailSegments, newGame, START_YEAR, REOPEN_SPEED, baseTransfers, startProject, cancelProject, cancelBlocked, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
@@ -1073,7 +1073,7 @@ function bindMap() {
     if (ap) return select({ type: 'airport', id: ap.properties.id });
     const pt = map.queryRenderedFeatures(box, { layers: ['points'] })[0];
     if (pt) return select({ type: 'node', id: pt.properties.node });
-    const ln = map.queryRenderedFeatures(box, { layers: ['rails', 'metro', 'roads', 'roads-minor', 'ferries', 'ext-links', 'links-building'] })[0];
+    const ln = map.queryRenderedFeatures(box, { layers: ['rails', 'metro', ...ROAD_PICK_LAYERS, 'ferries', 'ext-links', 'links-building'] })[0];
     // 지도에 그린 운행 계통을 누르면 그 계통 고치기 (밑 선로는 편집 창의 '이 자리 선로 보기'로)
     const sv = showServices && !e.originalEvent?.shiftKey && map.getLayer('services-line') ? map.queryRenderedFeatures([[e.point.x - 8, e.point.y - 8], [e.point.x + 8, e.point.y + 8]], { layers: ['services-line'] })[0] : null;   // 계통 선은 옆으로 비켜 그려 칸을 넓게
     const svc = sv && state.services.find((x) => x.id === sv.properties.id);
@@ -1095,7 +1095,7 @@ function bindMap() {
   map.on('mousemove', (e) => { const t = performance.now(); if (t - catchT < 60) return; catchT = t; catchLabel(e); });
   map.on('mouseout', () => catchLabel(null));
   enableBoxSelect();
-  for (const l of ['roads', 'roads-minor', 'rails', 'metro', 'points', 'plans-line', 'closed-line']) {
+  for (const l of [...ROAD_PICK_LAYERS, 'rails', 'metro', 'points', 'plans-line', 'closed-line']) {
     map.on('mouseenter', l, () => { if (!draft) map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', l, () => { if (!draft) map.getCanvas().style.cursor = ''; });
   }
@@ -1150,7 +1150,7 @@ function toggleMulti(id) {
 
 /** 화면 좌표 사각형 안의 구간들을 고른다 (QA·키보드 없이도 쓸 수 있게 따로 둔다) */
 function selectBox(bbox) {
-  const ids = [...new Set(map.queryRenderedFeatures(bbox, { layers: ['roads', 'roads-minor', 'rails', 'metro'] }).map((f) => f.properties.id))];
+  const ids = [...new Set(map.queryRenderedFeatures(bbox, { layers: [...ROAD_PICK_LAYERS, 'rails', 'metro'] }).map((f) => f.properties.id))];
   if (ids.length) select({ type: 'multi', ids });
 }
 
@@ -1300,7 +1300,7 @@ function placeAirport(lngLat) {
 /** 누른 곳에서 가까운 같은 수단 구간 위의 점 (화면 거리 maxPx 안) */
 function nearestOnLink(lngLat, mode, maxPx, filter = null) {
   const p = map.project(lngLat);
-  const layers = mode === 0 ? ['roads', 'roads-minor'] : mode === 1 ? ['rails'] : ['metro'];
+  const layers = mode === 0 ? ROAD_PICK_LAYERS : mode === 1 ? ['rails'] : ['metro'];
   const box = [[p.x - maxPx, p.y - maxPx], [p.x + maxPx, p.y + maxPx]];
   const work = linksUnderWork(state);
   let best = null;

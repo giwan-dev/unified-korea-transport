@@ -667,6 +667,8 @@ export function setBasemap(map, kind) {
 
 export const LAYER_VIEWS = { all: '모두 보기', road: '도로만', rail: '철도만', air: '항공만', none: '아무것도 안 보기' };
 const ROAD_LAYERS = ['roads', 'roads-minor', 'roads-casing', 'roads-motorway', 'bg-roads', 'ferries'];
+// 배경 도로를 제외한 실제 계산망의 도로: 클릭·드래그 선택·스냅에서 같은 목록을 쓴다.
+export const ROAD_PICK_LAYERS = ['roads-motorway', 'roads-casing', 'roads', 'roads-minor'];
 const RAIL_LAYERS = ['rails', 'metro'];
 const RAIL_VC = ['rails-vc', 'metro-vc'];
 const AIR_LAYERS = ['airroutes', 'airports', 'airport-labels'];

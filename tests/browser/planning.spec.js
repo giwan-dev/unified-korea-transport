@@ -1,5 +1,52 @@
 import {test, expect} from '@playwright/test';
 
+test('motorway segments support click selection, box selection and construction snapping', async ({page}) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.addInitScript(() => { localStorage.setItem('ukt-guide-mode', 'off'); localStorage.setItem('ukt-lang', 'ko'); });
+  await page.goto('/?serial');
+  await page.waitForFunction(() => window.ukt?.result && !document.querySelector('#btn-next').disabled, null, {timeout: 120000});
+  await page.locator('[data-setup-act="ok"]').waitFor({state: 'visible'});
+  await page.locator('[data-setup-act="ok"]').click();
+  await page.evaluate(() => ukt.map.jumpTo({center: [127.1, 36.8], zoom: 10}));
+  await page.waitForFunction(() => ukt.map.queryRenderedFeatures({layers: ['roads-motorway']}).length > 0 && !ukt.map.isMoving());
+  const target = await page.evaluate(() => {
+    const map = ukt.map, canvas = map.getCanvas();
+    const blockers = ['points', 'airports', 'rails', 'metro', 'roads', 'roads-minor', 'ferries', 'ext-links', 'links-building', 'closed-line', 'services-line'].filter(id => map.getLayer(id));
+    for (const feature of map.queryRenderedFeatures({layers: ['roads-motorway']})) {
+      const id = feature.properties.id;
+      if (ukt.base.links[id]?.cls !== 'motorway') continue;
+      const parts = feature.geometry.type === 'MultiLineString' ? feature.geometry.coordinates : [feature.geometry.coordinates];
+      for (const line of parts) for (let k = 1; k < line.length; k++) {
+        const a = line[k - 1], b = line[k];
+        const p = map.project([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
+        if (p.x < 70 || p.x > canvas.clientWidth - 70 || p.y < 70 || p.y > canvas.clientHeight - 70) continue;
+        const box = [[p.x - 5, p.y - 5], [p.x + 5, p.y + 5]];
+        if (!map.queryRenderedFeatures(box, {layers: blockers}).length) return {id, x: p.x, y: p.y};
+      }
+    }
+    return null;
+  });
+  expect(target).not.toBeNull();
+  await page.locator('.maplibregl-canvas').click({position: {x: target.x, y: target.y}});
+  expect(await page.evaluate(id => ukt.map.getFeatureState({source: 'links', id}).sel, target.id)).toBe(true);
+  await expect(page.locator('#selection')).toBeVisible();
+  await page.evaluate(p => {
+    ukt.select(null);
+    ukt.selectBox([[p.x - 6, p.y - 6], [p.x + 6, p.y + 6]]);
+  }, target);
+  expect(await page.evaluate(id => ukt.map.getFeatureState({source: 'links', id}).sel, target.id)).toBe(true);
+  await page.evaluate(() => ukt.startDraft('motorway'));
+  await page.locator('#snap-node').uncheck();
+  await page.locator('#snap-line').check();
+  await page.locator('.maplibregl-canvas').click({position: {x: target.x, y: target.y}});
+  const snapped = await page.evaluate(() => ({length: ukt.draft.points.length, split: ukt.draft.points[0]?.split}));
+  expect(snapped.length).toBe(1);
+  expect(snapped.split).not.toBeNull();
+  expect(snapped.split).not.toBeUndefined();
+  expect(errors).toEqual([]);
+});
+
 test('fork retains original rules and supports station selection, reuse and insertion', async ({page}) => {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
