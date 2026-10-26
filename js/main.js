@@ -3683,7 +3683,7 @@ function plansHTML() {
       let km = 0;
       for (let i = 1; i < p.points.length; i++) km += kmBetween(p.points[i - 1][1], p.points[i - 1][2], p.points[i][1], p.points[i][2]);
       const spec = NEW_BUILDS[p.type];
-      return `<div class="item line"><div class="n" data-plan-show="${p.id}" style="cursor:pointer;${shownPlan === p.id ? 'text-decoration:underline' : ''}" title="지도에 노선 보기"><b>${esc(p.name)}</b><span class="m" title="${esc(p.source || '')}">${spec.label.replace(/ 신설.*$/, '')} · 약 ${Math.round(km * 1.1)}km · ${formatWon(km * 1.1 * spec.perKm)}${p.source ? ` · 출처: ${esc(p.source.split(' · 현황')[0].split(/[,(]/)[0].trim())}` : ''}</span>${p.appraisal ? `<span class="m" title="${esc(p.appraisal.note || '')}"> · 예비 평가 B/C <b class="${p.appraisal.bc >= 1 ? 'pos' : 'neg'}">${p.appraisal.bc.toFixed(2)}</b> · AHP <b class="${p.appraisal.ahp >= 0.5 ? 'pos' : 'neg'}">${p.appraisal.ahp.toFixed(2)}</b></span>` : ''}</div>
+      return `<div class="item line"><div class="n" data-plan-show="${p.id}" style="cursor:pointer;${shownPlan === p.id ? 'text-decoration:underline' : ''}" title="지도에 노선 보기"><b>${esc(p.name)}</b>${p.note ? ` <span class="m">${esc(p.note)}</span>` : ''}<span class="m" title="${esc(p.source || '')}">${spec.label.replace(/ 신설.*$/, '')} · 약 ${Math.round(km * 1.1)}km · ${formatWon(km * 1.1 * spec.perKm)}${p.source ? ` · 출처: ${esc(p.source.split(' · 현황')[0].split(/[,(]/)[0].trim())}` : ''}</span></div>
         <button class="small" data-plan="${p.id}" ${started.has(p.id) ? 'disabled' : ''}>${started.has(p.id) ? '착공함' : '열기'}</button></div>`;
     }).join('')}</div>`)).join('')}`;
 }
@@ -5725,6 +5725,13 @@ function startServicePick(first = []) {
   drawServicePick();
 }
 
+/** 광역 전철이 다니는 일반철도 노선인지 (분당선·신분당선·경의중앙선 등): 광역철도로 표시하고 계통을 짤 때 통근 전동차로 */
+function isCommuterLine(name) {
+  if (!name) return false;
+  if (/^(신분당선|분당선|수인선|경강선|경춘선|서해선|수도권|서울 지하철 1호선)/.test(name)) return true;
+  return (state.services || []).some((s) => s.kind === 'commuter' && (s.lines || [s.line]).includes(name));
+}
+
 /** 화면에서 누른 자리에서 가장 가까운(30px 안) 철도역 */
 function nearestStation(ll) {
   const p = map.project(ll), stations = railStationSet();
@@ -5743,7 +5750,22 @@ function nearestStation(ll) {
 function routeThrough(picks) {
   const net = effectiveNetwork(base, state), stSet = railStationSet();
   const lineKm = new Map(), nodes = [picks[0]], segs = [];
+  // 두 역이 함께 지나는 노선(분당선 왕십리–수원 등)이 있으면 그 노선을 따라 간다: 가장 빠른 길은 고속선(수서평택고속선)으로 새기도 한다
+  const common = (a, b) => { const la = new Set(linesAt(a).filter((x) => x.named && x.mode === 1).map((x) => x.name)); return linesAt(b).filter((x) => x.named && x.mode === 1 && la.has(x.name)).map((x) => x.name); };
   for (let k = 0; k + 1 < picks.length; k++) {
+    const share = common(picks[k], picks[k + 1]);
+    const onLine = share.length ? railPath(net.links, picks[k], picks[k + 1], new Set(share)) : null;
+    if (onLine) {
+      segs.push({ a: picks[k], via: onLine });
+      let node = picks[k];
+      for (const i of onLine) {
+        const l = net.links[i];
+        if (l.name) lineKm.set(l.name, (lineKm.get(l.name) || 0) + l.len);
+        node = l.a === node ? l.b : l.a;
+        if (stSet.has(node) && nodes[nodes.length - 1] !== node) nodes.push(node);
+      }
+      continue;
+    }
     let via = railPath(net.links, picks[k], picks[k + 1], null);
     if (!via) return null;
     // 가장 빠른 길이 짧은 연결선을 여럿 거치면 계통이 지저분해진다: 길게 지나는 노선만 골라 그 노선을 따라 다시 찾는다
@@ -5765,7 +5787,8 @@ function routeThrough(picks) {
   const lines = [...lineKm].filter(([, v]) => v >= 3).map(([n]) => n);
   if (!lines.length) lines.push(...lineKm.keys());
   const cls = net.links.some((l) => lines.includes(l.name) && l.cls === 'hsr') && lines.every((n) => net.links.find((l) => l.name === n)?.cls === 'hsr') ? 'hsr' : 'conv';
-  const under = net.links.filter((l) => lines.includes(l.name) && l.mode === 1 && !l.via);
+  // 열차 종류는 실제로 지나는 구간으로 정한다 (노선 전체로 보면 공사 중인 비전철 구간(신분당선 신사–용산)에 걸려 디젤이 된다)
+  const under = segs.flatMap((sg) => sg.via.map((i) => net.links[i])).filter((l) => l && l.mode === 1 && !l.via);
   return { nodes: nodes.filter((n, i) => nodes.indexOf(n) === i), lines, cls, under, segs };
 }
 
@@ -5887,9 +5910,12 @@ function commitServicePick() {
   if (!r) { alert('고른 역 사이를 잇는 철도 경로가 없습니다.'); return; }
   const { nodes, lines, cls, under } = r;
   const nn = nodeNames();
-  const kind = picks.length <= Math.max(3, nodes.length / 4) ? 'limited' : 'express';
+  // 광역 전철 노선만 지나면 광역 전철(모든 역 정차·통근 전동차)로 시작한다
+  const commuterOnly = lines.every(isCommuterLine);
+  const kind = commuterOnly ? 'commuter' : picks.length <= Math.max(3, nodes.length / 4) ? 'limited' : 'express';
   svcEdit = { line: lines[0], lines, cls, kind, name: `${nn.get(picks[0])?.name}–${nn.get(picks[picks.length - 1])?.name} ${SERVICE_KINDS[kind].label}`,
-    type: defaultTrainType(cls, under), sets: 4, nodes, stops: new Set(picks), id: null, nameEdited: false, color: nextSvcColor() };
+    type: commuterOnly && canRun('commuter', under) ? 'commuter' : defaultTrainType(cls, under), sets: commuterOnly ? 10 : 4, nodes,
+    stops: commuterOnly ? new Set(nodes) : new Set(picks), id: null, nameEdited: false, color: nextSvcColor() };
   endServicePick();
   select({ type: 'service' });
 }
@@ -6611,7 +6637,7 @@ function stationPanel(id, n) {
     const key = `${near[i].name}|${near[i].lines.join(',')}`;
     if (seen.has(key)) near.splice(i--, 1); else seen.add(key);
   }
-  const modeLabel = (l) => (l.mode === 2 ? '도시철도' : CLASS_LABEL[l.cls]);
+  const modeLabel = (l) => (l.mode === 2 ? '도시철도' : l.cls === 'conv' && isCommuterLine(l.name) ? '광역철도' : CLASS_LABEL[l.cls]);
   const svcRow = (s, stop) => `<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${esc(svcColor(s, state.services.indexOf(s)))}"></span>
     ${esc(s.name)} <span class="m">${SERVICE_KINDS[s.kind].label}${s.built ? '' : ' · 차량 제작 중'}</span> <button class="small" data-svc-edit="${s.id}">고치기</button></td>
     <td>${stop ? `하루 ${s.trains}회 · 약 ${Math.round(SERVICE_DAY_MIN / Math.max(1, s.trains / 2))}분 간격` : '통과'}</td></tr>`;

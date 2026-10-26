@@ -2,7 +2,9 @@
 // 마지막 구간도 기존 선로 방향으로 들어오게 한다 (곡선은 curve.js가 점의 tan으로 그린다).
 import { kmBetween } from '../sim/model.js';
 
-const LOOK_KM = 1.5;       // 노드에서 이만큼 떨어진 선로 위 점으로 방향을 잡는다
+// 노드에서 선로를 따라 이만큼 간 점으로 방향을 잡는다. 길게 잡으면 역 바로 앞에서 꺾이는 선로(개풍: 려현에서 남쪽으로 오다 역 앞 0.5km에서
+// 동쪽으로 꺾여 들어온다)의 방향이 그 너머 쪽으로 틀어져, 직선화·분기 접선이 엉뚱한 쪽을 향한다
+const LOOK_KM = 0.5;
 const MAX_TURN_DEG = 75;   // 기존 선로와 새 노선 방향이 이보다 크게 꺾이면 접선을 쓰지 않는다
 
 /** 링크 도형을 노드 쪽에서 시작하는 점 목록으로 */
@@ -20,8 +22,14 @@ function pointsFrom(link, nodeXY) {
 function headingAlong(pts, from = pts[0]) {
   let acc = 0, q = pts[pts.length - 1];
   for (let k = 1; k < pts.length; k++) {
-    acc += kmBetween(pts[k - 1][0], pts[k - 1][1], pts[k][0], pts[k][1]);
-    if (acc >= LOOK_KM) { q = pts[k]; break; }
+    const d = kmBetween(pts[k - 1][0], pts[k - 1][1], pts[k][0], pts[k][1]);
+    if (acc + d >= LOOK_KM) {
+      // 정확히 LOOK_KM 되는 곳 (긴 꼭짓점 간격 탓에 멀리 튀지 않게)
+      const t = d > 0 ? (LOOK_KM - acc) / d : 0;
+      q = [pts[k - 1][0] + t * (pts[k][0] - pts[k - 1][0]), pts[k - 1][1] + t * (pts[k][1] - pts[k - 1][1])];
+      break;
+    }
+    acc += d;
   }
   const c = Math.cos((from[1] * Math.PI) / 180);
   const v = [(q[0] - from[0]) * c, q[1] - from[1]];
