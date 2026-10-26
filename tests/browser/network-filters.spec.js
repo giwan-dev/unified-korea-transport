@@ -14,7 +14,15 @@ test('transport groups, individual types and congestion can be toggled independe
   const toggle = key => page.locator(`[data-network-filter="${key}"]`);
   const group = key => page.locator(`[data-network-group="${key}"]`);
   await expect(page.locator('#layerview')).toHaveCount(0);
-  await expect(toggle('roadCongestion')).toBeChecked();
+  await expect(toggle('roadCongestion')).not.toBeChecked();
+  expect(await page.evaluate(() => ukt.map.getPaintProperty('roads', 'line-color'))).toBe('#3f9e63');
+  for (const key of ['motorway', 'road', 'hsr', 'rail', 'narrow', 'metro', 'air']) {
+    await expect(toggle(key).locator('..').locator('.network-label .sw')).toHaveCount(1);
+  }
+  await expect(page.locator('.lg-rows')).not.toContainText('고속도로');
+  await expect(page.locator('.lg-rows')).not.toContainText('고속철');
+  await toggle('roadCongestion').check();
+  await expect(toggle('road').locator('..').locator('.sw.congestion')).toHaveCount(1);
   await expect(toggle('railCongestion')).not.toBeChecked();
   await toggle('hsr').uncheck();
   expect(await group('rail').evaluate(el => el.indeterminate)).toBe(true);
@@ -46,6 +54,7 @@ test('transport groups, individual types and congestion can be toggled independe
   await group('rail').check();
   await group('air').check();
   await toggle('railCongestion').uncheck();
+  await toggle('roadCongestion').uncheck();
   await page.screenshot({path: 'test-results/network-filters-desktop.png'});
   await page.setViewportSize({width: 390, height: 844});
   await expect(group('road')).toBeVisible();

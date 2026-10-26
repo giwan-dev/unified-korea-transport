@@ -717,7 +717,7 @@ export const NETWORK_GROUPS = {
   rail: { label: '철도', types: { hsr: '고속철', rail: '일반 철도', narrow: '협궤', metro: '도시 철도' } },
   air: { label: '항공', types: { air: '항공 노선' } },
 };
-export const DEFAULT_NETWORK_FILTERS = { motorway: true, road: true, hsr: true, rail: true, narrow: true, metro: true, air: true, roadCongestion: true, railCongestion: false };
+export const DEFAULT_NETWORK_FILTERS = { motorway: true, road: true, hsr: true, rail: true, narrow: true, metro: true, air: true, roadCongestion: false, railCongestion: false };
 // 배경 도로를 제외한 실제 계산망의 도로: 클릭·드래그 선택·스냅에서 같은 목록을 쓴다.
 export const ROAD_PICK_LAYERS = ['roads-motorway', 'roads-casing', 'roads', 'roads-minor'];
 const NETWORK_TYPE = ['case', ['==', ['get', 'mode'], 0], ['case', ['==', ['get', 'cls'], 'motorway'], 'motorway', 'road'],
@@ -767,28 +767,27 @@ export function legendHTML(metric, filters = DEFAULT_NETWORK_FILTERS, basemap = 
       <div class="ends"><span>${m.fmt(m.stops[0])}</span><span>${m.fmt(m.stops[m.stops.length - 1])}</span></div>`;
   }
   const road = filters.motorway || filters.road, rail = filters.hsr || filters.rail || filters.narrow || filters.metro, air = filters.air;
-  const vcRamp = (title) => `<div class="lg-t">${title}</div>
-    <div class="ramp" style="background:linear-gradient(to right,${VC_STOPS.map(([v, c]) => `${c} ${v * 10}%`).join(',')})"></div>
-    <div class="ticks">${[0, 1, 2, 4, 7, 10].map((v) => `<span style="left:${v * 10}%">${v}</span>`).join('')}</div>`;
   const rows = [];
-  if (road) rows.push([filters.motorway ? `${sw('#3f9e63', 'line motorway')} 고속도로` : '', filters.road ? `${sw('#3f9e63')} 일반도로` : ''].filter(Boolean).join(' '));
-  if (filters.railCongestion && rail) rows.push(`${sw('#6c3fa0', 'line thin')} 굵기 = 이용객 · 색 = 혼잡도`);
-  else if (rail) {
-    rows.push([filters.hsr ? `${sw('#2453c9')} 고속철` : '', filters.rail ? `${sw('#6c3fa0')} 일반 철도` : '', filters.narrow ? `${sw('#e07b1a')} 협궤` : ''].filter(Boolean).join(' '));
-    if (filters.metro) rows.push(`${sw('#1a9a6c')} 도시 철도 (노선색, 굵기 = 이용객)`);
-  }
-  if (air) rows.push(`${sw('#b04a9c', 'dot')} 공항 ${sw('#b04a9c')} 항공 노선 (굵기 = 여객)`);
   if (road || rail) rows.push(`${sw(IDLE_COLOR)} 이용 없음 ${sw('#8a8f96', 'dash')} 미개통`);
   if (rail) rows.push(`${sw('#8d6e52', 'dash')} 폐선 (눌러서 재개통)`);
   if (road) rows.push(`${sw('#2b7bb9', 'dash')} 여객선 ${sw('#7a7f86', 'dash')} 국경 연결`);
   if (!road && !rail && !air) rows.push('교통망을 숨기고 지표 색칠만 봅니다.');
   if ((road && filters.roadCongestion) || (rail && filters.railCongestion)) rows.push(`<i class="sw warn"></i> 혼잡 주의 (V/C &gt; ${HOT_VC})`);
-  const toggle = (key, label, group = false) => `<label class="network-toggle"><span>${label}</span><input type="checkbox" role="switch" ${group ? `data-network-group="${key}"` : `data-network-filter="${key}"`} ${group ? (Object.keys(NETWORK_GROUPS[key].types).every((k) => filters[k]) ? 'checked' : '') : (filters[key] ? 'checked' : '')}><span class="toggle-track" aria-hidden="true"></span></label>`;
+  const congestionSample = `<i class="sw congestion" title="혼잡도 V/C: 0 → 10" style="background:linear-gradient(to right,${VC_STOPS.map(([v, c]) => `${c} ${v * 10}%`).join(',')})"></i>`;
+  const samples = {
+    motorway: sw('#3f9e63', 'line motorway'), road: sw('#3f9e63'),
+    hsr: sw('#2453c9'), rail: sw('#6c3fa0'), narrow: sw('#e07b1a'), metro: sw('#1a9a6c'),
+    air: sw('#b04a9c'), roadCongestion: congestionSample, railCongestion: congestionSample,
+  };
+  if (filters.roadCongestion) { samples.motorway = congestionSample; samples.road = congestionSample; }
+  if (filters.railCongestion) for (const key of ['hsr', 'rail', 'narrow', 'metro']) samples[key] = congestionSample;
+  const hints = { hsr: '굵기 = 이용객', rail: '굵기 = 이용객', narrow: '굵기 = 이용객', metro: '노선별 고유색 · 굵기 = 이용객', air: '굵기 = 여객', roadCongestion: '혼잡도 V/C: 0 → 10', railCongestion: '혼잡도 V/C: 0 → 10' };
+  const toggle = (key, label, group = false) => `<label class="network-toggle" title="${group ? '' : hints[key] || ''}"><span class="network-label">${group ? (key === 'air' ? sw('#b04a9c', 'dot') : '') : samples[key] || ''}${label}</span><input type="checkbox" role="switch" ${group ? `data-network-group="${key}"` : `data-network-filter="${key}"`} ${group ? (Object.keys(NETWORK_GROUPS[key].types).every((k) => filters[k]) ? 'checked' : '') : (filters[key] ? 'checked' : '')}><span class="toggle-track" aria-hidden="true"></span></label>`;
   const groups = Object.entries(NETWORK_GROUPS).map(([key, g]) => `<div class="network-group">${toggle(key, g.label, true)}<div class="network-types">${Object.entries(g.types).map(([k, label]) => toggle(k, label)).join('')}</div></div>`).join('');
   return `<div class="network-filters" aria-label="교통망 필터">${groups}</div>
     <div class="congestion-filters">${toggle('roadCongestion', '도로 혼잡도')}${toggle('railCongestion', '노선 혼잡도')}</div>
     <select id="metric">${opts}</select>
     <select id="basemap" title="배경 지도">${Object.entries(BASEMAPS).map(([k, v]) => `<option value="${k}" ${k === basemap ? 'selected' : ''}>배경: ${v}</option>`).join('')}</select>${ramp}
-    <div class="lg-more">${((road && filters.roadCongestion) || (rail && filters.railCongestion)) ? vcRamp('혼잡도 (V/C, 0~10)') : ''}
+    <div class="lg-more">
     <div class="lg-rows">${rows.map((r) => `<div>${r}</div>`).join('')}</div></div>`;
 }
