@@ -532,3 +532,23 @@ button.danger:hover:not(:disabled) { background: #fdecea; }
 #draft-station-select { min-height: 92px; font-size: 11px; }
 #draft-station-select option { padding: 5px; }
 .reuse-note, .reuse-summary { color: #168565; }
+
+/* 교통망 종류별 표시 스위치 */
+#legend { max-height: calc(100% - 50px); overflow-y: auto; }
+@media (max-width: 760px) {
+  #legend { max-height: calc(50vh - 16px); }
+}
+.network-group { border-bottom: 1px solid var(--line); padding: 3px 0; }
+.network-toggle { display: flex; align-items: center; gap: 6px; position: relative; min-height: 24px; cursor: pointer; }
+.network-toggle > span:first-child { flex: 1; }
+.network-group > .network-toggle { font-weight: 600; }
+.network-types { padding-left: 12px; }
+.network-toggle input { position: absolute; right: 0; width: 28px; height: 22px; margin: 0; opacity: 0; cursor: pointer; }
+.toggle-track { width: 28px; height: 16px; border-radius: 10px; background: #858c96; pointer-events: none; }
+.toggle-track::after { content: ''; display: block; width: 12px; height: 12px; margin: 2px; border-radius: 50%; background: white; transition: transform .15s; }
+.network-toggle input:checked + .toggle-track { background: var(--accent); }
+.network-toggle input:checked + .toggle-track::after { transform: translateX(12px); }
+.network-toggle input:indeterminate + .toggle-track { background: var(--accent); opacity: .65; }
+.network-toggle input:indeterminate + .toggle-track::after { transform: translateX(6px); }
+.network-toggle input:focus-visible + .toggle-track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.congestion-filters { margin: 6px 0; }

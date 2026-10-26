@@ -1,5 +1,5 @@
 // 게임 진행과 화면 패널.
-import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView, LAYER_VIEWS, setBasemap, ROAD_PICK_LAYERS } from './ui/map.js';
+import { createMap, addLayers, colorFor, legendHTML, METRICS, setNetworkFilters, NETWORK_GROUPS, DEFAULT_NETWORK_FILTERS, setBasemap, ROAD_PICK_LAYERS } from './ui/map.js';
 import { Namer, stem } from './game/naming.js';
 import {
   reusableRailSegments, newGame, START_YEAR, REOPEN_SPEED, baseTransfers, startProject, cancelProject, cancelBlocked, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
@@ -41,7 +41,7 @@ import { placeIntroHTML } from './game/cities.js';
 import { parseRequest, metroPlan, cityCenter } from './game/recommend.js';
 import { registerSentimentMetrics, initSubBase, subGains, zoneGains, nationalFactor, updateMayorApproval, pShare, subValue } from './game/sentiment.js';
 import { addPlansLayer, showPlanLine } from './ui/plansmap.js';
-import { addRailKindLayer, railKindLegend, railStd, syncRailKind } from './ui/railkind.js';
+import { addRailKindLayer, railKindLegend, railStd } from './ui/railkind.js';
 import { P } from './sim/params.js';
 import { PPP_TYPES, PPP_DEFAULTS, initPPP, tollKind, linkToll, annualRevenue, evaluatePPP } from './game/ppp.js';
 import {
@@ -271,6 +271,7 @@ async function init() {
     refreshClosed();
     mark('layers added');
     addRailKindLayer(map);
+    setNetworkFilters(map, networkFilters);
     addPlansLayer(map);
     setNameResolver((level, id, original) => placeName(state, level, id, original));
     setLabelGroup((z) => ({ key: countyKey(z), weight: zoneProps[z]?.area || 0 }));
@@ -962,11 +963,22 @@ function refreshPoints() {
   const features = [];
   const hsrNodes = new Set();
   for (const l of allLinks()) if (l.mode === 1 && l.cls === 'hsr') { hsrNodes.add(l.a); hsrNodes.add(l.b); }
+  const pointTypes = new Map();
+  for (const [id] of allLinks().entries()) {
+    const l = linkAt(base, state, id);
+    if (state.replaced?.[id] || (id < base.links.length && linkPending(base, state, id))) continue;
+    const key = l.mode === 0 ? (l.cls === 'motorway' ? 'motorway' : 'road') : l.mode === 2 ? 'metro' : l.cls === 'hsr' ? 'hsr' : isNarrow(l) ? 'narrow' : 'rail';
+    for (const node of [l.a, l.b]) {
+      if (!pointTypes.has(node)) pointTypes.set(node, {});
+      pointTypes.get(node)[`show_${key}`] = true;
+    }
+  }
   const riders = stationRiders();
   for (const [node, v] of nodeNames()) {
     const c = v.coord || nodeCoord(node);
     if (!c) continue;
-    features.push({ type: 'Feature', properties: { node, ...v, rank: pointRank(node, v, hsrNodes, riders) }, geometry: { type: 'Point', coordinates: c } });
+    const types = pointTypes.get(node) || (v.kind === 'station' ? { [v.metro ? 'show_metro' : 'show_rail']: true } : { show_motorway: true });
+    features.push({ type: 'Feature', properties: { node, ...v, ...types, rank: pointRank(node, v, hsrNodes, riders) }, geometry: { type: 'Point', coordinates: c } });
   }
   // 한 역의 노선별 노드(수서: SRT·3호선·수인분당선)는 지도에 점 하나만: 같은 이름이 600m 안이면 가장 중요한(순위가 높은) 점만 남긴다
   features.sort((a, b) => a.properties.rank - b.properties.rank);
@@ -974,8 +986,12 @@ function refreshPoints() {
   for (const f of features) {
     const p = f.properties, [x, y] = f.geometry.coordinates;
     const same = p.kind === 'station' ? (shown.get(p.name) || []) : [];
-    if (same.some(([u, w]) => kmBetween(u, w, x, y) < 0.6)) continue;
-    if (p.kind === 'station') shown.set(p.name, [...same, [x, y]]);
+    const duplicate = same.find((other) => kmBetween(...other.geometry.coordinates, x, y) < 0.6);
+    if (duplicate) {
+      for (const key of Object.keys(p)) if (key.startsWith('show_') && p[key]) duplicate.properties[key] = true;
+      continue;
+    }
+    if (p.kind === 'station') shown.set(p.name, [...same, f]);
     kept.push(f);
   }
   map.getSource('points').setData({ type: 'FeatureCollection', features: kept });
@@ -1945,7 +1961,11 @@ function bindUI() {
       basemap = e.target.value; setBasemap(map, basemap);
       try { localStorage.setItem('ukt-basemap', basemap); } catch { /* 저장 못 해도 된다 */ }
     }
-    if (e.target.id === 'layerview') { layerView = e.target.value; setLayerView(map, layerView); setPlanningStations(!!draft); syncRailKind(map); renderLegend(); }
+    if (e.target.dataset.networkFilter || e.target.dataset.networkGroup) {
+      const group = NETWORK_GROUPS[e.target.dataset.networkGroup];
+      for (const key of group ? Object.keys(group.types) : [e.target.dataset.networkFilter]) networkFilters[key] = e.target.checked;
+      setPlanningStations(!!draft); drawServices(); renderLegend();
+    }
     if (e.target.id === 'svc-lines-toggle') {
       showServices = e.target.checked;
       try { localStorage.setItem('ukt-svc-lines', showServices ? '1' : '0'); } catch { /* 저장 못 해도 이번에는 적용 */ }
@@ -1999,8 +2019,8 @@ function paletteCommands() {
   ];
   for (const [g, title, tab, sec, find, kw] of deep) add(g, title, () => goSection(tab, sec, find), { keywords: kw, order: 4 });
   for (const m of MEGA) add('국가 대형 사업', m.name, () => goSection('requests', '국가 대형 사업', m.name), { keywords: '대형 사업 메가', order: 4 });
-  for (const [k, v] of Object.entries(LAYER_VIEWS)) {
-    add('보기', `지도 보기: ${v}`, () => { const sel = $('#layerview'); sel.value = k; sel.dispatchEvent(new Event('change', { bubbles: true })); }, { keywords: '레이어 표시', order: 6 });
+  for (const [k, g] of Object.entries(NETWORK_GROUPS)) {
+    add('보기', `지도 표시 전환: ${g.label}`, () => { const input = $(`[data-network-group="${k}"]`); input.checked = !input.checked; input.dispatchEvent(new Event('change', { bubbles: true })); }, { keywords: '레이어 표시 필터', order: 6 });
   }
   for (const [k, v] of Object.entries(METRICS)) {
     add('보기', `지도 색칠: ${v.label}`, () => { const sel = $('#metric'); sel.value = k; sel.dispatchEvent(new Event('change', { bubbles: true })); }, { keywords: '지표 색 범례', order: 6 });
@@ -2044,7 +2064,7 @@ function showGuide() {
   startGuide([
     { target: '#map', title: '지도', body: `남북 전체의 도로·철도와 인구입니다. 도로 색은 혼잡도(초록 → 빨강)이고, 빨간 세모는 정체가 심한 곳입니다. 구간을 누르면 ${phone ? '아래 패널' : '오른쪽'}에 개량 메뉴가, 역을 누르면 운행 계통과 노선도가 열립니다.${phone ? '' : ' <b>Shift를 누른 채 끌면</b> 여러 구간을 한꺼번에 고릅니다.'}` },
     { target: '#topbar .stats', title: '예산과 지지율', body: '해마다 SOC 예산이 들어오고, 공사비는 몇 해에 나눠 나갑니다. 쓰지 않은 예산은 한 해 치까지만 남습니다. 지지율은 정체·민원·완공 사업·부채로 오르내리고, 남북 통합도가 오르면 북측 관광지와 교류가 열립니다.' },
-    { target: '#legend', title: '보기 메뉴', body: '도로만·철도만·항공만 걸러 보거나, 인구·소득·행복도 같은 지표로 지도를 색칠합니다.' },
+    { target: '#legend', title: '보기 메뉴', body: '도로·철도·항공 그룹과 종류별 토글로 표시를 고르고, 인구·소득·행복도 같은 지표로 지도를 색칠합니다.' },
     { target: '[data-panel=build]', before: tab('build'), title: '건설: 새 노선 놓기', body: '종류(고속도로·고속철도·도시철도 등)를 고르고 지도에 점을 차례로 찍으면 노선이 그려집니다. 산·강은 지형을 따라 돌아가고, 공사비와 B/C가 바로 나옵니다. <b>효과 미리보기</b>로 통행 변화를 본 뒤 <b>착공</b>하세요. 아래 목록의 GTX·서부선·서울–평양 고속철도 같은 계획 사업은 눌러서 바로 열 수 있습니다.' },
     { target: '[data-panel=projects]', before: tab('projects'), title: '사업: 공사와 돈', body: '진행 중인 공사와 해마다 들어갈 돈입니다. 사업마다 투입 속도를 빠르게·느리게 바꿀 수 있습니다. 처음부터 진행 중인 사업 100여 건(실제 공사 중인 노선)이 들어 있습니다.' },
     { target: '[data-panel=ops]', before: tab('ops'), title: '운영: 열차와 항공', body: '역을 골라 특급·급행 계통을 짜고, 코레일·북측 철도 회사의 수지와 노선별 영업계수를 봅니다. 국제선·국내선 항공 노선도 여기서 엽니다.' },
@@ -2200,13 +2220,17 @@ function renderTop() {
   updateAutoBtn();
 }
 
-let layerView = 'all';
+const networkFilters = { ...DEFAULT_NETWORK_FILTERS };
 let basemap = (() => { try { return localStorage.getItem('ukt-basemap') || 'plain'; } catch { return 'plain'; } })();
 function renderLegend() {
   // 좁은 화면에서는 고르기 칸과 색 띠만 보이고, 나머지는 '범례 더 보기'로 편다 (지도를 덜 가리게)
-  $('#legend').innerHTML = legendHTML(metric, layerView, basemap) + `<div class="lg-extra">${railKindLegend()}
+  $('#legend').innerHTML = legendHTML(metric, networkFilters, basemap) + `<div class="lg-extra">${(networkFilters.hsr || networkFilters.rail || networkFilters.narrow) && !networkFilters.railCongestion ? railKindLegend() : ''}
     <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:4px"><input type="checkbox" id="svc-lines-toggle" ${showServices ? 'checked' : ''}> 운행 계통 노선 보기</label></div>`
     + `<button type="button" class="small lg-toggle">${$('#legend').classList.contains('open') ? '범례 접기' : '범례 더 보기'}</button>`;
+  for (const input of $('#legend').querySelectorAll('[data-network-group]')) {
+    const keys = Object.keys(NETWORK_GROUPS[input.dataset.networkGroup].types);
+    input.indeterminate = keys.some((k) => networkFilters[k]) && !keys.every((k) => networkFilters[k]);
+  }
 }
 
 function fmtPop(v) { return v >= 1e6 ? `${(v / 1e6).toFixed(2)}백만` : `${Math.round(v / 1000).toLocaleString()}천`; }
@@ -2393,7 +2417,7 @@ function renderBuild() {
 /** 그리기 중에는 역을 확대 수준에 맞춰 더 일찍 보이게 한다. */
 function setPlanningStations(on) {
   if (!map?.getLayer('points')) return;
-  setLayerView(map, layerView);
+  setNetworkFilters(map, networkFilters);
   if (!on || !(NEW_BUILDS[draft?.type]?.mode >= 1)) return;
   for (const [id, zoom] of [['points', 6.5], ['point-labels', 8]]) {
     const normal = map.getFilter(id);
@@ -6328,8 +6352,23 @@ function drawServices() {
     const links = effectiveNetwork(base, state).links;
     state.services.forEach((s, k) => {
       if (svcEdit?.id === s.id) return;   // 고치는 중인 계통은 편집 미리보기로
-      const c = serviceCoords(links, s.segs || []);
-      if (c.length > 1) f.push({ type: 'Feature', properties: { id: s.id, color: svcColor(s, k), off: ((k % 5) - 2) * 2.5, built: s.built ? 1 : 0 }, geometry: { type: 'LineString', coordinates: c } });
+      let run = [], start = null;
+      const flush = () => {
+        const c = pathCoords(links, run, start);
+        if (c.length > 1) f.push({ type: 'Feature', properties: { id: s.id, color: svcColor(s, k), off: ((k % 5) - 2) * 2.5, built: s.built ? 1 : 0 }, geometry: { type: 'LineString', coordinates: c } });
+        run = []; start = null;
+      };
+      for (const sg of s.segs || []) {
+        let node = sg.a;
+        for (const id of sg.via) {
+          const l = links[id];
+          const key = l.mode === 2 ? 'metro' : l.cls === 'hsr' ? 'hsr' : isNarrow(l) ? 'narrow' : 'rail';
+          if (networkFilters[key]) { if (!run.length) start = node; run.push(id); }
+          else flush();
+          node = l.a === node ? l.b : l.a;
+        }
+        flush();
+      }
     });
   }
   src.setData({ type: 'FeatureCollection', features: f });
@@ -6594,7 +6633,7 @@ function retiredClosed() {
       const ends = [nodes[0], nodes[nodes.length - 1]].map((n) => stName.get(n)).filter(Boolean);
       const mode = linkAt(base, state, [...ids][0]).mode;
       out.push({ id: `retired:${p.id}:${part++}`, name: name || '폐선', label: `${name || '폐선'}${ends.length === 2 ? ` ${ends[0]}–${ends[1]}` : ''}`,
-        km, geom: coords, stations, country: isKP(coords[0][1], coords[0][0]) ? 'KP' : 'KR', mode, retiredYear: p.doneYear });
+        cls: linkAt(base, state, [...ids][0]).cls, narrow: isNarrow(linkAt(base, state, [...ids][0])), km, geom: coords, stations, country: isKP(coords[0][1], coords[0][0]) ? 'KP' : 'KR', mode, retiredYear: p.doneYear });
     }
   }
   return out;
@@ -6605,7 +6644,7 @@ function refreshClosed() {
   if (!map?.getSource('closed')) return;
   const taken = closedTaken();
   map.getSource('closed').setData({ type: 'FeatureCollection', features: closedLines.filter((c) => !taken.has(c.id)).map((c) => ({
-    type: 'Feature', properties: { id: c.id, name: c.label }, geometry: { type: 'LineString', coordinates: c.geom } })) });
+    type: 'Feature', properties: { id: c.id, name: c.label, mode: c.mode ?? 1, cls: c.cls || 'rail', narrow: c.narrow ? 1 : 0 }, geometry: { type: 'LineString', coordinates: c.geom } })) });
 }
 
 function closedCost(c, type) {

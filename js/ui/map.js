@@ -565,7 +565,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
       'line-opacity': ['interpolate', ['linear'], ['zoom'], 6, 0.5, 9, 0.9],
     },
   });
-  // 철도만 보기에서 쓰는 혼잡도(V/C) 색 철도·도시철도 (같은 굵기). 색 식을 바꿔 끼우면 feature-state가 다시 칠해지지 않아 따로 둔다
+  // 혼잡도 토글에서 쓰는 혼잡도(V/C) 색 철도·도시철도 (같은 굵기). 색 식을 바꿔 끼우면 feature-state가 다시 칠해지지 않아 따로 둔다
   for (const id of ['rails', 'metro']) {
     const filter = map.getFilter(id);
     map.addLayer({ id: `${id}-vc`, type: 'line', source: 'links', filter, layout: { visibility: 'none', 'line-cap': 'round' },
@@ -687,7 +687,7 @@ function mix(a, b, t) {
   return `rgb(${c.join(',')})`;
 }
 
-/** 지도 보기: 전체 / 도로만 / 철도만 (도시철도 포함, 혼잡도 색) / 항공만 / 아무것도 안 보기 (지표 색칠만) */
+/** 배경 지도와 교통망 종류별 표시 설정 */
 // 배경: 기본(자체 벡터 지도) · 위성 사진 · 지형(음영기복). 위성·지형은 Esri 타일을 육지 면 위, 호수·경계선 아래에 깐다
 export const BASEMAPS = { plain: '기본 지도', sat: '위성 사진', terrain: '지형 (음영기복)' };
 const RASTER = {
@@ -712,63 +712,53 @@ export function setBasemap(map, kind) {
   sat || !map.getLayer('zones-line') ? 'bg-lake' : 'zones-line');
 }
 
-export const LAYER_VIEWS = { all: '모두 보기', road: '도로만', rail: '철도만', air: '항공만', none: '아무것도 안 보기' };
-const ROAD_LAYERS = ['roads', 'roads-minor', 'roads-casing', 'roads-motorway', 'bg-roads', 'ferries'];
+export const NETWORK_GROUPS = {
+  road: { label: '도로', types: { motorway: '고속도로', road: '일반도로' } },
+  rail: { label: '철도', types: { hsr: '고속철', rail: '일반 철도', narrow: '협궤', metro: '도시 철도' } },
+  air: { label: '항공', types: { air: '항공 노선' } },
+};
+export const DEFAULT_NETWORK_FILTERS = { motorway: true, road: true, hsr: true, rail: true, narrow: true, metro: true, air: true, roadCongestion: true, railCongestion: false };
 // 배경 도로를 제외한 실제 계산망의 도로: 클릭·드래그 선택·스냅에서 같은 목록을 쓴다.
 export const ROAD_PICK_LAYERS = ['roads-motorway', 'roads-casing', 'roads', 'roads-minor'];
-const RAIL_LAYERS = ['rails', 'metro'];
-const RAIL_VC = ['rails-vc', 'metro-vc'];
-const AIR_LAYERS = ['airroutes', 'airports', 'airport-labels'];
-const CLOSED_LAYERS = ['closed-line', 'closed-label'];
-// 철도만 보기: 노선 색 대신 혼잡도(V/C) 색 레이어
-const VIEW_HIDE = {
-  all: [...RAIL_VC],
-  road: [...RAIL_LAYERS, ...RAIL_VC, ...AIR_LAYERS, ...CLOSED_LAYERS],
-  rail: [...ROAD_LAYERS, ...RAIL_LAYERS, ...AIR_LAYERS],
-  air: [...ROAD_LAYERS, ...RAIL_LAYERS, ...RAIL_VC, ...CLOSED_LAYERS],
-  none: [...ROAD_LAYERS, ...RAIL_LAYERS, ...RAIL_VC, ...AIR_LAYERS, ...CLOSED_LAYERS, 'hotspots'],
-};
-// 공사 중(미개통) 점선·국경 연결·혼잡 주의 표시도 보기에 맞는 수단만: 도로만 보기에서 미개통 철도가 섞여 보이지 않게
-const NONE = ['==', ['get', 'mode'], -9];
-const VIEW_MODE = { all: null, road: ['==', ['get', 'mode'], 0], rail: ['>=', ['get', 'mode'], 1], air: NONE, none: NONE };
-// 역·IC 점도 보기에 맞는 것만: 도로만 보기에는 IC·JCT·휴게소, 철도만 보기에는 역, 항공만·안 보기에는 도시만
-const KIND = ['get', 'kind'];
-const VIEW_POINTS = {
-  all: null,
-  road: ['!=', KIND, 'station'],
-  rail: ['match', KIND, ['station', 'city'], true, false],
-  air: ['==', KIND, 'city'],
-  none: ['==', KIND, 'city'],
-};
+const NETWORK_TYPE = ['case', ['==', ['get', 'mode'], 0], ['case', ['==', ['get', 'cls'], 'motorway'], 'motorway', 'road'],
+  ['==', ['get', 'mode'], 2], 'metro', ['==', ['get', 'cls'], 'hsr'], 'hsr', ['==', ['get', 'narrow'], 1], 'narrow', 'rail'];
+const originalFilters = new WeakMap();
 const HOT_BASE = ['any', ['>=', ['zoom'], 7], ['>', ['get', 'vc'], 3]];
 // 역·IC 점: 중요도(rank 0~3)에 따라 확대할수록 더 많이
 const POINT_BASE = {
   points: ['>=', ['zoom'], ['match', ['get', 'rank'], 0, 0, 1, 6.5, 2, 9, 10.5]],
   'point-labels': ['>=', ['zoom'], ['match', ['get', 'rank'], 0, 0, 1, 8, 2, 10, 11.5]],
 };
-const VIEW_FILTERED = {
-  'links-building': ['==', ['get', 'building'], 1],
-  'ext-links': ['all', ['==', ['get', 'ext'], 1], ['!=', ['get', 'cls'], 'ferry']],
-  hotspots: HOT_BASE,
-};
-export function setLayerView(map, view) {
-  const hide = new Set(VIEW_HIDE[view] || []);
-  for (const id of new Set(Object.values(VIEW_HIDE).flat())) {
-    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', hide.has(id) ? 'none' : 'visible');
+export function setNetworkFilters(map, filters) {
+  const enabled = Object.values(NETWORK_GROUPS).flatMap((g) => Object.keys(g.types)).filter((k) => filters[k]);
+  const typeFilter = ['in', NETWORK_TYPE, ['literal', enabled]];
+  let bases = originalFilters.get(map);
+  if (!bases) { bases = new Map(); originalFilters.set(map, bases); }
+  const visible = (id, on) => { if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'); };
+  for (const layer of map.getStyle().layers) {
+    if (!['links', 'hotspots', 'closed'].includes(layer.source) || layer.id === 'links-sel') continue;
+    if (!bases.has(layer.id)) bases.set(layer.id, map.getFilter(layer.id) || ['literal', true]);
+    const extra = layer.source === 'hotspots'
+      ? ['all', typeFilter, ['case', ['==', ['get', 'mode'], 0], filters.roadCongestion, filters.railCongestion]] : typeFilter;
+    map.setFilter(layer.id, ['all', bases.get(layer.id), extra]);
   }
-  const mode = VIEW_MODE[view];
-  for (const [id, base] of Object.entries(VIEW_FILTERED)) {
-    if (map.getLayer(id)) map.setFilter(id, mode ? ['all', base, mode] : base);
+  visible('bg-roads', filters.road);
+  visible('housing-street', filters.road);
+  for (const id of ['rails', 'metro', 'rails-kpstd']) visible(id, !filters.railCongestion);
+  for (const id of ['rails-vc', 'metro-vc']) visible(id, filters.railCongestion);
+  for (const id of ['airroutes', 'airports', 'airport-labels']) visible(id, filters.air);
+  for (const id of ROAD_PICK_LAYERS) {
+    if (id !== 'roads-casing' && map.getLayer(id)) map.setPaintProperty(id, 'line-color', filters.roadCongestion ? vcColor() : '#3f9e63');
   }
-  const pf = VIEW_POINTS[view];
   for (const [id, base] of Object.entries(POINT_BASE)) {
-    if (map.getLayer(id)) map.setFilter(id, pf ? ['all', base, pf] : base);
+    const pf = ['any', ['==', ['get', 'kind'], 'city'], ...enabled.filter((k) => k !== 'air').map((k) => ['==', ['get', `show_${k}`], true])];
+    if (map.getLayer(id)) map.setFilter(id, ['all', base, pf]);
   }
 }
 
 const sw = (color, kind = 'line', extra = '') => `<i class="sw ${kind}" style="--c:${color};${extra}"></i>`;
 
-export function legendHTML(metric, view = 'all', basemap = 'plain') {
+export function legendHTML(metric, filters = DEFAULT_NETWORK_FILTERS, basemap = 'plain') {
   const m = METRICS[metric];
   const opts = Object.entries(METRICS).map(([k, v]) => `<option value="${k}" ${k === metric ? 'selected' : ''}>${v.label}</option>`).join('');
   let ramp = '';
@@ -776,23 +766,29 @@ export function legendHTML(metric, view = 'all', basemap = 'plain') {
     ramp = `<div class="ramp" style="background:linear-gradient(to right,${m.ramp.join(',')})"></div>
       <div class="ends"><span>${m.fmt(m.stops[0])}</span><span>${m.fmt(m.stops[m.stops.length - 1])}</span></div>`;
   }
-  const road = view === 'all' || view === 'road', rail = view === 'all' || view === 'rail', air = view === 'all' || view === 'air';
+  const road = filters.motorway || filters.road, rail = filters.hsr || filters.rail || filters.narrow || filters.metro, air = filters.air;
   const vcRamp = (title) => `<div class="lg-t">${title}</div>
     <div class="ramp" style="background:linear-gradient(to right,${VC_STOPS.map(([v, c]) => `${c} ${v * 10}%`).join(',')})"></div>
     <div class="ticks">${[0, 1, 2, 4, 7, 10].map((v) => `<span style="left:${v * 10}%">${v}</span>`).join('')}</div>`;
   const rows = [];
-  if (road) rows.push(`${sw('#3f9e63', 'line motorway')} 고속도로 ${sw('#3f9e63')} 일반도로`);
-  if (view === 'rail') rows.push(`${sw('#6c3fa0', 'line thin')} 굵기 = 이용객 · 색 = 혼잡도`);
-  else if (rail) rows.push(`${sw('#2453c9')} 고속철 ${sw('#6c3fa0')} 일반철도 ${sw('#e07b1a')} 협궤`, `${sw('#1a9a6c')} 도시철도 (노선색, 굵기 = 이용객)`);
+  if (road) rows.push([filters.motorway ? `${sw('#3f9e63', 'line motorway')} 고속도로` : '', filters.road ? `${sw('#3f9e63')} 일반도로` : ''].filter(Boolean).join(' '));
+  if (filters.railCongestion && rail) rows.push(`${sw('#6c3fa0', 'line thin')} 굵기 = 이용객 · 색 = 혼잡도`);
+  else if (rail) {
+    rows.push([filters.hsr ? `${sw('#2453c9')} 고속철` : '', filters.rail ? `${sw('#6c3fa0')} 일반 철도` : '', filters.narrow ? `${sw('#e07b1a')} 협궤` : ''].filter(Boolean).join(' '));
+    if (filters.metro) rows.push(`${sw('#1a9a6c')} 도시 철도 (노선색, 굵기 = 이용객)`);
+  }
   if (air) rows.push(`${sw('#b04a9c', 'dot')} 공항 ${sw('#b04a9c')} 항공 노선 (굵기 = 여객)`);
   if (road || rail) rows.push(`${sw(IDLE_COLOR)} 이용 없음 ${sw('#8a8f96', 'dash')} 미개통`);
-  if (rail || view === 'rail') rows.push(`${sw('#8d6e52', 'dash')} 폐선 (눌러서 재개통)`);
+  if (rail) rows.push(`${sw('#8d6e52', 'dash')} 폐선 (눌러서 재개통)`);
   if (road) rows.push(`${sw('#2b7bb9', 'dash')} 여객선 ${sw('#7a7f86', 'dash')} 국경 연결`);
-  if (view === 'none') rows.push('교통망을 숨기고 지표 색칠만 봅니다.');
-  if (view !== 'air' && view !== 'none') rows.push(`<i class="sw warn"></i> 혼잡 주의 (V/C &gt; ${HOT_VC})`);
-  return `<select id="layerview" title="지도에 그릴 교통망">${Object.entries(LAYER_VIEWS).map(([k, v]) => `<option value="${k}" ${k === view ? 'selected' : ''}>${v}</option>`).join('')}</select>
+  if (!road && !rail && !air) rows.push('교통망을 숨기고 지표 색칠만 봅니다.');
+  if ((road && filters.roadCongestion) || (rail && filters.railCongestion)) rows.push(`<i class="sw warn"></i> 혼잡 주의 (V/C &gt; ${HOT_VC})`);
+  const toggle = (key, label, group = false) => `<label class="network-toggle"><span>${label}</span><input type="checkbox" role="switch" ${group ? `data-network-group="${key}"` : `data-network-filter="${key}"`} ${group ? (Object.keys(NETWORK_GROUPS[key].types).every((k) => filters[k]) ? 'checked' : '') : (filters[key] ? 'checked' : '')}><span class="toggle-track" aria-hidden="true"></span></label>`;
+  const groups = Object.entries(NETWORK_GROUPS).map(([key, g]) => `<div class="network-group">${toggle(key, g.label, true)}<div class="network-types">${Object.entries(g.types).map(([k, label]) => toggle(k, label)).join('')}</div></div>`).join('');
+  return `<div class="network-filters" aria-label="교통망 필터">${groups}</div>
+    <div class="congestion-filters">${toggle('roadCongestion', '도로 혼잡도')}${toggle('railCongestion', '노선 혼잡도')}</div>
     <select id="metric">${opts}</select>
     <select id="basemap" title="배경 지도">${Object.entries(BASEMAPS).map(([k, v]) => `<option value="${k}" ${k === basemap ? 'selected' : ''}>배경: ${v}</option>`).join('')}</select>${ramp}
-    <div class="lg-more">${(road || view === 'rail') ? vcRamp(view === 'rail' ? '철도 혼잡도 (V/C, 0~10)' : '도로 혼잡도 (V/C, 0~10)') : ''}
+    <div class="lg-more">${((road && filters.roadCongestion) || (rail && filters.railCongestion)) ? vcRamp('혼잡도 (V/C, 0~10)') : ''}
     <div class="lg-rows">${rows.map((r) => `<div>${r}</div>`).join('')}</div></div>`;
 }

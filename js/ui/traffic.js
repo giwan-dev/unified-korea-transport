@@ -42,7 +42,7 @@ export function hotspotsFC(linksFC, vc) {
     const i = f.id, p = f.properties;
     if (i >= vc.length || !(vc[i] > HOT_VC) || p.mode < 0 || p.building || p.ext || p.cls === 'ferry') continue;
     const c = midPoint(f.geometry);
-    if (c) features.push({ type: 'Feature', properties: { mode: p.mode, vc: Math.round(vc[i] * 100) / 100 }, geometry: { type: 'Point', coordinates: c } });
+    if (c) features.push({ type: 'Feature', properties: { mode: p.mode, cls: p.cls, narrow: p.narrow, vc: Math.round(vc[i] * 100) / 100 }, geometry: { type: 'Point', coordinates: c } });
   }
   // 심한 곳이 먼저 자리를 차지하도록 (겹치면 뒤의 것이 숨는다)
   features.sort((a, b) => b.properties.vc - a.properties.vc);
