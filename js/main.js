@@ -215,8 +215,8 @@ async function init() {
   // 예전 저장: 직선화 완공 때 폐역으로 고른 역을 닫지 않았다 (지도에 운행 노선 없는 역으로 남았다)
   for (const p of state.projects) {
     if (p.status !== 'done' || !p.dropStations?.length) continue;
-    const closed = new Set(state.closedStations ||= []);
-    for (const n of p.dropStations) if (!closed.has(n)) state.closedStations.push(n);
+    const closed = new Set(state.closedStations ||= []), reopened = new Set(state.reopenedStations || []);
+    for (const n of p.dropStations) if (!closed.has(n) && !reopened.has(n)) state.closedStations.push(n);
   }
   mark('game state');
   assignTourism(await tourismP);
@@ -904,6 +904,11 @@ function nodeCoord(id) {
 }
 
 /** 노드 id → {name, kind, isNew} (사용자가 바꾼 이름이 우선) */
+/** 문을 닫은 역이라도 원래 이름 (고시·노선도에 번호 대신 쓴다) */
+function anyStationName(n) {
+  return state.names?.[n]?.name || base.stations.find((s) => s[1] === n)?.[0] || (base.metro_stations || []).find((s) => s[1] === n)?.[0] || null;
+}
+
 /** 닿은 철도·도시철도 구간이 모두 폐선된(직선화로 걷어 낸) 역 노드 */
 function retiredStationNodes() {
   const live = new Set(), dead = new Set();
@@ -1845,6 +1850,12 @@ async function commitDraft() {
   const retirePlan = draft.plan && plans.find((x) => x.id === draft.plan)?.retireLine;
   if (retirePlan) planRetire(builtProj, retirePlan);
   if (draft.closedLine != null) builtProj.closedLine = draft.closedLine;   // 폐선 직선화 복원: 그 폐선 표시를 지운다
+  // 새 노선이 문 닫은 역(직선화로 폐역한 옛 역 등)에 서면 그 역을 다시 연다 (이름 없는 "104정거장"이 되던 것)
+  if (NEW_BUILDS[draft.type].mode >= 1 && state.closedStations?.length) {
+    const stops = new Set(draft.points.filter((p) => !p.via && p.node != null).map((p) => p.node));
+    for (const n of state.closedStations) if (stops.has(n)) (state.reopenedStations ||= []).push(n);
+    state.closedStations = state.closedStations.filter((n) => !stops.has(n));
+  }
   draft = null;
   endDraftView();
   map.getCanvas().style.cursor = '';
@@ -2867,7 +2878,7 @@ function renderSelection() {
   });
   el.querySelectorAll('[data-up]').forEach((b) => {
     b.onclick = () => {
-      const ids = wholeRoute ? sameRoute(selection.id) : (selection.section?.ids || [selection.id]);
+      const ids = wholeRoute ? sameRoute(selection.id, true) : (selection.section?.ids || [selection.id]);
       if (!confirmRetire(b.dataset.up, ids)) return;
       const r = startUpgrade(base, state, ids, b.dataset.up);
       if (!r.ok) return alert(r.reason);
@@ -2878,7 +2889,7 @@ function renderSelection() {
   el.querySelectorAll('[data-prev-up]').forEach((b) => {
     b.onclick = () => {
       const u = UPGRADES.find((x) => x.id === b.dataset.prevUp);
-      const ids = (wholeRoute ? sameRoute(selection.id) : (selection.section?.ids || [selection.id])).filter((x) => u.applies(linkAt(base, state, x)));
+      const ids = (wholeRoute ? sameRoute(selection.id, true) : (selection.section?.ids || [selection.id])).filter((x) => u.applies(linkAt(base, state, x)));
       previewUpgrade(ids, u.id);
     };
   });
@@ -4330,8 +4341,15 @@ function planStraighten() {
   const outer = allLinks().map((_, i) => (viaSet.has(i) || state.replaced?.[i] ? null : linkAt(base, state, i)));
   const okRail = (l) => l.mode === 1 && !l.ext && !l.replaced;
   const chordDir = unitDir(pa, pb);
-  const tA = branchTangent(trackHeadings(outer, nodeCoord, { node: A, lon: pa[0], lat: pa[1] }, okRail), chordDir);
-  const tB = branchTangent(trackHeadings(outer, nodeCoord, { node: B, lon: pb[0], lat: pb[1] }, okRail), chordDir);
+  const runLines = new Set([straight.line, ...via.map((i) => net.links[i].name)].filter(Boolean));   // 곧게 펴는 구간이 실제로 지나는 노선
+  // 갈림역(서포 등)에서는 곧게 펴는 노선이 이어지는 선로 방향을 먼저 따른다: 다른 노선(룡성선 등) 방향을 잡으면 새 선형이 크게 돌아 나간다
+  const endTangent = (n, p) => {
+    const pt = { node: n, lon: p[0], lat: p[1] };
+    const own = trackHeadings(outer, nodeCoord, pt, (l) => okRail(l) && runLines.has(l.name));
+    return branchTangent(own.length ? own : trackHeadings(outer, nodeCoord, pt, okRail), chordDir);
+  };
+  const tA = endTangent(A, pa);
+  const tB = endTangent(B, pb);
   // 어느 후보든 길이를 따라 고르게 n+1개 점으로 다시 찍는다 (곡률·역 위치 계산이 점 번호를 쓴다)
   const resample = (c, n = N) => {
     const cum = [0];
@@ -5973,8 +5991,9 @@ function linkPanel(id) {
   const osmProj = planned && state.projects.find((p) => p.kind === 'osm' && p.status === 'building' && p.links.includes(id));
   const ups = l.ext || l.cls === 'ferry' || planned ? [] : UPGRADES.filter((u) => u.mode === l.mode && u.applies(l));
   const isNew = id >= base.links.length;
-  const route = sameRoute(id);
+  const route = sameRoute(id, true);
   const routeKm = route.reduce((sum, x) => sum + linkAt(base, state, x).len, 0);
+  const viaKm = originConnector(l, sameRoute(id)).reduce((sum, x) => sum + linkAt(base, state, x).len, 0);
   const rows = l.mode === 2
     ? `<tr><td>표정 속도</td><td>${l.speed} km/h</td></tr>
        <tr><td>이용객</td><td>${Math.round(vol).toLocaleString()} 명/일</td></tr>`
@@ -6016,7 +6035,7 @@ function linkPanel(id) {
       ${l.mode === 1 ? '<button class="small" data-st-start title="두 역 사이를 단순한 곡선으로 새로 놓고 옛 구간은 폐선합니다. 사이 역은 눌러서 자동·제자리 유지·폐역을 고릅니다">구간 직선화</button>' : ''}</div>
     ${l.mode === 1 ? fundSelect([operatorOf(state, l)]) : ''}
     ${route.length > 1 ? `<label class="name-row"><input type="checkbox" id="whole-route" ${wholeRoute ? 'checked' : ''}>
-      <span>같은 이름 노선 전체 (${route.length}개 구간, ${routeKm.toFixed(0)}km)</span></label>` : ''}
+      <span>같은 이름 노선 전체 (${route.length}개 구간, ${routeKm.toFixed(0)}km${viaKm > 0 ? ` · ${LINE_ORIGIN[l.name]}까지 다른 노선과 함께 쓰는 ${viaKm.toFixed(0)}km 포함` : ''})</span></label>` : ''}
     <div class="list">${ups.map((u) => {
       const ids = (wholeRoute && route.length > 1 ? route : secIds).filter((x) => u.applies(linkAt(base, state, x)));
       const cost = ids.reduce((sum, x) => sum + upgradeCost(u, linkAt(base, state, x)), 0);
@@ -6335,7 +6354,7 @@ function startReopen(id) {
 }
 
 /** 이름·등급·남북이 같은 링크들 (노선 전체 개량용) */
-function sameRoute(id) {
+function sameRoute(id, withOrigin = false) {
   const l = linkAt(base, state, id);
   if (!l.name) return [id];
   const out = [];
@@ -6343,7 +6362,31 @@ function sameRoute(id) {
     const m = linkAt(base, state, i);
     if (m.name === l.name && m.mode === l.mode && m.cls === l.cls && m.kp === l.kp) out.push(i);
   });
-  return out;
+  return withOrigin ? out.concat(originConnector(l, out)) : out;
+}
+
+// 실제 기점역까지 선로가 다른 노선 이름으로 적힌 북측 노선: 평라선 열차는 평양–간리를 평의선 선로로 다닌다
+const LINE_ORIGIN = { 평라선: '평양', 평덕선: '평양', 만포선: '순천' };
+
+/** 노선 끝에서 실제 기점역까지 다른 이름 선로로 이어지는 구간 (노선 전체 개량에 함께 넣는다) */
+function originConnector(l, route) {
+  const origin = LINE_ORIGIN[l.name];
+  if (!origin || l.mode !== 1) return [];
+  const all = allLinks(), ns = new Set();
+  for (const i of route) { ns.add(all[i].a); ns.add(all[i].b); }
+  const targets = base.stations.filter((s) => s[0] === origin).map((s) => s[1]);
+  if (!targets.length || targets.some((t) => ns.has(t))) return [];
+  let best = null;
+  for (const t of targets) {
+    const tc = nodeCoord(t);
+    for (const n of ns) {
+      const c = nodeCoord(n), d = c && tc ? kmBetween(c[0], c[1], tc[0], tc[1]) : Infinity;
+      if (d < 40 && (!best || d < best.d)) best = { d, n, t };
+    }
+  }
+  if (!best) return [];
+  const via = railPath(effectiveNetwork(base, state).links, best.n, best.t, null) || [];
+  return via.filter((i) => i < all.length && !route.includes(i));
 }
 
 function zonePanel(id) {
@@ -6577,7 +6620,7 @@ function gazetteData(p) {
       return { name: x.name, short: shortLine(x.name), color: col };
     });
     return {
-      node: n, name: names.get(n)?.name || (rail ? `${code0 + i}정거장` : `${i + 1}`), code: rail ? String(code0 + i) : '', km: cum.get(n) || 0,
+      node: n, name: names.get(n)?.name || anyStationName(n) || (rail ? `${code0 + i}정거장` : `${i + 1}`), code: rail ? String(code0 + i) : '', km: cum.get(n) || 0,
       // 소재지는 게임 속 지금 이름으로 (행정구역 정리로 바뀐 소속 도·시군 이름: 간성군 등)
       lon: c[0], lat: c[1], transfers, isNew: n >= base.nodes.length,
       place: zi >= 0 ? [regionOf(state, zoneProps[zi]) || zf.province, zoneName(zi)].filter(Boolean).join(' ') : '',
