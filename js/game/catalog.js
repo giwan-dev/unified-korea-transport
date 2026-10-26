@@ -114,3 +114,9 @@ export function formatWon(eok) {
   if (Math.abs(eok) >= 10000) return `${(eok / 10000).toFixed(1)}조`;
   return `${Math.round(eok).toLocaleString()}억`;
 }
+
+/** 개량을 적용한 속성. 철도 개량은 선로를 다시 까므로 북측 협궤(762mm)도 표준궤가 된다 (std) */
+export function upgradeAttrs(u, link) {
+  const a = u.apply(link);
+  return u.mode === 1 ? { ...a, std: 1 } : a;
+}

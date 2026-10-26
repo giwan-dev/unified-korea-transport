@@ -370,6 +370,134 @@ export class Model {
     return out;
   }
 
+  /**
+   * 존(시군구) 안 짧은 통행의 기대 비용: 도시철도 사업 편익용 (효과 미리보기가 대조·처리 망에서 각각 부른다).
+   * 모형은 존 사이 통행만 배정하므로, 도시철도 이용의 대부분인 같은 구·시 안 통행은 여기서 따로 센다.
+   * 존 안 통행(존 인구 × localTripRate)을 읍면동 쌍에 중력식(인구 비중 × exp(−거리/localTripKm))으로 나누고,
+   * 쌍마다 승용차·버스·도시철도 시간의 로짓 기대 비용 −(1/θ)·ln Σ exp(−θ·시간)을 구한다.
+   * 철도: 출발 동에서 가까운 도시철도역(subMetro)·일반철도역(subSt, 접근 시간 포함) → 기다림 → 도시철도·일반철도(고속선 빼고) 망
+   * → 도착 동에서 가까운 역. 수원·성남처럼 광역전철이 이미 다니는 곳은 그 길도 쳐야 새 도시철도의 몫이 부풀지 않는다.
+   * 승용차·버스 시간은 망과 상관없이 같으므로, 두 망의 차이는 철도가 새로 닿거나 빨라진 몫이다.
+   * @param {number[]} zones 계산할 존
+   * @returns {Float64Array} 존마다 Σ 통행 × 기대 비용 (분·통행/일)
+   */
+  localTransitCost(zones) {
+    const L = this.net.links, M = P.metroCandidates, K = P.stationCandidates;   // this.K는 통행량 보정 계수다 (역 후보 수가 아니다)
+    const adj = new Map();
+    // 시간이 숫자가 아닌 선로(속도·길이 없는 구간)는 뺀다: NaN이 섞이면 아래 최단 경로가 끝나지 않는다
+    const edge = (u, v, t) => { if (!(t >= 0 && t < Infinity)) return; let a = adj.get(u); if (!a) adj.set(u, (a = [])); a.push(v, t); };
+    L.forEach((l) => {
+      if (!l.active || l.via || !(l.mode === 2 || (l.mode === 1 && l.cls === 'conv'))) return;
+      // 일반철도는 광역전철 표정 속도쯤으로 (최고 속도가 아니라 역마다 서는 열차)
+      const kmh = l.mode === 2 ? Math.max(5, l.speed) : Math.min(Math.max(5, l.speed), P.localRailKmh);
+      const t = (l.len / kmh) * 60;
+      edge(l.a, l.b, t); edge(l.b, l.a, t);
+    });
+    for (const [r, m] of this.net.railMetro || []) if (r !== m) { edge(r, m, P.metroRailTransferMin); edge(m, r, P.metroRailTransferMin); }
+    // 동마다 탈 수 있는 역 [노드, 접근 분, 기다림 분]: 도시철도역 + 일반철도역
+    const cands = (a) => {
+      const out = [];
+      for (let i = 0; i < M; i++) { const nd = this.subMetro[a * M + i]; if (nd < 0) break; out.push(nd, this.subMetroAcc[a * M + i], P.metroWaitMin); }
+      if (this.subSt) {
+        for (let i = 0; i < K; i++) {
+          const k = this.subSt[a * K + i];
+          if (k < 0) break;
+          out.push(this.stationNode[k], this.subStAcc[a * K + i], Math.min(this.stationWait?.[k] ?? P.localRailWaitMax, P.localRailWaitMax));
+        }
+      }
+      return out;
+    };
+    // 역에서 도시철도 망을 따라 닿는 역까지 시간 (localMaxMin까지, 출발역마다 한 번)
+    const cache = new Map();
+    const from = (src) => {
+      let d = cache.get(src);
+      if (d) return d;
+      d = new Map([[src, 0]]);
+      const hk = [0], hv = [src];   // 이진 힙 (시간, 노드)
+      const push = (k, v) => {
+        let i = hk.length; hk.push(k); hv.push(v);
+        while (i > 0) { const p = (i - 1) >> 1; if (hk[p] <= hk[i]) break; [hk[p], hk[i]] = [hk[i], hk[p]]; [hv[p], hv[i]] = [hv[i], hv[p]]; i = p; }
+      };
+      const pop = () => {
+        const k = hk[0], v = hv[0], lk = hk.pop(), lv = hv.pop();
+        if (hk.length) {
+          hk[0] = lk; hv[0] = lv;
+          for (let i = 0; ;) {
+            const l = 2 * i + 1, r = l + 1;
+            let m = i;
+            if (l < hk.length && hk[l] < hk[m]) m = l;
+            if (r < hk.length && hk[r] < hk[m]) m = r;
+            if (m === i) break;
+            [hk[m], hk[i]] = [hk[i], hk[m]]; [hv[m], hv[i]] = [hv[i], hv[m]]; i = m;
+          }
+        }
+        return [k, v];
+      };
+      while (hk.length) {
+        const [du, u] = pop();
+        if (du > d.get(u)) continue;
+        const a = adj.get(u);
+        if (!a) continue;
+        for (let k = 0; k < a.length; k += 2) {
+          const v = a[k], dv = du + a[k + 1];
+          if (dv > P.localMaxMin || dv >= (d.get(v) ?? Infinity)) continue;
+          d.set(v, dv); push(dv, v);
+        }
+      }
+      cache.set(src, d);
+      return d;
+    };
+    const th = P.localTheta, out = new Float64Array(zones.length);
+    zones.forEach((z, zi) => {
+      const s0 = this.zoneSub0[z], n = this.zoneSubN[z];
+      if (n < 2 || this.isExt?.[z]) return;
+      const pairs = [];
+      let gsum = 0;
+      for (let a = s0; a < s0 + n; a++) {
+        for (let b = s0; b < s0 + n; b++) {
+          if (a === b) continue;
+          const d = kmBetween(this.subX[a], this.subY[a], this.subX[b], this.subY[b]);
+          const g = Math.max(this.subW[a], 0) * Math.max(this.subW[b], 0) * Math.exp(-d / P.localTripKm);
+          if (g > 0) { pairs.push(a, b, d, g); gsum += g; }
+        }
+      }
+      if (!(gsum > 0)) return;
+      const candCache = new Map();
+      const candOf = (a) => { let c = candCache.get(a); if (!c) candCache.set(a, (c = cands(a))); return c; };
+      const trips = this.pop[z] * P.localTripRate;
+      let cost = 0;
+      for (let k = 0; k < pairs.length; k += 4) {
+        const a = pairs[k], b = pairs[k + 1], dr = pairs[k + 2] * P.localDetour, T = (trips * pairs[k + 3]) / gsum;
+        const car = (dr / P.localCarKmh) * 60 + P.localCarExtraMin;
+        const bus = (dr / P.localBusKmh) * 60 + P.localBusExtraMin;
+        let met = Infinity;
+        const ca = candOf(a), cb = candOf(b);
+        for (let i = 0; i < ca.length; i += 3) {
+          const D = from(ca[i]), accA = ca[i + 1] + ca[i + 2];
+          for (let j = 0; j < cb.length; j += 3) {
+            const t = D.get(cb[j]);
+            if (t != null) met = Math.min(met, accA + t + cb[j + 1]);
+          }
+        }
+        const e = Math.exp(-th * car) + Math.exp(-th * bus) + (met < Infinity ? Math.exp(-th * met) : 0);
+        cost += T * (-Math.log(e) / th);
+      }
+      out[zi] = cost;
+    });
+    return out;
+  }
+
+  /** 지점들에서 km 안에 읍면동이 있는 존 목록 */
+  zonesNear(points, km) {
+    const set = new Set();
+    for (let s = 0; s < this.S; s++) {
+      for (const [x, y] of points) {
+        if (Math.abs(this.subY[s] - y) < km / 100 && kmBetween(this.subX[s], this.subY[s], x, y) <= km) { set.add(this.subZone[s]); break; }
+      }
+    }
+    return [...set];
+  }
+
   /** 지점 주변 3×3km 평균 인구 밀도 (명/km²) */
   densityAt(x, y) {
     if (!this.densBins) return 0;

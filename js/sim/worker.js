@@ -210,7 +210,7 @@ async function handle(msg) {
         for (let k = 0; k < area.length; k++) { const l = lastNet.links[k]; if (l.mode === 0 && l.active && inBox(l.a) && inBox(l.b)) { area[k] = 1; any = true; } }
         return any ? area : null;
       };
-      const run = async (net, label, passes, free) => {
+      const run = async (net, label, passes, free, localZones = null) => {
         let t0 = performance.now();
         const vol0 = Float64Array.from(model.volume);
         model.setNetwork(net);
@@ -240,6 +240,7 @@ async function handle(msg) {
         const vol = new Float32Array(n), vc = new Float32Array(n);
         for (let k = 0; k < n; k++) { vol[k] = ev[k] + (model.metroLocal?.[k] || 0); vc[k] = model.capacity[k] > 0 ? vol[k] / model.capacity[k] : 0; }
         const out = { totals, vol, volEq: r.vol, vc, speed: r.speed, svcVol: r.svcVol, odT: model.odT.slice(), odTime: model.odTime.slice(), airIds: model.airports.map((a) => a.id), airPax: Float64Array.from(model.airPax) };
+        if (localZones?.length) out.local = model.localTransitCost(localZones);   // 존 안 짧은 통행 (이 망)
         model.setNetwork(lastNet);
         model.importBaseline(saved.json, saved.bin);
         tick(`${label} 되돌림`, t0);
@@ -262,7 +263,18 @@ async function handle(msg) {
       }
       // 미리 데우기: 새 노선을 그리기 시작할 때 대조(지금 망) 평가만 해 둔다 (그해 철도 사업 미리보기가 그만큼 빨라진다)
       if (msg.warmOnly) { post('previewWarm', { id: msg.id, years }); return; }
-      const after = await run(msg.net, '효과 미리보기 (완공 뒤)', passes, freeAfter);
+      // 존 안 짧은 통행: 새로 놓거나 바뀐 도시철도 구간에서 역세권 반경(6km) 안에 동이 있는 존만, 처리 망과 대조 망에서 견준다
+      const nPhys = msg.net.physCount ?? msg.net.links.length, mPts = [];
+      msg.net.links.forEach((l, k) => { if (k < nPhys && freeAfter[k] && l.mode === 2) for (const nd of [l.a, l.b]) mPts.push(msg.net.nodes[nd]); });
+      const localZones = mPts.length ? model.zonesNear(mPts, P.metroRadiusKm) : [];
+      const after = await run(msg.net, '효과 미리보기 (완공 뒤)', passes, freeAfter, localZones);
+      let localMin = 0;
+      if (localZones.length && after.local) {
+        const t0 = performance.now();
+        const lb = model.localTransitCost(localZones);   // 되돌린 뒤라 지금 망(대조)
+        for (let k = 0; k < lb.length; k++) localMin += lb[k] - after.local[k];
+        tick('존 안 통행', t0);
+      }
       // 이용자 편익 (소비자 잉여의 반분법): OD마다 (전 통행 + 후 통행) / 2 × 시간 비용 감소 (분/일)
       let timeMin = 0;
       for (let k = 0; k < before.odT.length; k++) {
@@ -283,9 +295,9 @@ async function handle(msg) {
       const carsB = (before.totals.road || 0) / P.personsPerCar, carsA = (after.totals.road || 0) * keep / P.personsPerCar;
       const tripKm = carsB > 0 ? vB / (carsB * (1 + P.freightPCUShare)) : 0;
       const shiftVkm = (carsB - carsA) * tripKm;   // 도로에서 빠진 차량 주행거리 (대·km/일)
-      const benefit = { timeMin, dVkt, dVktRaw: vA - vB, inducedTrips: induced,
+      const benefit = { timeMin, localMin, localZones: localZones.length, dVkt, dVktRaw: vA - vB, inducedTrips: induced,
         vocWon: decong.voc + shiftVkm * ROAD_COST.voc(50), accWon: shiftVkm * ROAD_COST.accident.trunk };
-      const strip = ({ odT, odTime, volEq, ...rest }) => rest;
+      const strip = ({ odT, odTime, volEq, local, ...rest }) => rest;
       post('preview', { id: msg.id, before: strip(before), after: strip(after), benefit, years, timing: tm });
     } else if (msg.type === 'probe') {
       // 개발용: 모형 상태 요약 (미리보기 뒤 상태가 그대로 돌아오는지 본다)

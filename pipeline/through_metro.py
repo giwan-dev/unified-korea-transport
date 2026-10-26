@@ -30,6 +30,10 @@ THROUGH = {"일산선": "수도권 전철 3호선", "과천선": "수도권 전�
 # 거꾸로: 코레일 광역전철이 직통하는 도시철도 구간은 일반철도로 (1호선 서울역–청량리 지하 구간 = 경부선·경원선 전철이 지나간다).
 # 경부·경인·경원선은 KTX·화물도 다녀 도시철도로 바꿀 수 없으므로, 짧은 지하 구간 쪽을 일반철도로 바꿔 계통이 지나가게 한다
 TO_RAIL = {"수도권 전철 1호선": ("서울 지하철 1호선", ["경부선", "경원선"])}
+# 도시철도로 바꾼 선로를 코레일 광역전철이 함께 쓰는 구간: 같은 선로를 일반철도 링크로 한 벌 더 둔다
+# (수인·분당선 열차가 안산선 오이도–한대앞을 4호선과 같이 다닌다. 빠지면 수인선이 끊겨 경인선으로 돌아간다).
+# (도시철도 노선, 일반철도 노선, 이 노선의 끊긴 두 끝 노드를 찾을 이름)
+SHARED = [("수도권 전철 4호선", "수인선")]
 CLS = netpack.CLASSES
 
 
@@ -38,6 +42,8 @@ def main():
     meta, nodes, cols, geoms = read_raw()
     changed = to_metro(meta, nodes, cols, geoms)
     changed = to_rail(meta, nodes, cols, geoms) or changed
+    changed = unstub_stations(meta, cols, geoms) or changed
+    changed = share_rail(meta, nodes, cols, geoms) or changed
     if check or not changed:
         return
     write_raw(meta, nodes, cols, geoms)
@@ -104,6 +110,99 @@ def to_rail(meta, nodes, cols, geoms):
                 meta["stations"].append([nm, n]); have.add(n)
         meta["metro_stations"] = [[nm, n] for nm, n in meta.get("metro_stations", []) if not (n in touched and metro_at[n] == 0)]
         print(len(conv), "links", src, "->", dst, "(일반철도),", len(added), "joins")
+    return done
+
+
+def unstub_stations(meta, cols, geoms):
+    """선로 옆 300m 안 짜투리 끝에 붙은 역(정왕·부개·단대오거리 등)을 짜투리가 갈라지는 본선 노드로 옮긴다.
+    역이 짜투리 끝에 있으면 본선을 지나는 열차가 그 역을 지나지 않아 서지 못한다"""
+    inc = defaultdict(list)
+    for i in range(len(geoms)):
+        if cols["mode"][i] in (1, 2):
+            for n in (int(cols["a"][i]), int(cols["b"][i])):
+                inc[n].append(i)
+    taken = {n for key in ("stations", "metro_stations") for _, n in meta.get(key, [])}
+    move = {}
+    for key in ("stations", "metro_stations"):
+        for nm, n in meta.get(key, []):
+            if len(inc[n]) != 1:
+                continue
+            i = inc[n][0]
+            o = int(cols["b"][i]) if int(cols["a"][i]) == n else int(cols["a"][i])
+            if float(cols["len"][i]) < 0.3 and len(inc[o]) >= 3 and o not in taken:
+                move[n] = o
+    for key in ("stations", "metro_stations"):
+        meta[key] = [[nm, move.get(n, n)] for nm, n in meta.get(key, [])]
+    if move:
+        print("stations moved off stubs:", len(move))
+    return bool(move)
+
+
+def share_rail(meta, nodes, cols, geoms):
+    """일반철도 노선의 끊긴 두 끝을 도시철도 노선 선로로 잇는다: 그 선로를 일반철도 링크로 복제한다"""
+    import heapq
+    names = meta["names"]
+    conv_cls = CLS.index("conv")
+    done = False
+    for metro, rail in SHARED:
+        if metro not in names or rail not in names:
+            continue
+        mi, ri = names.index(metro), names.index(rail)
+        L = len(geoms)
+        deg = defaultdict(int)
+        for i in range(L):
+            if cols["mode"][i] == 1 and cols["name"][i] == ri:
+                for n in (int(cols["a"][i]), int(cols["b"][i])):
+                    deg[n] += 1
+        adj = defaultdict(list)
+        for i in range(L):
+            if cols["mode"][i] == 2 and cols["name"][i] == mi:
+                a, b = int(cols["a"][i]), int(cols["b"][i])
+                adj[a].append((b, i)); adj[b].append((a, i))
+        # 이미 함께 쓰는 구간의 도시철도역은 일반철도역이기도 하다 (짜투리에서 옮겨 온 정왕 등)
+        pairs = {frozenset((int(cols["a"][i]), int(cols["b"][i]))) for i in range(L) if cols["mode"][i] == 2 and cols["name"][i] == mi}
+        on = {n for i in range(L) if cols["mode"][i] == 1 and cols["name"][i] == ri
+              and frozenset((int(cols["a"][i]), int(cols["b"][i]))) in pairs for n in (int(cols["a"][i]), int(cols["b"][i]))}
+        have = {n for _, n in meta["stations"]}
+        back = [[nm, n] for nm, n in meta.get("metro_stations", []) if n in on and n not in have]
+        if back:
+            meta["stations"] += back
+            done = True
+            print(rail, "shared stations back to rail:", [nm for nm, _ in back])
+        ends = [n for n, d in deg.items() if d == 1 and n in adj]
+        if len(ends) < 2:
+            continue
+        # 도시철도 선로 위에 놓인 두 끝 사이 가장 짧은 길
+        best = None
+        for s in ends:
+            dist, prev, h = {s: 0.0}, {}, [(0.0, s)]
+            while h:
+                x, u = heapq.heappop(h)
+                if x > dist[u]:
+                    continue
+                for v, i in adj[u]:
+                    nx = x + float(cols["len"][i])
+                    if nx < dist.get(v, 1e18):
+                        dist[v], prev[v] = nx, (u, i); heapq.heappush(h, (nx, v))
+            for t in ends:
+                if t != s and t in dist and (best is None or dist[t] < best[0]):
+                    p, v = [], t
+                    while v != s:
+                        u, i = prev[v]; p.append((i, u, v)); v = u
+                    best = (dist[t], p[::-1])
+        if not best or best[0] > 30:
+            continue
+        done = True
+        rail_tmpl = next(i for i in range(L) if cols["mode"][i] == 1 and cols["name"][i] == ri)
+        touched = set()
+        for i, u, v in best[1]:
+            j = append_link(cols, geoms, rail_tmpl, u, v, float(cols["len"][i]), nodes)
+            geoms[j] = list(geoms[i]) if int(cols["a"][i]) == u else list(reversed(geoms[i]))
+            touched |= {u, v}
+        have = {n for _, n in meta["stations"]}
+        back = [[nm, n] for nm, n in meta.get("metro_stations", []) if n in touched and n not in have]
+        meta["stations"] += back
+        print(rail, "shares", metro, round(best[0], 2), "km,", len(best[1]), "links,", len(back), "stations back to rail")
     return done
 
 

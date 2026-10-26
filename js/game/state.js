@@ -1,5 +1,5 @@
 // 게임 상태: 예산, 공사 중 사업, 혼잡 민원, 이름, 저장/불러오기.
-import { DIFFICULTY, UPGRADES, NEW_BUILDS, KP_COST_FACTOR, AIRPORT, upgradeCost, resolve, formatWon } from './catalog.js';
+import { DIFFICULTY, UPGRADES, NEW_BUILDS, KP_COST_FACTOR, AIRPORT, upgradeCost, upgradeAttrs, resolve, formatWon } from './catalog.js';
 import { P } from '../sim/params.js';
 import { routeKey } from '../sim/model.js';
 import { smoothSegments, polylineKm } from './curve.js';
@@ -904,7 +904,7 @@ function completeProject(base, state, p) {
     const u = UPGRADES.find((x) => x.id === p.upgrade);
     for (const id of p.links) {
       const link = linkAt(base, state, id);
-      state.overrides[id] = { ...(state.overrides[id] || {}), ...u.apply(link) };
+      state.overrides[id] = { ...(state.overrides[id] || {}), ...upgradeAttrs(u, link) };
     }
   } else {
     for (const id of p.links) state.newLinks[id - base.links.length].built = true;

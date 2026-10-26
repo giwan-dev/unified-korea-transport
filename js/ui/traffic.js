@@ -7,7 +7,8 @@
 export const NARROW_GAUGE = new Set(['백무선', '삼지연선', '신흥선', '서호선', '허천선', '금골선', '옹진선', '배천선', '장진선']);
 
 export function isNarrow(l) {
-  return l.mode === 1 && !!l.kp && NARROW_GAUGE.has(l.name);
+  // 개량한 구간은 표준궤: std 표시, 또는 예전 저장처럼 표시가 없어도 협궤 기본(40km/h·교류 아님)보다 좋아졌으면
+  return l.mode === 1 && !!l.kp && !l.std && !(l.speed > 40) && l.power !== 'AC' && NARROW_GAUGE.has(l.name);
 }
 
 /** 주의 표시를 붙이는 혼잡도 기준 */

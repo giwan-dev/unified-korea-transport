@@ -74,6 +74,18 @@ export const P = {
   metroRadiusKm: 6,
   metroLocalRate: 0.2,        // 역세권(반경 800m) 주민 1명당 하루 구 안 도시철도 승차 (존 사이 통행은 따로 배정)
   metroLocalKm: 5,            // 구 안 도시철도 통행 평균 거리 (km)
+  // --- 존(시군구) 안 짧은 통행 (도시철도 사업 편익: 효과 미리보기에서만 쓴다, model.localTransitCost)
+  localTripRate: 1.0,         // 존 인구 1명당 하루 존 안 동(읍면동) 사이 통행 (걷기만 하는 같은 동 안 통행은 뺀다)
+  localTripKm: 3,             // 존 안 통행의 거리 감쇠 (중력식 exp(−거리/이 값))
+  localDetour: 1.3,           // 동 중심 사이 직선거리 → 실제 길
+  localCarKmh: 22,            // 도심 승용차 평균 속도
+  localCarExtraMin: 8,        // 승용차: 주차·걷기
+  localBusKmh: 15,            // 시내버스 평균 속도 (정차 포함)
+  localBusExtraMin: 12,       // 버스: 정류장까지 걷기 + 기다림
+  localTheta: 0.1,            // 수단 선택 로짓 계수 (1/분)
+  localMaxMin: 75,            // 이보다 긴 철도 경로는 보지 않는다
+  localRailKmh: 45,           // 존 안 통행에서 일반철도(광역전철) 구간 속도
+  localRailWaitMax: 20,       // 존 안 통행에서 일반철도역 기다림 상한 (분)
   metroTrainsPerDay: 500,     // 양방향
   metroPaxPerTrain: 1000,
   transferMin: 6,             // 도시철도역 ↔ 버스 환승

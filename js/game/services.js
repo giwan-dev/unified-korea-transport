@@ -361,9 +361,23 @@ const REPLACED_SERVICES = {
 
 /** 예전 저장의 기본 계통을 지금 기본 계통으로 바꾼다 (플레이어가 짠 계통은 그대로). 바꾼 이름 목록을 돌려준다 */
 export function refreshExistingServices(state, net, stations) {
-  const old = (state.services || []).filter((s) => s.existing && s.name in REPLACED_SERVICES);
-  if (!old.length) return [];
   const stationSet = new Set(stations.map((s) => s[1]));
+  // 제 노선을 벗어나 3km 넘게 돌아가는 기본 계통은 다시 짠다 (수인선이 안산선 구간을 잃었던 판에서 수인·분당선이 경인선으로 돌았다)
+  const offKm = (s) => (s.segs || []).reduce((t, sg) => t + sg.via.reduce((u, i) => {
+    const l = net.links[i];
+    return u + (l && l.name && !s.lines.includes(l.name) && !l.name.endsWith(' 환승') ? l.len : 0);
+  }, 0), 0);
+  const fixed = [];
+  state.services = (state.services || []).map((s) => {
+    const def = s.existing && !(s.name in REPLACED_SERVICES) && EXISTING_SERVICES.find((x) => x.name === s.name);
+    if (!def || offKm(s) <= 3) return s;
+    const svc = existingService(def, net.links, stations, stationSet, true);
+    if (!svc || offKm(svc) >= offKm(s)) return s;
+    fixed.push(s.name);
+    return { ...svc, fund: s.fund, sets: s.sets ?? svc.sets, color: s.color ?? svc.color, trains: tripsPerDay(s.sets ?? svc.sets, svc.runMin) };
+  });
+  const old = state.services.filter((s) => s.existing && s.name in REPLACED_SERVICES);
+  if (!old.length) return fixed;
   const want = new Set(old.map((s) => REPLACED_SERVICES[s.name]).filter(Boolean));
   state.services = state.services.filter((s) => !old.includes(s));
   for (const name of want) {
@@ -372,7 +386,7 @@ export function refreshExistingServices(state, net, stations) {
     const svc = def && existingService(def, net.links, stations, stationSet, false);
     if (svc) state.services.push({ ...svc, fund: old[0].fund || 'korail' });
   }
-  return old.map((s) => s.name);
+  return [...fixed, ...old.map((s) => s.name)];
 }
 
 /** 기다리는 계통 가운데 선로가 열린 것을 운행 시작한다. 시작한 계통 이름 목록을 돌려준다 */

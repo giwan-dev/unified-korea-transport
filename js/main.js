@@ -16,7 +16,7 @@ import { isNarrow, twinPrimary, mergeTwins, ROAD_RANK, motorwayMainline, bridgeM
 import { subFold, initPanelUI, toast } from './ui/panel.js';
 import { initPalette, openPalette, goSection } from './ui/palette.js';
 import { startGuide, guideShouldAutoShow, guideOnNewGame, getGuideMode, setGuideMode, GUIDE_MODES } from './ui/guide.js';
-import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon } from './game/catalog.js';
+import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon, upgradeAttrs } from './game/catalog.js';
 import { kmBetween, routeKey } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
 import { helperPorts } from './sim/pool.js';
@@ -174,7 +174,8 @@ async function init() {
   initRail(state);
   seedServices(state, base);
   // 예전 저장의 1호선·4호선 기본 계통을 직통 계통으로 (선로 자료가 바뀌었다)
-  if (refreshExistingServices(state, effectiveNetwork(base, state), base.stations).length) state.log.unshift(`${state.year}년: 1호선 계통을 서울역–청량리 직통(신창–소요산, 인천–광운대)으로 바꿨습니다`);
+  const refreshed = refreshExistingServices(state, effectiveNetwork(base, state), base.stations);
+  if (refreshed.length) state.log.unshift(`${state.year}년: 기본 운행 계통을 지금 선로에 맞춰 다시 짰습니다 (${refreshed.join(', ')})`);
   initLocal(state);
   // 예전 저장: 승격한 도시를 '함흥시' 이름 그대로 광역 단체로 썼다 (직함이 '함흥시도지사'로 나왔다) → 함흥광역시로 옮긴다
   for (const c of state.local.independent || []) {
@@ -1455,8 +1456,6 @@ function addDraftPoint(lngLat) {
     const on = nearestOnLink(lngLat, spec.mode, 16);
     if (on) { split = on.link; lngLat = on.lngLat; }
   }
-  // 도로는 끝점이 기존 도로망에 붙어야 하므로 첫 점이 허공이면 20km 안의 가장 가까운 노드로 붙인다
-  if (node == null && split == null && spec.mode === 0 && draft.points.length === 0) node = nearestNode(lngLat, 0, null, 20);
   // 철도를 공항 가까이 누르면 공항역을 놓는다 (공항철도: 그 공항까지 철도로 갈 수 있어 공항 수요가 는다)
   let airport = null;
   if (node == null && split == null && spec.mode >= 1) {
@@ -1816,7 +1815,7 @@ async function commitDraft() {
   if (terrainRule(draft.type) && !terrainReady()) { await loadTerrain(); if (!draft) return; }   // 착공 사업비도 지형을 넣어서
   const spec = NEW_BUILDS[draft.type];
   const last = draft.points[draft.points.length - 1];
-  if (spec.mode === 0 && !attachRoadEnd(last)) { alert('끝점 5km 안에 이을 도로가 없습니다. 마지막 점을 도로 가까이에 찍어 주세요.'); return; }
+  if (spec.mode === 0) attachRoadEnd(last);
   const names = draftNames();
   const dc = draftCost();
   const pp = pppPlan();
@@ -2265,7 +2264,7 @@ function renderBuild() {
       ${draft.extendOf || draft.extend === false ? `<div class="name-row"><label><input type="checkbox" id="draft-extend" ${draft.extendOf ? 'checked' : ''}>
         기존 노선의 연장으로 놓기${draft.extendOf ? ` (${esc(draft.extendOf)})` : ''}</label></div>` : ''}
       ${draft.points.length > 1 ? `<p class="hint">${draft.extendOf ? `기존선 연장: ${esc(draft.extendOf)}의 종점에서 이어 같은 노선 이름을 씁니다.` : '신설 노선: 새 노선 이름을 붙입니다.'}</p>` : ''}
-      <p class="hint">기존 ${spec.mode ? '선로' : '도로'} 근처를 누르면 연결됩니다. ${spec.mode ? '각 점은 역이 됩니다.' : '도로 끝점이 기존 도로에 닿지 않으면 착공할 때 가장 가까운 도로(5km 안)에 저절로 이어집니다.'}
+      <p class="hint">기존 ${spec.mode ? '선로' : '도로'} 근처를 누르면 연결됩니다. ${spec.mode ? '각 점은 역이 됩니다.' : '끝점이 기존 도로 0.5km 안이면 그 도로에 이어지고, 더 멀면 막다른 도로로 그 자리에서 끝납니다.'}
       Backspace: 마지막 점 지우기 · Enter: 착공 · Esc: 취소</p>
       <div>${draft.points.map((p, i) => (p.via ? '' : pointRow(p, i))).join('') || '<p class="hint">시작점을 누르세요.</p>'}</div>
       ${draft.points.some((p) => p.via) ? `<p class="hint">선형을 잡는 경유점 ${draft.points.filter((p) => p.via).length}개 (역·IC 없음)</p>` : ''}
@@ -3526,9 +3525,10 @@ function resolveWaypoint([name, lon, lat], mode, motorwayEnd = false) {
     });
     if (best != null) return best;
   }
-  // 이름이 같은 기존 역: 같은 종류 철도는 6km 안, 다른 종류(일반철도↔도시철도)는 1km 안이면 그 역에 바로 붙는다.
-  // 다른 종류 역에 붙으면 같은 노드라 저절로 환승역이 된다 (예전에는 그 옆에 같은 이름 역을 하나 더 만들었다: 신분당선 용산 등)
-  const lists = mode === 2 ? [[base.metro_stations || [], 6], [base.stations, 1]] : mode === 1 ? [[base.stations, 6], [base.metro_stations || [], 1]] : [];
+  // 이름이 같은 기존 역: 같은 종류 철도는 6km(도시철도는 1.5km) 안, 다른 종류(일반철도↔도시철도)는 1km 안이면 그 역에 바로 붙는다.
+  // 다른 종류 역에 붙으면 같은 노드라 저절로 환승역이 된다 (예전에는 그 옆에 같은 이름 역을 하나 더 만들었다: 신분당선 용산 등).
+  // 도시철도는 역이 촘촘해 6km 안에 같은 이름의 다른 역이 흔하다 (평양 3호선 광복이 3km 떨어진 1호선 광복역으로 끌려가 선이 꺾였다)
+  const lists = mode === 2 ? [[base.metro_stations || [], 1.5], [base.stations, 1]] : mode === 1 ? [[base.stations, 6], [base.metro_stations || [], 1]] : [];
   for (const [list, maxKm] of lists) {
     let best = null, bd = maxKm;
     for (const [nm, node] of list) {
@@ -3565,6 +3565,27 @@ function migratePlanLines() {
   }
 }
 
+/** 계획의 분기점 [null, 경도, 위도, 노선 이름]: 그 노선 선로 위 가장 가까운 자리(2km 안). 역을 두지 않고 선로를 잘라 잇는다 */
+function planJunction([, lon, lat, line], mode) {
+  let best = null, bd = 2;
+  const ck = Math.cos((lat * Math.PI) / 180);
+  allLinks().forEach((l, i) => {
+    if (l.ext || state.replaced?.[i]) return;
+    const e = linkAt(base, state, i);
+    if (e.mode !== mode || e.name !== line) return;
+    const g = l.geom || [];
+    for (let k = 0; k + 3 < g.length; k += 2) {
+      if (Number.isNaN(g[k]) || Number.isNaN(g[k + 2])) continue;
+      const ax = (g[k] - lon) * ck, ay = g[k + 1] - lat, dx = (g[k + 2] - g[k]) * ck, dy = g[k + 3] - g[k + 1];
+      const t = Math.max(0, Math.min(1, -(ax * dx + ay * dy) / (dx * dx + dy * dy || 1)));
+      const x = g[k] + t * (g[k + 2] - g[k]), y = g[k + 1] + t * (g[k + 3] - g[k + 1]);
+      const d = kmBetween(lon, lat, x, y);
+      if (d < bd) { bd = d; best = { split: i, lon: x, lat: y }; }
+    }
+  });
+  return best;
+}
+
 /** 계획 노선을 그리기로 연다 (경유지가 찍힌 상태). 확인하고 고친 뒤 착공한다 */
 function openPlan(id) {
   const plan = plans.find((p) => p.id === id);
@@ -3572,6 +3593,9 @@ function openPlan(id) {
   startDraft(plan.type);
   const spec = NEW_BUILDS[plan.type];
   for (const wp of plan.points) {
+    // 노선 이름이 붙은 이름 없는 점은 그 노선 위의 분기점 (역 없이 선로를 잘라 잇는다: 서해선–경부고속선 연결선)
+    const jn = wp[0] == null && wp[3] ? planJunction(wp, spec.mode) : null;
+    if (jn) { draft.points.push({ node: null, lon: jn.lon, lat: jn.lat, split: jn.split, kind: null, name: null }); continue; }
     // 이름이 없는 경유점은 선형만 잡는 점 (역·IC를 만들지 않는다)
     if (wp[0] == null) { draft.points.push({ node: null, lon: wp[1], lat: wp[2], split: null, via: true }); continue; }
     const isEnd = wp === plan.points[0] || wp === plan.points[plan.points.length - 1];
@@ -3602,6 +3626,8 @@ function planPreviewLine(plan) {
   if (!spec) return null;
   const pts = plan.points.map((wp, i) => {
     const end = i === 0 || i === plan.points.length - 1;
+    const jn = wp[0] == null && wp[3] ? planJunction(wp, spec.mode) : null;
+    if (jn) return { node: null, lon: jn.lon, lat: jn.lat, split: jn.split };
     const node = end && wp[0] != null ? resolveWaypoint(wp, spec.mode, spec.attrs?.cls === 'motorway') : null;
     const c = node != null ? nodeCoord(node) : [wp[1], wp[2]];
     return { node, lon: c[0], lat: c[1], split: null, via: wp[0] == null };
@@ -3621,6 +3647,7 @@ const IC_SPACING = { motorway: 10, trunk: 6 };
 function fillPlanICs(type) {
   const gap = IC_SPACING[type];
   if (!gap || !draft || draft.points.length < 2) return 0;
+  const mw = type === 'motorway' || type === 'tunnelRoad';
   const segs = smoothSegments(draftPoints());
   const samples = [];
   let s = 0;
@@ -3639,7 +3666,9 @@ function fillPlanICs(type) {
   const cands = [];
   allLinks().forEach((l, id) => {
     const e = linkAt(base, state, id);
-    if (e.mode !== 0 || e.ext || !['trunk', 'primary', 'secondary'].includes(e.cls)) return;
+    // 고속도로 계획은 기존 고속도로와 만나는 곳마다 JCT (간격과 무관하게)
+    const jct = mw && e.cls === 'motorway';
+    if (e.mode !== 0 || e.ext || (!jct && !['trunk', 'primary', 'secondary'].includes(e.cls))) return;
     const g = l.geom;
     for (let k = 0; k + 3 < g.length; k += 2) {
       const ax = g[k], ay = g[k + 1], bx = g[k + 2], by = g[k + 3];
@@ -3652,14 +3681,14 @@ function fillPlanICs(type) {
         if (!den) continue;
         const t = ((ax - p.x) * d2y - (ay - p.y) * d2x) / den, u = ((ax - p.x) * d1y - (ay - p.y) * d1x) / den;
         if (t < 0 || t > 1 || u < 0 || u > 1) continue;
-        cands.push({ q: { i: p.i, x: p.x + t * d1x, y: p.y + t * d1y, s: p.s + t * (r.s - p.s) }, w: { trunk: 3, primary: 2, secondary: 1 }[e.cls], link: id });
+        cands.push({ q: { i: p.i, x: p.x + t * d1x, y: p.y + t * d1y, s: p.s + t * (r.s - p.s) }, w: { motorway: 4, trunk: 3, primary: 2, secondary: 1 }[e.cls], link: id, jct });
       }
     }
   });
   cands.sort((a, b) => b.w - a.w);
   const add = [];
   for (const c of cands) {
-    if (taken.some((t) => Math.abs(t - c.q.s) < gap * 0.8)) continue;
+    if (taken.some((t) => Math.abs(t - c.q.s) < (c.jct ? 1 : gap * 0.8))) continue;
     taken.push(c.q.s);
     add.push(c);
   }
@@ -5017,7 +5046,7 @@ function warmPreview() {
 function buildNow(clone, p) {
   if (p.kind === 'upgrade') {
     const u = UPGRADES.find((x) => x.id === p.upgrade);
-    for (const lid of p.links) clone.overrides[lid] = { ...(clone.overrides[lid] || {}), ...u.apply(linkAt(base, clone, lid)) };
+    for (const lid of p.links) clone.overrides[lid] = { ...(clone.overrides[lid] || {}), ...upgradeAttrs(u, linkAt(base, clone, lid)) };
   } else {
     for (const lid of p.links) clone.newLinks[lid - base.links.length].built = true;
     for (const s of p.stations || []) if (!clone.newStations.includes(s)) clone.newStations.push(s);
@@ -5211,15 +5240,16 @@ function showPreviewBox(html) {
   el.querySelector('.close').onclick = () => { el.hidden = true; };
 }
 
-/** 도로의 끝점이 기존 도로에 닿지 않았으면 가장 가까운 도로(5km 안)로 저절로 잇는다. 이을 곳이 없으면 false */
+/** 도로의 끝점이 기존 도로 바로 옆(0.5km 안)이면 그 도로에 잇는다. 더 멀면 끝점은 그 자리에 둔다
+ * (막다른 도로도 지을 수 있다: 존 접근은 시뮬레이션이 새 도로 노드로 다시 잡는다). 이었으면 true */
 function attachRoadEnd(pt, rename = true) {
   if (pt.node != null || pt.split != null) return true;
   const ll = { lng: pt.lon, lat: pt.lat };
   const on = nearestOnLink(ll, 0, 60);
-  const nd = nearestNode(ll, 0, null, 5);
+  const nd = nearestNode(ll, 0, null, 0.5);
   const ndKm = nd != null ? kmBetween(pt.lon, pt.lat, ...nodeCoord(nd)) : Infinity;
   const onKm = on ? kmBetween(pt.lon, pt.lat, on.lngLat.lng, on.lngLat.lat) : Infinity;
-  if (nd == null && !on) return false;
+  if (nd == null && onKm > 0.5) return false;
   if (on && onKm + 0.3 < ndKm) { pt.split = on.link; pt.lon = on.lngLat.lng; pt.lat = on.lngLat.lat; }
   else { pt.node = nd; [pt.lon, pt.lat] = nodeCoord(nd); }
   if (draft && rename) nameDraftPoint(pt);
