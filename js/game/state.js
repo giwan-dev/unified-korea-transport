@@ -1,5 +1,6 @@
 // 게임 상태: 예산, 공사 중 사업, 혼잡 민원, 이름, 저장/불러오기.
 import { DIFFICULTY, UPGRADES, NEW_BUILDS, KP_COST_FACTOR, AIRPORT, upgradeCost, upgradeAttrs, resolve, formatWon } from './catalog.js';
+import { findRailReuse } from './reuse.js';
 import { P } from '../sim/params.js';
 import { routeKey } from '../sim/model.js';
 import { smoothSegments, polylineKm } from './curve.js';
@@ -631,14 +632,29 @@ export function colourNewMetro(base, state) {
   return byName.size;
 }
 
+export function reusableRailSegments(base, state, type, points) {
+  const spec = NEW_BUILDS[type];
+  if (!(spec?.mode >= 1)) return [];
+  const names = base.stations.concat(base.metro_stations || [], Object.entries(state.names || {})
+    .filter(([, v]) => v.kind === 'station').map(([n, v]) => [v.name, +n]));
+  return findRailReuse(effectiveNetwork(base, state), spec, points, names);
+}
+
 export function startNewBuild(base, state, plan) {
   const spec = NEW_BUILDS[plan.type];
+  const reuse = plan.reuseExisting ? reusableRailSegments(base, state, plan.type, plan.points) : [];
+  const reuseByStart = new Map(reuse.map((r) => [r.fromIndex, r]));
   const firstId = base.links.length + state.newLinks.length;
   // 선형 점(via)은 곡선 모양만 잡고 노드를 만들지 않는다: 링크는 역·IC(노드) 사이마다 하나
   const stops = plan.points.map((pt, i) => i).filter((i) => !plan.points[i].via || i === 0 || i === plan.points.length - 1);
+  if (reuse.length && reuse.length === stops.length - 1) return { ok: false, reusedOnly: true, reason: '모든 구간을 기존 선로로 연결할 수 있습니다. 새 공사가 필요하지 않습니다.' };
   const nodeAt = new Map();
+  const reusedNodes = new Map();
+  for (const r of reuse) { reusedNodes.set(r.fromIndex, r.nodes[0]); reusedNodes.set(r.toIndex, r.nodes[r.nodes.length - 1]); }
+  const nodeCountBefore = state.newNodes.length;
   for (const i of stops) {
     const pt = plan.points[i];
+    if (reusedNodes.has(i)) { nodeAt.set(i, reusedNodes.get(i)); continue; }
     if (pt.node != null) { nodeAt.set(i, pt.node); continue; }
     state.newNodes.push([pt.lon, pt.lat]);
     nodeAt.set(i, base.nodes.length + state.newNodes.length - 1);
@@ -649,6 +665,7 @@ export function startNewBuild(base, state, plan) {
   const segs = smoothSegments(plan.points);   // 찍은 점들을 지나는 곡선. 연장도 곡선 길이로 잡는다
   for (let s0 = 0; s0 + 1 < stops.length; s0++) {
     const i0 = stops[s0], i1 = stops[s0 + 1];
+    if (reuseByStart.has(i0)) continue;
     let len = 0, cost = 0, geom = [];
     for (let i = i0; i < i1; i++) {
       const a = plan.points[i], b = plan.points[i + 1];
@@ -671,7 +688,7 @@ export function startNewBuild(base, state, plan) {
   const fund = plan.ppp ? 'ppp' : fundFor(state, links);
   if (plan.ppp) for (const l of links) l.toll = plan.ppp.toll || 0;
   if (!canAfford(state, total * (plan.ppp ? plan.ppp.subsidy : 1), spec.years, plan.ppp ? 'gov' : fund)) {
-    state.newNodes.length -= stops.filter((i) => plan.points[i].node == null).length;
+    state.newNodes.length = nodeCountBefore;
     return { ok: false, reason: fund === 'gov' ? '예산과 차입 한도가 부족합니다.' : '운영사 잔액이 부족합니다.' };
   }
   if (spec.mode === 2) { const c = metroColour(base, state, plan.lineName || '', plan.points); if (c) for (const l of links) l.colour = c; }
@@ -691,6 +708,7 @@ export function startNewBuild(base, state, plan) {
     id: crypto.randomUUID(), kind: 'new', type: plan.type, links: links.map((l) => l.id), extension: !!plan.extendOf,
     stations: spec.mode >= 1 ? nodeIds.filter((n, i) => n != null && plan.names[i]?.kind === 'station') : [],
     cost: total, years: spec.years, label, fund, plan: plan.plan, govShare: plan.ppp ? plan.ppp.subsidy : undefined,
+    reusedLinks: [...new Set(reuse.flatMap((r) => r.links))],
   });
   return { ok: true };
 }

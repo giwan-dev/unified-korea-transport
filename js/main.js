@@ -2,7 +2,7 @@
 import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView, LAYER_VIEWS, setBasemap } from './ui/map.js';
 import { Namer, stem } from './game/naming.js';
 import {
-  newGame, START_YEAR, REOPEN_SPEED, baseTransfers, startProject, cancelProject, cancelBlocked, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
+  reusableRailSegments, newGame, START_YEAR, REOPEN_SPEED, baseTransfers, startProject, cancelProject, cancelBlocked, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
   updateCongestion, defaultFix, updateApproval, canAfford, isKP, linksUnderWork, UPGRADES, NEW_BUILDS, upgradeCost, colourNewMetro,
   placeName, setPlaceName, startRestoreName, RENAME, startAirport, startAirportExpand, renameLine, splitLink,
   fundFor, settlePPP, settleRail, renameKPLines, KP_LINE_RENAME, LINE_RENAME_COST, railDividend, railEquity, mergeRail, OP_FACTORS, initOngoing, linkPending, setProjectPace, PACES,
@@ -1650,12 +1650,28 @@ function draftPoints() {
   return withTangents(draft.points, NEW_BUILDS[draft.type].mode);
 }
 
+function draftReuse() {
+  if (!draft || !(NEW_BUILDS[draft.type]?.mode >= 1)) return [];
+  return reusableRailSegments(base, state, draft.type, draft.points);
+}
+
 function drawDraft() {
-  // 선형 점(via)은 노선 모양만 잡고 역·IC가 아니므로 그리지 않는다
   const f = draft.points.filter((p) => !p.via).map((p) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [p.lon, p.lat] } }));
   if (draft.points.length > 1) {
-    const line = smoothSegments(draftPoints()).flatMap((seg, i) => (i ? seg.slice(1) : seg));
-    f.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } });
+    const reuse = draftReuse(), skipped = new Set();
+    for (const r of reuse) {
+      for (let i = r.fromIndex; i < r.toIndex; i++) skipped.add(i);
+      for (const id of r.links) {
+        const g = linkAt(base, state, id).geom || [];
+        let part = [];
+        const flush = () => { if (part.length > 1) f.push({type: 'Feature', properties: {reused: 1}, geometry: {type: 'LineString', coordinates: part}}); part = []; };
+        for (let k = 0; k < g.length; k += 2) { if (!Number.isFinite(g[k])) flush(); else part.push([g[k], g[k + 1]]); }
+        flush();
+      }
+    }
+    smoothSegments(draftPoints()).forEach((segment, i) => {
+      if (!skipped.has(i)) f.push({type: 'Feature', properties: {reused: 0}, geometry: {type: 'LineString', coordinates: segment}});
+    });
   }
   map.getSource('draft').setData({ type: 'FeatureCollection', features: f });
 }
@@ -1720,10 +1736,14 @@ function draftCost() {
   const spec = NEW_BUILDS[draft.type];
   let km = 0, cost = 0, foreignKm = 0;
   const segs = smoothSegments(draftPoints());
+  const reuse = draftReuse(), skipped = new Set();
+  for (const r of reuse) for (let i = r.fromIndex; i < r.toIndex; i++) skipped.add(i);
+  const reusedKm = reuse.reduce((sum, r) => sum + r.km, 0);
   const segFactor = [];
   const rule = terrainReady() ? terrainRule(draft.type) : null;
   const terrain = { km: 0, tunnelKm: 0, bridgeKm: 0, seaKm: 0 };
   for (let i = 0; i + 1 < draft.points.length; i++) {
+    if (skipped.has(i)) { segFactor.push(0); continue; }
     const a = draft.points[i], b = draft.points[i + 1];
     const len = polylineKm(segs[i]) * 1.02;
     const kp = isKP(a.lat, a.lon) && isKP(b.lat, b.lon);
@@ -1738,7 +1758,7 @@ function draftCost() {
   const mids = draft.points.filter((p) => p.split != null).length;
   const rests = restPositions(segs).length;
   const extraCost = mids * (spec.mode === 0 ? MID_COST.road : MID_COST.rail) + rests * REST.cost;
-  return { km, cost: Math.round(cost) + extraCost, extraCost, mids, rests, years: spec.years, segFactor, foreignKm, terrain: rule ? terrain : null };
+  return { km, reusedKm, reuse, cost: Math.round(cost) + extraCost, extraCost, mids, rests, years: spec.years, segFactor, foreignKm, terrain: rule ? terrain : null };
 }
 
 /** 고속도로 휴게소 자리: 곡선을 따라 약 40km마다 (양 끝 20km 안쪽 제외) */
@@ -1819,6 +1839,7 @@ async function commitDraft() {
   if (spec.mode === 0) attachRoadEnd(last);
   const names = draftNames();
   const dc = draftCost();
+  if (spec.mode >= 1 && dc.km < 0.001) { toast('전 구간이 기존 선로입니다. 새 공사가 필요하지 않습니다.'); return; }
   const pp = pppPlan();
   if (pp === false) { alert('민자사업은 먼저 수요 예측·민간 수익성 검토를 하고, 민간이 참여할 수 있어야 착공할 수 있습니다.'); return; }
   if (!pp && NEW_BUILDS[draft.type].mode !== 1 && !canAfford(state, dc.cost, dc.years)) { alert('예산과 차입 한도가 부족합니다.'); return; }
@@ -1830,7 +1851,7 @@ async function commitDraft() {
     split = true;
   }
   const restAreas = restPositions(smoothSegments(draftPoints())).map(([lon, lat]) => ({ lon, lat, name: namer.suggest(lon, lat, 'rest') }));
-  const r = startNewBuild(base, state, { type: draft.type, points: draftPoints(), names, lineName, extendOf: draft.extendOf, plan: draft.plan, title: draft.planTitle,
+  const r = startNewBuild(base, state, { type: draft.type, reuseExisting: true, points: draftPoints(), names, lineName, extendOf: draft.extendOf, plan: draft.plan, title: draft.planTitle,
     ppp: pp ? { type: pp.type, subsidy: pp.subsidy, toll: pp.toll } : null, segFactor: dc.segFactor, extraCost: dc.extraCost, restAreas });
   if (split) refreshLinks();
   if (!r.ok) { alert(r.reason); return; }
@@ -2256,7 +2277,7 @@ function renderBuild() {
       return;
     }
     const spec = NEW_BUILDS[draft.type];
-    const { km, cost, years, foreignKm, terrain } = draftCost();
+    const { km, cost, years, foreignKm, terrain, reuse, reusedKm } = draftCost();
     const tRule = terrainRule(draft.type);
     // 철도 신설은 운영사 자체 재원으로도 지을 수 있다 (찍은 점 대부분이 북측이면 KPRail)
     const draftOp = spec.mode === 1 ? operatorOf(state, { mode: 1, kp: draft.points.filter((p) => isKP(p.lat, p.lon)).length * 2 > draft.points.length ? 1 : 0 }) : null;
@@ -2272,12 +2293,13 @@ function renderBuild() {
       <p class="hint">기존 ${spec.mode ? '선로' : '도로'} 근처를 누르면 연결됩니다. ${spec.mode ? '각 점은 역이 됩니다.' : '끝점이 기존 도로 0.5km 안이면 그 도로에 이어지고, 더 멀면 막다른 도로로 그 자리에서 끝납니다.'}
       Backspace: 마지막 점 지우기 · Enter: 착공 · Esc: 취소</p>
       ${spec.mode >= 1 ? draftStationPicker() : ''}
+      ${reuse?.length ? `<p class="hint reuse-note">초록색은 기존선 이용 구간입니다. 사업비·공사 대상에서 제외합니다.${reuse.some(r => r.shared) ? ' 서울–행신은 KTX 기존선 공용 구간을 이용합니다.' : ''}</p>` : ''}
       <div>${draft.points.map((p, i) => (p.via ? '' : pointRow(p, i))).join('') || '<p class="hint">시작점을 누르세요.</p>'}</div>
       ${draft.points.some((p) => p.via) ? `<p class="hint">선형을 잡는 경유점 ${draft.points.filter((p) => p.via).length}개 (역·IC 없음)</p>` : ''}
       ${(() => { const pl = draft.plan && plans.find((x) => x.id === draft.plan); return pl?.source ? `<p class="hint"><b>계획 근거</b>: ${esc(pl.source)}${pl.stationSource ? `<br>역: ${esc(pl.stationSource)}` : ''}</p>` : ''; })()}
       ${draft.planFilled ? `<p class="hint">계획 노선이 기존 국도·지방도와 만나는 곳에 IC ${draft.planFilled}곳을 넣었습니다. 필요 없으면 목록에서 지우세요.</p>` : ''}
       <table class="kv" style="margin-top:8px">
-        <tr><td>길이</td><td>${km.toFixed(1)} km</td></tr>
+        <tr><td>신설 연장</td><td>${km.toFixed(1)} km</td></tr>${reusedKm > 0 ? `<tr class="reuse-summary"><td>기존선 이용 · 공사 제외</td><td>${reusedKm.toFixed(1)} km</td></tr>` : ''}
         ${NEW_BUILDS[draft.type].mode >= 1 ? `<tr><td>역 반경 ${catchKm(draft.type)}km 인구</td><td>${fmtPeople(draft.points.filter((q) => q.name && q.kind !== 'IC').reduce((t, q) => t + popNear(q.lon, q.lat, catchKm(draft.type)), 0))} <span class="m">(역 ${draft.points.filter((q) => q.name && q.kind !== 'IC').length}곳, 겹친 곳도 셈)</span></td></tr>` : ''}
         <tr><td>사업비</td><td>${formatWon(cost)}</td></tr>
         <tr><td>공사 기간 · 연 분담</td><td>${years}년 · ${formatWon(cost / years)}</td></tr>
@@ -2295,8 +2317,8 @@ function renderBuild() {
       ${!affordable && draft.points.length > 1 ? '<p class="hint neg">예산과 차입 한도를 넘습니다.</p>' : ''}
       ${tRule ? `<div class="actions"><button id="draft-terrain" ${draft.points.length < 2 || !terrainReady() ? 'disabled' : ''} title="찍은 역·IC 사이를 경사가 급한 산지와 강·바다를 덜 지나는 선형으로 다시 잡습니다">지형 따라 선형 잡기</button></div>` : ''}
       <div class="actions nowrap">
-        <button class="primary" id="draft-ok" ${draft.points.length < 2 || !affordable ? 'disabled' : ''}>착공</button>
-        <button id="draft-prev" ${draft.points.length < 2 ? 'disabled' : ''}>효과 미리보기</button>
+        <button class="primary" id="draft-ok" ${draft.points.length < 2 || !affordable || (spec.mode >= 1 && km < 0.001) ? 'disabled' : ''}>${spec.mode >= 1 && draft.points.length > 1 && km < 0.001 ? '전 구간 기존선 이용' : '착공'}</button>
+        <button id="draft-prev" ${draft.points.length < 2 || (spec.mode >= 1 && km < 0.001) ? 'disabled' : ''}>효과 미리보기</button>
         <button id="draft-cancel">취소</button>
       </div>`;
   }
@@ -5403,9 +5425,10 @@ async function previewDraft() {
   // 지형 자료를 다 받은 뒤에 사업비를 잡는다 (먼저 누르면 지형 없는 사업비로 B/C가 두 번째와 달라졌다)
   if (terrainRule(draft.type) && !terrainReady()) { await loadTerrain(); if (!draft) return; }
   const dc = draftCost();
+  if (NEW_BUILDS[draft.type].mode >= 1 && dc.km < 0.001) { toast('전 구간 기존 선로 이용: 새 공사나 추가 효과가 없습니다.'); return; }
   runPreview(`${draftLineName() || NEW_BUILDS[draft.type].label} 미리보기`, (c) => {
     // 새 역 이름을 넘겨야 새 역이 역이 된다 (예전에는 빈 이름을 넘겨 새 역 없이 계산했다: 새 역이 많은 노선은 B/C가 0에 가까웠다)
-    const r = startNewBuild(base, c, { type: draft.type, points: draftPointsOn(c), names: draftNames(), lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost });
+    const r = startNewBuild(base, c, { type: draft.type, reuseExisting: true, points: draftPointsOn(c), names: draftNames(), lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost });
     if (!r.ok) throw new Error(r.reason);
     return buildNow(c, c.projects[c.projects.length - 1]);
   }, { kind: 'new', cost: dc.cost, years: dc.years, km: dc.km, cls: NEW_BUILDS[draft.type].attrs.cls, mode: NEW_BUILDS[draft.type].mode, plan: !!draft.plan });
@@ -5703,7 +5726,7 @@ function evaluateDraftPPP() {
   const dc = draftCost();
   const sig = pppSig(p);
   runPreview(`${draftLineName() || spec.label} 수요 예측 (${PPP_TYPES[p.type].label})`, (c) => {
-    const r = startNewBuild(base, c, { type: draft.type, points: draftPointsOn(c), names: draftNames(), lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost,
+    const r = startNewBuild(base, c, { type: draft.type, reuseExisting: true, points: draftPointsOn(c), names: draftNames(), lineName: draftLineName(), segFactor: dc.segFactor, extraCost: dc.extraCost,
       ppp: { type: p.type, subsidy: p.subsidy, toll: linkToll(kind, p.type, p.tollMult) } });
     if (!r.ok) throw new Error(r.reason);
     return buildNow(c, c.projects[c.projects.length - 1]);

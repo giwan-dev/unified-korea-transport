@@ -1,5 +1,7 @@
 # 통일 한반도 교통망
 
+이 저장소는 [radix24/unified-korea-transport](https://github.com/radix24/unified-korea-transport)의 포크입니다. 원본 게임 규칙을 유지하며 지도·역 선택·노선 중복 방지 등의 [사용성 개선](docs/fork-improvements.md)을 적용합니다.
+
 **플레이: https://radix24.github.io/unified-korea-transport/**
 
 남북이 오늘 통일되었다고 가정하고, 한정된 SOC 예산으로 고속도로·고속철도·도시철도·공항·해저터널을 놓거나 기존 재래선·국도를 개량하는 웹 게임입니다.
