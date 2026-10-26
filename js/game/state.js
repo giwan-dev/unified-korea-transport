@@ -1032,6 +1032,7 @@ function completeProject(base, state, p) {
 function requestable(l) {
   if (l.open > 0) return false; // 아직 개통 전인 공사 중 노선
   if (l.ext || l.cls === 'ferry') return false; // 국경 연결·여객선 항로는 민원 대상이 아니다
+  if (!defaultFix(l)) return false; // 개량 한도에 도달한 구간에는 대응할 수 있는 확장 요구가 없다
   return l.len > 1 && (l.mode === 1 || l.kp || l.cls === 'motorway' || l.cls === 'trunk');
 }
 
@@ -1053,6 +1054,8 @@ export function updateCongestion(base, state, vc, increment = true) {
     const id = +k;
     if (years < CONGESTION_YEARS || work.has(id)) continue;
     const l = linkAt(base, state, id);
+    // 저장된 혼잡 이력도 현재 개량 가능 여부로 거른다 (연수를 늘리지 않는 재계산 포함).
+    if (!requestable(l)) continue;
     const key = `${l.mode}|${l.cls}|${l.kp}|${l.name || '#' + id}`;
     if (state.dismissed[key] === state.year) continue;
     let g = groups.get(key);
