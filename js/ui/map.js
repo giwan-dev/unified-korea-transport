@@ -234,7 +234,8 @@ function enableRoads(map) {
     if (!need.length && !dropped) return;
     await Promise.all(need.map(async (e) => {
       loaded.set(e.file, []);
-      loaded.set(e.file, (await fetch(`data/base/roads/${e.file}`).then((r) => r.json())).features);
+      const fc = await fetch(`data/base/roads/${e.file}`).then((r) => r.json()).catch(() => null);
+      if (fc) loaded.set(e.file, fc.features); else loaded.delete(e.file);   // 실패하면 다음에 다시 받는다
     }));
     map.getSource('osmroads').setData({ type: 'FeatureCollection', features: [...loaded.values()].flat() });
   };
@@ -247,14 +248,17 @@ function enableUnits(map) {
   const loaded = unitFiles;
   const update = async () => {
     if (map.getZoom() < 8.5) return;
-    if (!index) index = await fetch('data/admin/units/index.json').then((r) => r.json());
+    // 받기에 실패하면(연결 끊김 등) 다음에 지도를 옮길 때 다시 받는다
+    if (!index) index = await fetch('data/admin/units/index.json').then((r) => r.json()).catch(() => null);
+    if (!index) return;
     const b = map.getBounds();
     const need = index.filter(({ bbox: [x0, y0, x1, y1] }) => x1 >= b.getWest() && x0 <= b.getEast() && y1 >= b.getSouth() && y0 <= b.getNorth())
       .filter((e) => !loaded.has(e.file));
     if (!need.length) return;
     await Promise.all(need.map(async (e) => {
       loaded.set(e.file, []);
-      loaded.set(e.file, (await fetch(`data/admin/units/${e.file}`).then((r) => r.json())).features);
+      const fc = await fetch(`data/admin/units/${e.file}`).then((r) => r.json()).catch(() => null);
+      if (fc) loaded.set(e.file, fc.features); else loaded.delete(e.file);
     }));
     setUnits(map);
   };
@@ -637,7 +641,8 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addLayer({ id: 'draft-line', type: 'line', source: 'draft', filter: ['==', ['geometry-type'], 'LineString'],
     paint: { 'line-color': '#1f5fbf', 'line-width': 3, 'line-dasharray': [1.5, 1] } });
   map.addLayer({ id: 'draft-pts', type: 'circle', source: 'draft', filter: ['==', ['geometry-type'], 'Point'],
-    paint: { 'circle-radius': 5, 'circle-color': '#1f5fbf', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
+    paint: { 'circle-radius': ['case', ['==', ['get', 'pass'], 1], 4, 6], 'circle-color': ['case', ['==', ['get', 'pass'], 1], '#fff', '#1f5fbf'],
+      'circle-stroke-color': ['case', ['==', ['get', 'pass'], 1], '#1f5fbf', '#fff'], 'circle-stroke-width': 2 } });
 }
 
 export function colorFor(metric, v) {

@@ -133,6 +133,7 @@ export async function migrateState(old, { base, zones }) {
   s.replaced = rekey(s.replaced, mL);
   s.newStations = mapArr(s.newStations, mN);
   s.closedStations = mapArr(s.closedStations, mN);
+  s.reopenedStations = mapArr(s.reopenedStations, mN);
   s.names = rekey(s.names, (k) => mN(+k));
   for (const r of s.restAreas || []) r.links = mapArr(r.links, mL);
   if (s.osm) { s.osm.opened = rekey(s.osm.opened, mL); s.osm.auto = rekey(s.osm.auto, mL); }
@@ -165,6 +166,7 @@ export async function migrateState(old, { base, zones }) {
       if (p.kind === 'upgrade' && p.status === 'building') lost.links += n0 - p.links.length;
     }
     if (p.stations) p.stations = mapArr(p.stations, mN);
+    if (p.dropStations) p.dropStations = mapArr(p.dropStations, mN);
     if (p.retire) p.retire = mapArr(p.retire, mL);
     if (p.relinks) p.relinks = mapArr(p.relinks, mL);
     if (p.stationMap) p.stationMap = Object.fromEntries(Object.entries(p.stationMap).map(([a, b]) => [mN(+a), mN(b)]).filter(([a, b]) => a >= 0 && b >= 0));

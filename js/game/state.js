@@ -278,13 +278,39 @@ export function cancelProject(base, state, id) {
     }
   }
   if (p.kind === 'airport') state.newAirports = (state.newAirports || []).filter((a) => a.id !== p.airport || a.built);
-  for (const k of ['devels', 'housing', 'sez', 'transfers']) if (state[k]) state[k] = state[k].filter((x) => x.id !== p.id);
+  for (const k of ['devels', 'sez', 'transfers']) if (state[k]) state[k] = state[k].filter((x) => x.id !== p.id);
+  if (p.kind === 'housing') cancelHousingPhase(state, p);
   if (state.restAreas) state.restAreas = state.restAreas.filter((r) => r.built || !(p.links || []).includes(r.links[0]));
   // 시민들은 짓다 만 사업을 반기지 않는다: 큰 사업일수록 지지율이 조금 내린다
   const hit = p.cost >= 50000 ? 2 : p.cost >= 10000 ? 1 : 0;
   state.approval = Math.max(0, state.approval - hit);
   state.log.unshift(`${state.year}년 사업 취소: ${p.label} (투입한 ${formatWon(p.paid)}은 돌려받지 못합니다, 남은 ${formatWon(Math.max(0, p.cost - p.paid))} 절감${hit ? `, 지지율 −${hit}` : ''})`);
   return { ok: true, hit };
+}
+
+/**
+ * 택지지구 단계 취소: 1단계를 접으면 지구 전체(2단계 공사도 함께), 2단계만 접으면 1단계 세대만 남긴다
+ * (예전에는 지구 번호가 1단계 사업 번호와만 같아, 2단계를 접으면 지구가 끝나지 않고 1단계를 접으면 2단계가 돈만 쓰고 입주하지 않았다)
+ */
+function cancelHousingPhase(state, p) {
+  const h = (state.housing || []).find((x) => x.id === p.id || x.phases?.some((q) => q.id === p.id));
+  if (!h) return;
+  const first = h.id === p.id;
+  if (first || !h.phases) {
+    for (const q of h.phases || []) {
+      const other = q.id !== p.id && state.projects.find((x) => x.id === q.id && x.status === 'building');
+      if (other) { other.status = 'cancelled'; other.cancelYear = state.year; }
+    }
+    state.housing = state.housing.filter((x) => x !== h);
+    return;
+  }
+  const q = h.phases.find((x) => x.id === p.id);
+  const share = q.households / h.households;
+  h.phases = h.phases.filter((x) => x !== q);
+  h.persons = Math.round(h.persons * (1 - share));
+  h.net = h.persons;
+  h.revenue = Math.round(h.revenue * (1 - share));
+  h.households -= q.households;
 }
 
 // ------------------------------------------------------------ 철도 운영사 (코레일·KPRail)
@@ -757,9 +783,9 @@ export function placeName(state, level, id, original) {
   const key = placeKey(level, id);
   const name = state.placeNames?.[key] || state.adminNames?.[key];
   if (name) return name;
-  // 노동자구 폐지(행정구역 정리): 읍면동 단위 '…노동자구'를 '…리'로
+  // 노동자구 폐지(행정구역 정리): 읍면동 단위 '…노동자구'를 '…리'로 (자료는 북측 표기 '로동자구')
   let out = original;
-  if (level === 'unit' && state.local?.admin?.workers === 'abolish' && /노동자구$/.test(out || '')) out = out.replace(/노동자구$/, '리');
+  if (level === 'unit' && state.local?.admin?.workers === 'abolish' && /[노로]동자구$/.test(out || '')) out = out.replace(/[노로]동자구$/, '리');
   // 두음법칙(행정구역 정리): 남측 지명은 이미 맞춰져 있어 바뀌지 않는다
   if (level === 'unit' && state.local?.admin?.dueum === 'apply') out = dueum(out);
   return out;
@@ -925,7 +951,7 @@ export function advanceBudgetYear(base, state) {
   state.integration = Math.min(1, state.integration + P.integrationPerYear);
   for (const k of Object.keys(state.happyBonus || {})) {
     state.happyBonus[k] *= 0.9;
-    if (state.happyBonus[k] < 0.2) delete state.happyBonus[k];
+    if (Math.abs(state.happyBonus[k]) < 0.2) delete state.happyBonus[k];   // 감점(음수)도 서서히 줄어 없어진다
   }
   for (const p of done) state.log.unshift(`${state.year}년 ${p.kind === 'osm' ? '개통' : '완공'}: ${p.label.replace(', 공사 중', '')}`);
   // 예전 저장 게임(진행 중 사업 없음): OSM 개통 예정 연도에 저절로 연다
@@ -1003,8 +1029,14 @@ function completeProject(base, state, p) {
       if (id < base.links.length) (state.replaced ||= {})[id] = true;
       else state.newLinks[id - base.links.length].replaced = true;
     }
-    if (p.stationMap) (state.closedStations ||= []).push(...Object.keys(p.stationMap).map(Number));
-    if (p.dropStations?.length) (state.closedStations ||= []).push(...p.dropStations);   // 직선화 때 폐역으로 고른 역
+    // 다른 선로(다른 노선, 그사이 놓은 새 노선)가 아직 닿는 역은 닫지 않는다: 새 노선이 옛 역에 서서 다시 연 것을 또 닫던 것
+    const shut = [...Object.keys(p.stationMap || {}).map(Number), ...(p.dropStations || [])];
+    if (shut.length) {
+      const want = new Set(shut), live = new Set();
+      base.links.forEach((l, i) => { if (l.mode >= 1 && (want.has(l.a) || want.has(l.b)) && !state.replaced?.[i]) { live.add(l.a); live.add(l.b); } });
+      for (const l of state.newLinks) if (l.mode >= 1 && !l.replaced && (want.has(l.a) || want.has(l.b))) { live.add(l.a); live.add(l.b); }
+      (state.closedStations ||= []).push(...shut.filter((n) => !live.has(n)));
+    }
     for (const r of state.restAreas || []) if (p.links.includes(r.links[0])) r.built = true;
     for (const s of p.stations) if (!state.newStations.includes(s)) state.newStations.push(s);
   }

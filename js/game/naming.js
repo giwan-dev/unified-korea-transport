@@ -6,7 +6,7 @@ import { kmBetween } from '../sim/model.js';
 
 const SUFFIX = { station: '역', IC: 'IC', JCT: 'JCT', rest: '휴게소' };
 const PLACE_WEIGHT = { city: 3, town: 2, suburb: 1.3, village: 1 };
-const ADMIN_TAIL = /(특별자치시|특별자치도|특별시|광역시|직할시|노동자구|구역|시|군|구|읍|면|동|리)$/;
+const ADMIN_TAIL = /(특별자치시|특별자치도|특별시|광역시|직할시|[노로]동자구|구역|시|군|구|읍|면|동|리)$/;
 
 export class Namer {
   /**
@@ -54,7 +54,9 @@ export class Namer {
       }
     }
     const near = this.nearbyPlaces(lon, lat);
-    const base = near.length ? stem(near[0][0]) : '신설';
+    // fix: 행정구역 정리(선전용 지명·노동자구·두음법칙)를 지명에 적용 (북측 지명: 김책 → 성진)
+    const st = (q) => (this.fix ? this.fix(stem(q[0]), q[2], q[3]) : stem(q[0]));
+    const base = near.length ? st(near[0]) : '신설';
     const candidates = [base + suffix];
     if (near.length) {
       const dir = bearingWord(near[0][2], near[0][3], lon, lat);
@@ -62,8 +64,8 @@ export class Namer {
       // 대체 이름은 가까운 동네(동·읍·마을)부터: 멀리 있는 큰 도시 이름이 붙지 않도록
       const local = this.places.filter((p) => p[1] !== 'city' && Math.abs(p[2] - lon) < 0.06 && Math.abs(p[3] - lat) < 0.05)
         .map((p) => [kmBetween(lon, lat, p[2], p[3]), p]).filter(([d]) => d < 5).sort((x, y) => x[0] - y[0]);
-      for (const [, p] of local) candidates.push(stem(p[0]) + suffix);
-      for (const p of near.slice(1)) candidates.push(stem(p[0]) + suffix);
+      for (const [, p] of local) candidates.push(st(p) + suffix);
+      for (const p of near.slice(1)) candidates.push(st(p) + suffix);
     }
     for (const c of candidates) if (!this.isUsed(c, kind)) return this.take(c, kind);
     for (let i = 2; i < 100; i++) {

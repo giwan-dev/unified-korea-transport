@@ -114,6 +114,23 @@ export function adminOverride(state, z) {
   return null;
 }
 
+// 선전용 지명의 지명 부분 (data/historic_names.json): 역 이름·새 역 이름 후보에도 옛 이름을 쓴다
+export const PROPAGANDA_STEMS = [['김정숙', '신파'], ['김형직', '후창'], ['김형권', '풍산'], ['김책', '성진'], ['금야', '영흥'], ['선봉', '웅기'], ['은덕', '경흥'], ['새별', '경원']];
+
+/**
+ * 북측 지명(역 이름 등)에 행정구역 정리를 적용한다: 선전용 지명 되돌리기(pairs), 노동자구 폐지, 두음법칙.
+ * station이면 역 이름 끝의 '청년'(청년동맹이 지었다며 덧붙인 이름: 사리원청년역 → 사리원역)도 뗀다
+ */
+export function kpPlaceText(admin, name, pairs, station = false) {
+  if (!name) return name;
+  let out = name;
+  for (const [a, b] of pairs || []) out = out.replace(a, b);
+  if (station && admin?.propaganda === 'restore' && out.length >= 3 && out.endsWith('청년')) out = out.slice(0, -2);
+  if (admin?.workers === 'abolish') out = out.replace(/[노로]동자구$/, '리');
+  if (admin?.dueum === 'apply') out = dueum(out);
+  return out;
+}
+
 /** 행정구역 정리로 바뀌는 시군 이름 (존 번호 → 새 이름). 선전용 지명은 targets(data/historic_targets.json)에서 */
 export function adminNames(admin, zones, targets = []) {
   const out = {};

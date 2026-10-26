@@ -11,6 +11,7 @@ import argparse
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -170,6 +171,11 @@ def main():
         print(json.dumps({"total_errors": len(p.errors), "errors": p.errors[:20]}, ensure_ascii=False), flush=True)
     finally:
         chrome.terminate()
+        try:
+            chrome.wait(timeout=10)
+        except Exception:
+            pass
+        shutil.rmtree(prof, ignore_errors=True)   # 임시 크롬 프로필 (남기면 실행마다 수십 MB씩 쌓인다)
     return 0
 
 
