@@ -640,6 +640,29 @@ export function reusableRailSegments(base, state, type, points) {
   return findRailReuse(effectiveNetwork(base, state), spec, points, names);
 }
 
+/** 새 노드 하나 (택지지구 도로망 등): 노드 id */
+export function addNewNode(base, state, lon, lat) {
+  state.newNodes.push([lon, lat]);
+  return base.nodes.length + state.newNodes.length - 1;
+}
+
+/**
+ * 아직 짓지 않은 도로 링크 하나 (택지지구 단지 안 간선도로·연결도로). pts: 경위도 꺾은선, a·b: 양 끝 노드.
+ * 공사비는 부르는 쪽이 사업비에 넣는다. 링크 id를 돌려준다
+ */
+export function addPlannedRoad(base, state, a, b, pts, attrs) {
+  const id = base.links.length + state.newLinks.length;
+  let len = 0;
+  for (let k = 1; k < pts.length; k++) {
+    const c = Math.cos((pts[k][1] * Math.PI) / 180);
+    len += Math.hypot((pts[k][0] - pts[k - 1][0]) * c, pts[k][1] - pts[k - 1][1]) * 111.32;
+  }
+  const kp = isKP(pts[0][1], pts[0][0]) ? 1 : 0;
+  state.newLinks.push({ id, a, b, mode: 0, len: Math.max(0.05, Math.round(len * 100) / 100), kp, built: false,
+    geom: pts.flat().map((v) => Math.round(v * 1e5) / 1e5), paved: 1, ...attrs });
+  return id;
+}
+
 export function startNewBuild(base, state, plan) {
   const spec = NEW_BUILDS[plan.type];
   const reuse = plan.reuseExisting ? reusableRailSegments(base, state, plan.type, plan.points) : [];
@@ -944,7 +967,9 @@ function completeProject(base, state, p) {
     if (t) t.built = true;
     return;
   }
-  if (p.kind === 'vehicles' || p.kind === 'devel' || p.kind === 'housing' || p.kind === 'sez') return;   // 역세권 개발·택지지구는 해 넘길 때 main이 정산한다 (settleDevels·settleHousing)
+  // 택지지구: 단지 안 간선도로·연결도로를 연다 (입주·분양은 해 넘길 때 main이 정산한다: settleHousing)
+  if (p.kind === 'housing') { for (const id of p.links || []) { const l = state.newLinks[id - base.links.length]; if (l) l.built = true; } return; }
+  if (p.kind === 'vehicles' || p.kind === 'devel' || p.kind === 'sez') return;   // 역세권 개발은 해 넘길 때 main이 정산한다 (settleDevels)
   if (p.kind === 'mega') { applyMega(base, state, p.mega); return; }
   if (p.kind === 'osm') { for (const i of p.links) state.osm.opened[i] = true; return; }   // 계통 차량 추가 구입 (편성 수는 고칠 때 이미 바뀌었다)
   if (p.kind === 'airRoute') {
