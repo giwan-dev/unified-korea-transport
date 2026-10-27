@@ -1290,7 +1290,7 @@ function settledDevelopments() {
   const adds = [];
   for (const h of state?.housing || []) {
     const persons = h.phases ? h.occupied || 0 : h.done ? h.persons : 0;
-    if (persons > 0) adds.push({ persons, lon: h.lon, lat: h.lat, ring: h.ring, km2: Math.max(0.5, (h.households || 0) / HOUSING.density), zone: h.zone });
+    if (persons > 0) adds.push({ persons, lon: h.lon, lat: h.lat, ring: h.ring, km2: Math.max(0.5, Math.PI * housingR(h) ** 2), zone: h.zone });   // 지도에 그린 단지 넓이 안에
   }
   for (const d of state?.devels || []) if (d.done && d.persons > 0) adds.push({ persons: d.persons, lon: d.lon, lat: d.lat, km2: 1, zone: d.zone });
   return adds;
@@ -2366,7 +2366,8 @@ function renderAll() {
 function renderAllPanels() {
   stalePanels.clear();
   renderRegions();
-  if (map) setHousing(map, state.housing || []);   // 다 지은 택지지구는 배경 지도에 시가지로
+  // 다 지은 택지지구는 배경 지도에 시가지로 (반지름은 여기 크기표를 따른다: 지도 쪽 표에 1기 신도시급이 없어 1km 원으로 그리던 것)
+  if (map) setHousing(map, (state.housing || []).map((h) => ({ ...h, R: housingR(h) })));
   renderTop(); renderLegend(); renderStatus(); renderBuild(); renderProjects(); renderRequests(); renderOps(); renderSettings(); renderStats(); renderSelection();
   drawServices();
 }
@@ -5207,7 +5208,8 @@ function drawHousingSites() {
 }
 
 // 택지지구 자리: 기존 시가지(반경 1km 인구밀도) 밖, 평지(단지 범위 안 표고 차·거칠기), 물·다른 택지지구와 겹치지 않는 곳
-const HOUSING_SITE = { r: { s: 0.6, m: 1.0, l: 1.6, xl: 2.4 }, urbanDensity: 3000, reliefM: 60, roughM: 40, searchKm: 6 };
+const HOUSING_SITE = { r: { s: 0.6, m: 1.0, l: 1.6, xl: 2.6 },   // xl: 분당 19.6km², 일산 15.7km²
+  urbanDensity: 3000, reliefM: 60, roughM: 40, searchKm: 6 };
 
 // 도심(업무지구)은 사는 사람이 적어도 시가지다: 1km 안 도로 교차점·역이 많으면 시가지로 본다
 let fabricGrid = null;
@@ -5275,7 +5277,8 @@ function housingSiteProblem(lon, lat, size) {
       if (t.rough > HOUSING_SITE.roughM) return '산지';
       lo = Math.min(lo, t.elev); hi = Math.max(hi, t.elev);
     }
-    if (hi - lo > HOUSING_SITE.reliefM) return '비탈이 심함';
+    // 넓은 단지일수록 끝과 끝 표고 차가 크다 (분당도 구릉지): 반지름 1.6km 넘으면 그만큼 더 받는다
+    if (hi - lo > HOUSING_SITE.reliefM * Math.max(1, R / 1.6)) return '비탈이 심함';
   }
   return null;
 }
@@ -5333,12 +5336,14 @@ function ringAreaKm2(ring) {
   return { km2: Math.abs(a), lon: a ? cx / (6 * a) / kx : ring[0][0], lat: a ? cy / (6 * a) / ky : ring[0][1] };
 }
 
+const HOUSING_DRAW_MAX = 75;   // 직접 그리는 택지지구 최대 넓이 (km²): 세종 행정중심복합도시(73km²)쯤
+
 function finishHousingDraw() {
   const pts = housingDraw?.pts || [];
   if (pts.length < 3) { toast('꼭짓점을 세 개 넘게 찍으세요.'); return; }
   const { km2, lon, lat } = ringAreaKm2(pts);
   if (km2 < 0.3) { toast(`너무 좁습니다 (${km2.toFixed(2)}km²). 0.3km² 넘게 그리세요.`); return; }
-  if (km2 > 25) { toast(`너무 넓습니다 (${km2.toFixed(1)}km²). 25km² 안으로 그리세요.`); return; }
+  if (km2 > HOUSING_DRAW_MAX) { toast(`너무 넓습니다 (${km2.toFixed(1)}km²). ${HOUSING_DRAW_MAX}km² 안으로 그리세요.`); return; }
   // 경계 안을 250m 간격으로 훑어 시가지·산지·물·다른 지구가 15% 넘게 걸리면 안 된다
   const kx = 111.32 * Math.cos((lat * Math.PI) / 180), step = 0.25;
   const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
