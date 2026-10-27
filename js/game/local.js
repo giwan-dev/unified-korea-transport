@@ -38,9 +38,21 @@ export const CITY_UP_MIN_POP = 100_000;   // 군 → 시 승격 인구 (지방�
 /** 군→시 승격·광역시 편입의 열쇠: 자료의 도 + 이름 (자료가 바뀌어 존 번호가 달라져도 그대로, 옛 군 땅 조각도 함께) */
 export const countyId = (z) => `${z.province}|${z.name}`;
 
+/**
+ * 승격·편입·분구의 열쇠: 행정구역 정리로 하나로 묶인 시군(분단 전 경계로 합친 철원군, 하나로 합친 고성·옹진)은
+ * 남북·옛 소속 조각이 모두 같은 열쇠를 갖는다 (예전에는 조각마다 열쇠가 달라 편입을 조각 수만큼 눌러야 했다)
+ */
+export function unitId(state, z) {
+  const h = restoredCounty(state, z);
+  if (h) return `${h.province}|${h.name}`;
+  const o = adminOverride(state, z);
+  return o ? `${o.province}|${z.name}` : countyId(z);
+}
+
 /** 시로 승격한 군이면 시 이름 (○○군 → ○○시). 광역 단체를 가리는 데 쓰는 이름 (보이는 이름은 countyDisplayName) */
 export function promotedName(state, z) {
-  return state.local?.cityUp?.includes(countyId(z)) ? z.name.replace(/군$/, '시') : z.name;
+  const up = state.local?.cityUp;
+  return up?.length && (up.includes(unitId(state, z)) || up.includes(countyId(z))) ? z.name.replace(/군$/, '시') : z.name;
 }
 
 /**
@@ -172,7 +184,7 @@ export function initLocal(state) {
 /** 이 시군을 편입한 곳: { prov, side } (편입한 광역 단체의 바탕: 자료의 도·남북, 승격한 도시면 그 도시 이름). 예전 저장은 이름 문자열 */
 export function annexOf(state, z) {
   const A = state.local?.annex;
-  return (A && (A[countyId(z)] || (z.city && A[`${z.province}|${z.city}`]))) || null;
+  return (A && (A[unitId(state, z)] || A[countyId(z)] || (z.city && A[`${z.province}|${z.city}`]))) || null;
 }
 
 /** 광역 단체를 가리기 전의 바탕: 자료의 도와 남북 (행정구역 정리·편입 반영) */
@@ -200,8 +212,13 @@ export function regionOf(state, z) {
   if (L.historic && !(A.jagang === 'keep' && side === 'KP' && ['자강도', '량강도', '양강도'].includes(prov))) {
     r = (side === 'KP' ? HISTORIC[prov] : HISTORIC_KR[prov]) || prov;
   }
+  // 통일 뒤 남북에 강원이 둘이므로 북측 강원도는 늘 강원북도 (남측은 강원특별자치도, 도 복원 뒤에는 강원남도)
+  if (side === 'KP' && r === '강원도') r = '강원북도';
   return A.dueum === 'apply' && side === 'KP' ? dueum(r) : r;
 }
+
+/** 예전 이름 → 지금 이름 (예전 저장의 단체장 자리를 옮길 때) */
+export const REGION_RENAMED = { 강원도: '강원북도' };
 
 /** 승격한 도시의 광역 단체 이름: 옛 직할시(평양·남포)는 그대로, 나머지 시는 ○○광역시 */
 export function metroName(c) { return isMetroCity(c) ? c : c.replace(/시$/, '광역시'); }

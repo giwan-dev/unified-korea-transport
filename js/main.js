@@ -47,7 +47,7 @@ import { P } from './sim/params.js';
 import { PPP_TYPES, PPP_DEFAULTS, initPPP, tollKind, linkToll, annualRevenue, evaluatePPP } from './game/ppp.js';
 import {
   PARTIES, initLocal, regionOf, hasAutonomy, leanP, runElection, bumpApproval, governorTitle, mayorTitle, countyTitle, metroName, isMetroCity,
-  HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST, ADMIN_OPTIONS, ADMIN_DEFAULT, adminNames, HISTORIC_COUNTIES, PROPAGANDA_STEMS, kpPlaceText, CITY_UP_MIN_POP, countyId, promotedName, countyDisplayName, regionBase,
+  HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST, ADMIN_OPTIONS, ADMIN_DEFAULT, adminNames, HISTORIC_COUNTIES, PROPAGANDA_STEMS, kpPlaceText, CITY_UP_MIN_POP, countyId, unitId, REGION_RENAMED, promotedName, countyDisplayName, regionBase,
 } from './game/local.js';
 import { openAdminSetup } from './ui/setup.js';
 import { flushSave, saveError, slotMeta, saveSlot, loadSlot, keepBackup, loadBackup } from './game/savestore.js';
@@ -2481,8 +2481,10 @@ function renderAllPanels() {
 /** 지도의 광역 단체 경계·이름: 북측 도 복원, 광역시 승격(독립)이 바로 보이게 */
 function renderRegions() {
   if (!state || !map) return;
-  const short = (n) => { for (const a of ['특별자치시', '특별자치도', '통합특별시', '특별시', '광역시', '직할시']) if (n.endsWith(a) && n.length > a.length + 1) return n.slice(0, -a.length); return n; };
-  setRegions(map, zoneProps.map((z) => (z.ext ? '' : regionOf(state, z))), zoneProps.map((z) => z.country), (i) => [zoneProps[i].cx, zoneProps[i].cy], short, zoneProps.map((z, i) => countyKey(i)));
+  const regs = zoneProps.map((z) => (z.ext ? '' : regionOf(state, z))), names = new Set(regs);
+  // 줄인 이름이 다른 단체 이름의 앞부분이면(강원특별자치도 → '강원' 옆에 강원북도) 줄이지 않는다
+  const short = (n) => { for (const a of ['특별자치시', '특별자치도', '통합특별시', '특별시', '광역시', '직할시']) if (n.endsWith(a) && n.length > a.length + 1) { const s = n.slice(0, -a.length); return [...names].some((m) => m !== n && m.startsWith(s)) ? n : s; } return n; };
+  setRegions(map, regs, zoneProps.map((z) => z.country), (i) => [zoneProps[i].cx, zoneProps[i].cy], short, zoneProps.map((z, i) => countyKey(i)));
 }
 
 function renderTop() {
@@ -4292,7 +4294,7 @@ function zoneGus(i) {
   const gs = guNamesOfZone(i);
   if (!gs || isGeneralGu(i)) return null;   // 일반구: 구청장은 시장이 임명한다
   const B = bunguOf(i);
-  const pre = state.local?.bungu?.[countyId(zoneProps[i])] ? unitPrefix(countyId(zoneProps[i])) : '';
+  const pre = state.local?.bungu?.[unitId(state, zoneProps[i])] ? unitPrefix(unitId(state, zoneProps[i])) : '';
   const core = B?.core || (pre ? `${pre}구` : '중구');
   return [...gs].sort((a, b) => (b === core) - (a === core) || a.localeCompare(b, 'ko'));
 }
@@ -4483,7 +4485,7 @@ function promotableCities() {
   return [
     ...(L.historic ? HISTORIC_CITIES.filter((c) => !L.independent.includes(c) && zoneProps.some((z) => z.province === c)) : []),
     ...[...pops].filter(([n, p]) => p >= PROMOTE_MIN_POP && /시$/.test(n) && !isMetroCity(n) && !L.independent.includes(n)
-      && zoneProps.some((z) => promotedName(state, z) === n && !z.ext && (z.country === 'KR' || L.autonomyKP) && !isMetroCity(z.province) && !L.annex?.[countyId(z)])).map(([n]) => n),
+      && zoneProps.some((z) => promotedName(state, z) === n && !z.ext && (z.country === 'KR' || L.autonomyKP) && !isMetroCity(z.province) && !L.annex?.[unitId(state, z)])).map(([n]) => n),
   ];
 }
 const cityZoneMatch = (c, z) => z.province === c || promotedName(state, z) === c;
@@ -4558,7 +4560,7 @@ function counties() {
   const out = new Map();
   zoneProps.forEach((z, i) => {
     if (z.ext || z.city) return;   // 구(區)는 시에 딸려 있다
-    const k = countyId(z);
+    const k = unitId(state, z);
     const e = out.get(k) || { key: k, name: zoneName(i), z, zones: [], pop: 0, region: regionOf(state, z) };
     e.zones.push(i); e.pop += zonePop(i);
     out.set(k, e);
@@ -4629,7 +4631,7 @@ function annexBase(to, zi) {
 
 /** 편입한 시군(열쇠)이 지금 속한 광역 단체 */
 function annexRegion(k) {
-  const i = zoneProps.findIndex((z) => !z.ext && countyId(z) === k);
+  const i = zoneProps.findIndex((z) => !z.ext && unitId(state, z) === k);
   return i >= 0 ? regionOf(state, zoneProps[i]) : '';
 }
 
@@ -4644,7 +4646,12 @@ function syncGovernors() {
   for (const k of Object.keys(L.offices)) {
     if (!k.startsWith('g:')) continue;
     const r = k.slice(2);
-    if (!now.has(r)) { delete L.offices[k]; continue; }
+    if (!now.has(r)) {
+      // 이름만 바뀐 단체(북측 강원도 → 강원북도)는 단체장을 그대로 옮긴다
+      const nr = REGION_RENAMED[r];
+      if (nr && now.has(nr) && !L.offices[`g:${nr}`]) { L.offices[`g:${nr}`] = { ...L.offices[k], region: nr, title: governorTitle(nr) }; had.add(nr); }
+      delete L.offices[k]; continue;
+    }
     had.add(r);
     L.offices[k].title = governorTitle(r);
   }
@@ -4667,7 +4674,7 @@ function cityCoreZones(city) {
 
 /** 분구 단위의 존들 */
 function unitZones(unit) {
-  return unit.includes('|') ? zoneProps.map((z, i) => i).filter((i) => !zoneProps[i].ext && !zoneProps[i].city && countyId(zoneProps[i]) === unit) : cityCoreZones(unit);
+  return unit.includes('|') ? zoneProps.map((z, i) => i).filter((i) => !zoneProps[i].ext && !zoneProps[i].city && unitId(state, zoneProps[i]) === unit) : cityCoreZones(unit);
 }
 
 /** 편입한 시면 이름 앞머리 (벽성시 → 벽성), 승격한 도시면 '' */
@@ -4821,7 +4828,7 @@ function guNamesOfZone(z) {
 /** 존의 분구 기록 (없으면 null) */
 function bunguOf(z) {
   if (zoneProps[z]?.city) return null;
-  return state.local?.bungu?.[promotedName(state, zoneProps[z])] || state.local?.bungu?.[countyId(zoneProps[z])] || null;
+  return state.local?.bungu?.[promotedName(state, zoneProps[z])] || state.local?.bungu?.[unitId(state, zoneProps[z])] || null;
 }
 
 /** 일반구로 나눈 시 (구청장 없음, 시장 하나) */
@@ -5101,8 +5108,8 @@ function bindLocalSettings(el) {
       const parent = zc ? regionOf(state, zc) : null;
       L.independent.push(c);
       const nGu = +(el.querySelector('#bungu-n')?.value || 1);
-      const old = zc && L.bungu?.[countyId(zc)];
-      if (old?.general) { if (nGu > 1) delete L.bungu[countyId(zc)]; else delete old.general; }   // 일반구 → 자치구 (구청장 선거)
+      const old = zc && L.bungu?.[unitId(state, zc)];
+      if (old?.general) { if (nGu > 1) delete L.bungu[unitId(state, zc)]; else delete old.general; }   // 일반구 → 자치구 (구청장 선거)
       if (nGu > 1) makeBungu(c, nGu);
       drawBungu();
       holdElection([metroName(c), parent].filter(Boolean), `${metroName(c)} ${L.historic ? '독립' : '광역시 승격'} 선거`);
