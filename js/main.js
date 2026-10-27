@@ -3195,6 +3195,14 @@ function renderSelection() {
   else if (selection.type === 'gu') {
     el.innerHTML = guPanel(selection.id, selection.gu);
     el.querySelector('[data-gu-county]')?.addEventListener('click', () => select({ type: 'zone', id: selection.id }));
+    el.querySelector('#gu-rename')?.addEventListener('click', () => {
+      const { id, gu } = selection, unit = bunguUnitOf(id), v = el.querySelector('#gu-name').value;
+      const err = unit ? renameGus(unit, new Map([[gu, v]])) : '분구하지 않은 곳입니다.';
+      if (err) { toast(err); return; }
+      drawBungu(); refreshNames(map); save(state);
+      select({ type: 'gu', id, gu: normGu(v) });
+      renderAll();
+    });
   }
   else if (selection.type === 'closed') el.innerHTML = closedPanel(selection.id);
   else if (selection.type === 'sub') {
@@ -4790,6 +4798,75 @@ function fixBunguNames() {
   return changed;
 }
 
+/** 이 시군(존)을 나눈 분구 단위 열쇠 (없으면 null) */
+function bunguUnitOf(z) {
+  const zs = new Set(countyZones(z));
+  return Object.keys(state.local?.bungu || {}).find((u) => unitZones(u).some((j) => zs.has(j))) || null;
+}
+
+/** 사용자가 쓴 구 이름: 빈칸을 빼고, 끝에 '구'가 없으면 붙인다 */
+const normGu = (v) => { const n = String(v).replace(/\s+/g, ''); return n && !/구$/.test(n) ? `${n}구` : n; };
+
+/**
+ * 분구한 단위의 구 이름을 한꺼번에 바꾼다 (names: 옛 이름 → 새 이름, 서로 맞바꿔도 된다).
+ * 구 배정·가운데 구·구청장 자리를 함께 옮긴다. 끝에 '구'가 없으면 붙인다. 안 되면 이유 문자열, 되면 null
+ */
+function renameGus(unit, names) {
+  const L = state.local, b = L.bungu?.[unit];
+  if (!b) return '분구하지 않은 곳입니다.';
+  const cur = [...new Set(Object.values(b.gu))];
+  const fin = cur.map((g) => normGu(names.get(g) ?? g));
+  if (fin.some((n) => n.length < 2)) return '구 이름이 비어 있습니다.';
+  if (new Set(fin).size !== fin.length) return '구 이름이 겹칩니다.';
+  const ren = new Map(cur.map((g, k) => [g, fin[k]]).filter(([a, c]) => a !== c));
+  if (!ren.size) return null;
+  const reps = [...new Set(unitZones(unit).map((z) => countyRep(z)))];
+  // 가운데 구(시군 단체장 자리를 잇는 구)는 이름 순서가 바뀌어도 그대로 (둘로 나눈 곳은 이름 순 첫 구였다)
+  if (!b.general && !b.core) b.core = zoneGus(reps[0])?.[0] || null;
+  for (const k of Object.keys(b.gu)) if (ren.has(b.gu[k])) b.gu[k] = ren.get(b.gu[k]);
+  if (ren.has(b.core)) b.core = ren.get(b.core);
+  const moved = [];
+  for (const r of reps) for (const [a, c] of ren) {
+    const k = `m:${r}#${a}`;
+    if (L.offices[k]) { moved.push([`m:${r}#${c}`, { ...L.offices[k], gu: c, title: `${c}청장` }]); delete L.offices[k]; }
+  }
+  for (const [k, o] of moved) L.offices[k] = o;
+  for (const r of reps) if (L.offices[`m:${r}`] && zoneGus(r)) L.offices[`m:${r}`].title = mayorTitleOf(r);
+  guUnits.clear();
+  state.log.unshift(`${state.year}년 구 이름 변경: ${[...ren].map(([a, c]) => `${a} → ${c}`).join(', ')}`);
+  return null;
+}
+
+/** 분구한 뒤 한 번: 방향으로 붙인 구 이름을 바꿀 수 있는 창 */
+function guNamingDialog(unit) {
+  const b = state.local.bungu?.[unit];
+  if (!b) return;
+  const rep = countyRep(unitZones(unit)[0]);
+  const gs = zoneGus(rep) || [...new Set(Object.values(b.gu))].sort((x, y) => x.localeCompare(y, 'ko'));
+  const subNames = (g) => guSubs(rep, g).map((i) => subsFC?.features[i]?.properties.name).filter(Boolean);
+  const wrap = document.createElement('div');
+  wrap.className = 'setup-wrap';
+  wrap.innerHTML = `<div class="setup" role="dialog" aria-modal="true"><h2>구 이름 정하기 · ${esc(b.general ? officeName(rep) : regionOf(state, zoneProps[rep]))}</h2>
+    <p class="setup-intro hint">도심에서 본 방향으로 붙인 이름입니다. 지역에 맞는 이름(해운대구·수성구처럼)으로 바꿀 수 있고, 끝에 '구'가 없으면 붙입니다. 나중에도 지도에서 구를 눌러 바꿀 수 있습니다.</p>
+    <div class="setup-body"><div class="list">${gs.map((g) => { const ns = subNames(g); return `<div class="item">
+      <div class="name-row"><input type="text" data-gu-old="${esc(g)}" value="${esc(g)}" style="flex:1"></div>
+      <div class="m">${g === gs[0] && !b.general ? '가운데 구 · ' : ''}읍면동 ${ns.length}곳: ${esc(ns.slice(0, 6).join(', '))}${ns.length > 6 ? ' …' : ''}</div></div>`; }).join('')}</div></div>
+    <div class="setup-btns"><span class="m neg" data-gu-err></span><span style="flex:1"></span><button class="small" data-gu-act="skip">이대로 두기</button><button class="small primary" data-gu-act="ok">이름 정하기</button></div></div>`;
+  document.body.appendChild(wrap);
+  wrap.querySelector('input')?.focus();
+  wrap.addEventListener('click', (ev) => {
+    const a = ev.target.closest('[data-gu-act]')?.dataset.guAct;
+    if (!a) return;
+    if (a === 'ok') {
+      const names = new Map([...wrap.querySelectorAll('[data-gu-old]')].map((x) => [x.dataset.guOld, x.value]));
+      const err = renameGus(unit, names);
+      if (err) { wrap.querySelector('[data-gu-err]').textContent = err; return; }
+      drawBungu(); refreshNames(map); save(state); renderAll();
+    }
+    wrap.remove();
+  });
+}
+
 /** 분구할 수 있는 단위: 승격한 도시, 광역시에 편입한 시 (아직 나누지 않았고 읍면동이 둘 넘는 곳) → [[단위, 보이는 이름]] */
 function bunguUnits() {
   const L = state.local;
@@ -4877,6 +4954,8 @@ function guPanel(z, gu) {
     <h4>지방자치 · ${esc(r)}</h4>
     <div class="m" style="margin:2px 0">${officeLine(L.offices[`g:${r}`])}</div>
     <div class="m" style="margin:2px 0">${officeLine(L.offices[guKey(z, gu)])}</div>
+    <h4>구 이름 바꾸기</h4>
+    <div class="name-row"><input type="text" id="gu-name" value="${esc(gu)}"><button class="small" id="gu-rename">바꾸기</button></div>
     <p class="hint">교통 계산은 분구 전 시군 하나로 합니다. <button class="t link" data-gu-county>시군 전체 보기</button></p>`;
 }
 
@@ -5068,6 +5147,7 @@ function bindLocalSettings(el) {
       if (!makeBungu(c, n, { general: isGeneralUnit(c) })) { toast('읍면동이 모자라 그만큼 나눌 수 없습니다.'); return; }
       syncMayors();   // 새로 생긴 구마다 구청장
       drawBungu(); refreshNames(map); save(state); renderAll();
+      guNamingDialog(c);
     };
   });
   el.querySelectorAll('[data-city-up]').forEach((b) => {
@@ -5081,6 +5161,7 @@ function bindLocalSettings(el) {
       syncMayors();   // 군수 → 시장
       refreshNames(map);
       save(state); renderAll();
+      if (nGu > 1) guNamingDialog(k);
     };
   });
   el.querySelectorAll('[data-annex]').forEach((b) => {
@@ -5097,6 +5178,7 @@ function bindLocalSettings(el) {
       syncMayors();   // 편입한 시·군은 구: 시장·군수 → 구청장
       refreshNames(map);
       save(state); renderAll();
+      if (nGu > 1) guNamingDialog(k);
     };
   });
   el.querySelectorAll('[data-ev-city]').forEach((b) => {
@@ -5116,6 +5198,7 @@ function bindLocalSettings(el) {
       syncMayors();   // 승격한 도시 자체(한 존)는 중구가 된다: 시장 → 중구청장
       refreshNames(map);
       save(state); renderAll();
+      if (nGu > 1) guNamingDialog(c);
     };
   });
 }
