@@ -1061,6 +1061,23 @@ function showDensity(on) {
   map.__gridLoaded = grid;   // 입주로 격자가 바뀌면 다시 그린다
 }
 
+/**
+ * 광역지자체(특별·광역시, 도; 북측 도 복원·광역시 승격 반영)별 인구: 이름 → { pop, pop0(시작), country, zones }.
+ * 국외 존은 뺀다
+ */
+function provincePops() {
+  const out = new Map();
+  if (!result) return out;
+  zoneProps.forEach((z, i) => {
+    if (z.ext) return;
+    const k = regionOf(state, z);
+    const e = out.get(k) || { pop: 0, pop0: 0, country: z.country, zones: [] };
+    e.pop += result.zones.pop[i]; e.pop0 += Math.max(z.pop, 0); e.zones.push(i);
+    out.set(k, e);
+  });
+  return out;
+}
+
 function paintZones() {
   showDensity(metric === 'density');
   const sub = !!METRICS[metric]?.sub;
@@ -1090,9 +1107,11 @@ function paintZones() {
     return s / w;
   };
   const sumOf = (i, f) => grp.get(countyRep(i)).reduce((t, j) => t + f(j), 0);
+  const sido = metric === 'popSido' ? provincePops() : null;
   for (let i = 0; i < zoneProps.length; i++) {
     let v = null;
     if (metric === 'pop') v = sumOf(i, (j) => z.pop[j]);
+    else if (metric === 'popSido') v = zoneProps[i].ext ? null : sido.get(regionOf(state, zoneProps[i]))?.pop ?? null;
     else if (metric === 'popChange') v = sumOf(i, (j) => z.pop[j]) / Math.max(sumOf(i, (j) => zoneProps[j].pop), 1) - 1;
     else if (metric === 'hdi') v = agg(i, z.hdi);
     else if (metric === 'income') v = agg(i, z.income);
@@ -2856,8 +2875,15 @@ function renderStats() {
   const roadRows = byName(0).filter(([, v]) => v.cls === 'motorway' || v.cls === 'trunk').sort((x, y) => y[1].vc - x[1].vc).slice(0, 10)
     .map(([n, v]) => `<tr><td>${esc(n)}</td><td>${Math.round(v.vol).toLocaleString()}</td><td class="${v.vc > 1 ? 'neg' : ''}">${v.vc.toFixed(2)}</td></tr>`).join('');
   const h = state.history;
+  const sidoRows = [...provincePops()].sort((x, y) => y[1].pop - x[1].pop).map(([n, p]) => {
+    const c = p.pop / Math.max(p.pop0, 1) - 1;
+    return `<tr><td>${esc(n)} <span class="m">${p.country === 'KP' ? '북' : '남'}</span></td><td>${fmtPop(p.pop)}</td><td class="${c >= 0 ? 'pos' : 'neg'}">${c >= 0 ? '+' : ''}${pct(c)}</td></tr>`;
+  }).join('');
   el.innerHTML = `
-    <h3>항공</h3>
+    <h3>광역지자체 인구</h3>
+    <table class="cmp"><tr><th>광역지자체</th><th>인구</th><th>${START_YEAR}년 대비</th></tr>${sidoRows}</table>
+    <p class="hint">지도 범례에서 "광역지자체 인구 (합계)"를 고르면 지도에서도 볼 수 있습니다. 광역시 승격·북측 도 복원이 바로 반영됩니다.</p>
+    <h3 style="margin-top:16px">항공</h3>
     <table class="kv">
       <tr><td>운항 노선</td><td>${air.routes.length}개 (${state.air.auto ? '자동 운영' : '수동'})</td></tr>
       <tr><td>하루 항공 여객</td><td>${Math.round(totalAir).toLocaleString()}명 (국제선 ${pct(intlPax / Math.max(totalAir, 1), 0)})</td></tr>
@@ -7240,6 +7266,8 @@ function zonePanel(id) {
   return `${header(name)}
     <table class="kv">
       <tr><td>소속</td><td>${esc(regionOf(state, z))} (${z.country === 'KP' ? '북' : '남'})${name !== z.name ? ` · 원래 이름 ${esc(z.name)}` : ''}</td></tr>
+      ${(() => { const p = z.ext ? null : provincePops().get(regionOf(state, z)); if (!p) return ''; const c = p.pop / Math.max(p.pop0, 1) - 1;
+        return `<tr><td>${esc(regionOf(state, z))} 인구</td><td>${fmtPop(p.pop)} <span class="${c >= 0 ? 'pos' : 'neg'}">(${c >= 0 ? '+' : ''}${pct(c)})</span> · 이 시군구가 ${pct(pop / Math.max(p.pop, 1))}</td></tr>`; })()}
       ${hists.length ? `<tr><td>분단 전</td><td>옛 ${hists.map(esc).join('·')} 땅이 들어 있습니다<br><span class="hint">민원·정책 탭 › 행정구역 정리에서 되살릴 수 있습니다 (${START_YEAR}년)</span></td></tr>` : ''}
       ${happiness ? `<tr><td>주민 행복도</td><td>${avg(happiness).toFixed(1)}</td></tr>` : ''}
       <tr><td>인구</td><td>${fmtPop(pop)} <span class="${change >= 0 ? 'pos' : 'neg'}">(${change >= 0 ? '+' : ''}${pct(change)})</span></td></tr>
