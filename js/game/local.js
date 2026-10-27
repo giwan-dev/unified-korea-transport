@@ -32,7 +32,16 @@ export const HISTORIC_CITIES = ['평양시', '남포시'];
 export const PROMOTE_MIN_POP = 500_000;
 
 export const ELECTION = { firstYear: 2030, every: 4 };
-export const EVENT_COST = { historic: 5000, autonomy: 2000, independence: 1000, admin: 3000 };   // 억원 (표지판·행정 전산·청사)
+export const EVENT_COST = { historic: 5000, autonomy: 2000, independence: 1000, admin: 3000, cityUp: 300, annex: 1000, annexSub: 200 };   // 억원 (표지판·행정 전산·청사)
+export const CITY_UP_MIN_POP = 100_000;   // 군 → 시 승격 인구 (지방자치법 도농복합형태 시 기준 15만을 게임에서는 10만으로: 15만 넘는 남측 군은 모두 광역시 소속)
+
+/** 군→시 승격·광역시 편입의 열쇠: 자료의 도 + 이름 (자료가 바뀌어 존 번호가 달라져도 그대로, 옛 군 땅 조각도 함께) */
+export const countyId = (z) => `${z.province}|${z.name}`;
+
+/** 시로 승격한 군이면 시 이름 (○○군 → ○○시) */
+export function promotedName(state, z) {
+  return state.local?.cityUp?.includes(countyId(z)) ? z.name.replace(/군$/, '시') : z.name;
+}
 
 /**
  * 남북 행정구역 정리: 게임을 시작할 때 고르고, 진행 중에는 이벤트(비용·선거)로 바꾼다.
@@ -153,8 +162,12 @@ export function regionOf(state, z) {
   const L = initLocal(state);
   const o = adminOverride(state, z);
   const prov = o?.province || z.province || z.name, side = o?.side || z.country;
-  // 독립(승격)한 도시는 그 자체가 광역 단체 (함흥시 → 함흥광역시)
-  for (const c of L.independent) if (prov === c || z.city === c || z.name === c) return metroName(c);
+  // 광역시에 편입한 시군
+  const ax = L.annex?.[countyId(z)];
+  if (ax) return ax;
+  // 독립(승격)한 도시는 그 자체가 광역 단체 (함흥시 → 함흥광역시). 군에서 승격한 시도 (○○군 → ○○시 → ○○광역시)
+  const own = promotedName(state, z);
+  for (const c of L.independent) if (prov === c || z.city === c || z.name === c || own === c) return metroName(c);
   const A = L.admin || {};
   let r = prov;
   if (L.historic && !(A.jagang === 'keep' && side === 'KP' && ['자강도', '량강도', '양강도'].includes(prov))) {

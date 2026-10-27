@@ -138,7 +138,8 @@ export function setZoneOutline(map, zoneIds) {
 }
 
 let edgeData = null;
-function fetchEdges() {
+/** 시군 경계 조각 (a·b: 맞닿은 두 존, b < 0이면 해안·국경) */
+export function fetchEdges() {
   edgeData ||= fetch('data/admin/edges.geojson').then((r) => r.json()).then((d) => d.features);
   return edgeData;
 }

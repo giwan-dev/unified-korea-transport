@@ -11,7 +11,7 @@ import {
 } from './game/state.js';
 import { MEGA, TSR_FREIGHT, megaGeometry, applyMega } from './game/mega.js';
 import { AIRPORT } from './game/catalog.js';
-import { setNameResolver, setLabelGroup, refreshNames, setRegions, setZoneOutline, setLinks, paintHotspots, setHousing } from './ui/map.js';
+import { setNameResolver, setLabelGroup, refreshNames, setRegions, setZoneOutline, setLinks, paintHotspots, setHousing, fetchEdges } from './ui/map.js';
 import { isNarrow, twinPrimary, mergeTwins, ROAD_RANK, motorwayMainline, bridgeMainlineGaps, flattenMainline, connectJunctions, smoothMainlineEnds, mainlineBubbles, roundMainlineCorners } from './ui/traffic.js';
 import { subFold, initPanelUI, toast } from './ui/panel.js';
 import { initPalette, openPalette, goSection } from './ui/palette.js';
@@ -47,7 +47,7 @@ import { P } from './sim/params.js';
 import { PPP_TYPES, PPP_DEFAULTS, initPPP, tollKind, linkToll, annualRevenue, evaluatePPP } from './game/ppp.js';
 import {
   PARTIES, initLocal, regionOf, hasAutonomy, leanP, runElection, bumpApproval, governorTitle, mayorTitle, countyTitle, metroName, isMetroCity,
-  HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST, ADMIN_OPTIONS, ADMIN_DEFAULT, adminNames, HISTORIC_COUNTIES, PROPAGANDA_STEMS, kpPlaceText,
+  HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST, ADMIN_OPTIONS, ADMIN_DEFAULT, adminNames, HISTORIC_COUNTIES, PROPAGANDA_STEMS, kpPlaceText, CITY_UP_MIN_POP, countyId, promotedName,
 } from './game/local.js';
 import { openAdminSetup } from './ui/setup.js';
 import { flushSave, saveError, slotMeta, saveSlot, loadSlot, keepBackup, loadBackup } from './game/savestore.js';
@@ -279,10 +279,10 @@ async function init() {
     addPlansLayer(map);
     addTrainsLayer(map);
     setTrainsProvider(trainsData);
-    setNameResolver((level, id, original) => placeName(state, level, id, original));
+    setNameResolver((level, id, original) => placeName(state, level, id, level === 'zone' && zoneProps[id] ? promotedName(state, zoneProps[id]) : original));
     setLabelGroup((z) => ({ key: countyKey(z), weight: zoneProps[z]?.area || 0 }));
     refreshNames(map);
-    subsReady.then(() => map.getSource('subs').setData(subsFC));
+    subsReady.then(() => { map.getSource('subs').setData(subsFC); drawAnnexedSubs(); });
     refreshPoints();
     placesReady.then(resetNamer);
     bindMap();
@@ -652,7 +652,7 @@ function avgHappiness() {
   return out;
 }
 
-function zoneName(i) { return placeName(state, 'zone', i, zoneProps[i].name); }
+function zoneName(i) { return placeName(state, 'zone', i, promotedName(state, zoneProps[i])); }
 /** 지도에서 한 시군으로 보이는 존끼리 같은 값: 보이는 이름 + 광역 단체 (옛 군 땅을 떼어 낸 계산용 조각은 몸통과 같다) */
 function countyKey(i) { const z = zoneProps[i]; return z.ext ? `ext:${i}` : `${zoneName(i)}|${regionOf(state, z)}`; }
 
@@ -1075,7 +1075,72 @@ function provincePops() {
     e.pop += result.zones.pop[i]; e.pop0 += Math.max(z.pop, 0); e.zones.push(i);
     out.set(k, e);
   });
+  // 광역시에 따로 편입한 읍면동: 원래 광역 단체에서 빼서 광역시로
+  for (const [i, to] of annexedSubs()) {
+    const from = out.get(regionOf(state, zoneProps[subInfo(i)[0]])), dst = out.get(to);
+    if (!from || !dst || from === dst) continue;
+    const p = result.subs.pop[i], p0 = subPop0[i] || 0;
+    from.pop -= p; from.pop0 -= p0; dst.pop += p; dst.pop0 += p0;
+  }
   return out;
+}
+
+// ---- 읍면동 단위 광역시 편입 (state.local.annexSub: '도|시군|읍면동' → 광역시)
+
+/** 읍면동 열쇠: 자료의 도·시군·읍면동 이름 (존 번호가 바뀌어도 그대로) */
+function subKey(i) {
+  const z = zoneProps[subInfo(i)[0]];
+  return `${z.province}|${z.name}|${subsFC?.features[i]?.properties.name || i}`;
+}
+
+/** 따로 편입한 읍면동들: [[소구역 번호, 광역시]] (시군째 편입한 곳은 그 시군을 따른다) */
+let annexSubCache = null;
+function annexedSubs() {
+  const A = state.local?.annexSub;
+  if (!A || !Object.keys(A).length || !subsFC) return [];
+  const sig = JSON.stringify(A);
+  if (annexSubCache?.sig !== sig) {
+    const out = [];
+    for (let i = 0; i < subsFC.features.length; i++) { const to = A[subKey(i)]; if (to) out.push([i, to]); }
+    annexSubCache = { sig, out };
+  }
+  return annexSubCache.out;
+}
+
+/** 읍면동이 속한 광역 단체 (따로 편입했으면 그 광역시) */
+function subRegion(i) {
+  return state.local?.annexSub?.[subKey(i)] || regionOf(state, zoneProps[subInfo(i)[0]]);
+}
+
+/** 이 읍면동을 편입할 수 있는 광역시: 둘레(서로 맞닿을 만큼 가까운) 읍면동이 그 광역시에 속한 곳 */
+function subAnnexTargets(i) {
+  const [z, k] = subInfo(i), zp = zoneProps[z];
+  if (zp.ext || (zp.country === 'KP' && !state.local.autonomyKP)) return [];
+  const own = subRegion(i), [x, y] = zp.subs[k];
+  const ri = Math.sqrt(subArea(i) / Math.PI);
+  const out = new Set();
+  zoneProps.forEach((zq, zj) => {
+    if (zq.ext) return;
+    zq.subs.forEach(([x2, y2], kk) => {
+      const j = zq.sub0 + kk;
+      if (j === i || Math.abs(x2 - x) > 0.25 || Math.abs(y2 - y) > 0.2) return;
+      const r = subRegion(j);
+      if (r === own || !isMetroCity(r) || /세종/.test(r)) return;
+      if (kmBetween(x, y, x2, y2) <= 1.3 * (ri + Math.sqrt(subArea(j) / Math.PI)) + 0.5) out.add(r);
+    });
+  });
+  return [...out];
+}
+
+/** 따로 편입한 읍면동을 광역 경계처럼 굵은 선으로 */
+function drawAnnexedSubs() {
+  if (!map || !subsFC) return;
+  if (!map.getSource('annexed-subs')) {
+    map.addSource('annexed-subs', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'annexed-subs-line', type: 'line', source: 'annexed-subs',
+      paint: { 'line-color': '#8f8a80', 'line-opacity': 0.85, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.2, 10, 2.6], 'line-dasharray': [4, 1.5] } });
+  }
+  map.getSource('annexed-subs').setData({ type: 'FeatureCollection', features: annexedSubs().map(([i, to]) => ({ ...subsFC.features[i], properties: { to } })) });
 }
 
 function paintZones() {
@@ -3105,7 +3170,19 @@ function renderSelection() {
   if (selection.type === 'link') el.innerHTML = linkPanel(selection.id);
   else if (selection.type === 'zone') el.innerHTML = zonePanel(selection.id);
   else if (selection.type === 'closed') el.innerHTML = closedPanel(selection.id);
-  else if (selection.type === 'sub') el.innerHTML = subPanel(selection.id);
+  else if (selection.type === 'sub') {
+    el.innerHTML = subPanel(selection.id);
+    el.querySelectorAll('[data-annex-sub]').forEach((b) => {
+      b.onclick = () => {
+        const i = selection.id, to = b.dataset.annexSub, nm = subsFC?.features[i]?.properties.name || '읍면동', from = subRegion(i);
+        if (!confirm(`${nm}(${from} ${zoneName(subInfo(i)[0])})을(를) ${to}에 편입할까요? ${formatWon(EVENT_COST.annexSub)}`)) return;
+        if (!payEvent(EVENT_COST.annexSub)) return;
+        (state.local.annexSub ||= {})[subKey(i)] = to;
+        state.log.unshift(`${state.year}년 ${zoneName(subInfo(i)[0])} ${nm}, ${from}에서 ${to}로 편입`);
+        save(state); drawAnnexedSubs(); renderAll();
+      };
+    });
+  }
   else if (selection.type === 'airport') el.innerHTML = airportPanel(selection.id);
   else if (selection.type === 'multi') el.innerHTML = multiPanel(selection.ids);
   else if (selection.type === 'service') el.innerHTML = servicePanel();
@@ -4192,7 +4269,7 @@ function electMayor(i, mood = 0) {
 // 지도에서 한 시군으로 보이는 존들(countyKey가 같은 존)의 대표: 가장 넓은 존. 시군 단체장·제안은 대표 존 번호로 단다
 let countyRepCache = null;
 function countyRep(i) {
-  const sig = JSON.stringify([state.local?.admin, state.local?.historic, state.local?.independent, state.adminNames, state.placeNames]);
+  const sig = JSON.stringify([state.local?.admin, state.local?.historic, state.local?.independent, state.local?.cityUp, state.local?.annex, state.adminNames, state.placeNames]);
   if (countyRepCache?.sig !== sig) {
     const best = new Map();
     zoneProps.forEach((z, j) => { const k = countyKey(j), b = best.get(k); if (b == null || (z.area || 0) > (zoneProps[b].area || 0)) best.set(k, j); });
@@ -4337,13 +4414,13 @@ function bindProposals(el) {
 function localSettingsHTML() {
   const L = state.local;
   const pops = new Map();
-  zoneProps.forEach((z, i) => { if (!z.ext) pops.set(z.name, (pops.get(z.name) || 0) + zonePop(i)); });
+  zoneProps.forEach((z, i) => { if (!z.ext) pops.set(promotedName(state, z), (pops.get(promotedName(state, z)) || 0) + zonePop(i)); });
   // 복원 뒤에는 북측 옛 직할시(평양·남포)를 다시 독립시킬 수 있고, 모든 도의 인구 50만 이상 시를 광역시로 승격할 수 있다
   // (북측 도시는 지방자치를 도입한 뒤: 시장을 선거로 뽑으므로)
   const promotable = [
     ...(L.historic ? HISTORIC_CITIES.filter((c) => !L.independent.includes(c) && zoneProps.some((z) => z.province === c)) : []),
     ...[...pops].filter(([n, p]) => p >= PROMOTE_MIN_POP && /시$/.test(n) && !isMetroCity(n) && !L.independent.includes(n)
-      && zoneProps.some((z) => z.name === n && !z.ext && (z.country === 'KR' || L.autonomyKP) && !isMetroCity(z.province))).map(([n]) => n),
+      && zoneProps.some((z) => promotedName(state, z) === n && !z.ext && (z.country === 'KR' || L.autonomyKP) && !isMetroCity(z.province) && !L.annex?.[countyId(z)])).map(([n]) => n),
   ];
   const next = state.year < ELECTION.firstYear ? ELECTION.firstYear
     : ELECTION.firstYear + Math.ceil((state.year - ELECTION.firstYear + 1) / ELECTION.every) * ELECTION.every;
@@ -4359,7 +4436,89 @@ function localSettingsHTML() {
     <div class="item"><div class="t">광역시 독립·승격</div>
       <div class="m">${L.historic ? '북측 옛 직할시(평양·남포)를 도에서 다시 떼어 내거나, ' : ''}인구 ${PROMOTE_MIN_POP / 1e4}만 이상 시를 도에서 떼어 광역시로 만듭니다. 시장을 따로 뽑습니다 · 한 곳 ${formatWon(EVENT_COST.independence)}</div>
       <div class="row" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${promotable.map((c) => `<button class="small" data-ev-city="${esc(c)}">${esc(c)}</button>`).join('') || '<span class="m">대상 도시가 없습니다.</span>'}</div>
-      ${L.independent.length ? `<div class="m" style="margin-top:4px">독립·승격한 도시: ${L.independent.map(esc).join(', ')}</div>` : ''}</div>`;
+      ${L.independent.length ? `<div class="m" style="margin-top:4px">독립·승격한 도시: ${L.independent.map(esc).join(', ')}</div>` : ''}</div>
+    ${cityUpHTML()}
+    ${annexHTML()}`;
+}
+
+// ---- 군 → 시 승격, 광역시 편입
+
+/** 시군 단위(옛 군 땅 조각을 합친) 목록: 열쇠 → { name(보이는 이름), z(대표 존), zones, pop, region } */
+function counties() {
+  const out = new Map();
+  zoneProps.forEach((z, i) => {
+    if (z.ext || z.city) return;   // 구(區)는 시에 딸려 있다
+    const k = countyId(z);
+    const e = out.get(k) || { key: k, name: zoneName(i), z, zones: [], pop: 0, region: regionOf(state, z) };
+    e.zones.push(i); e.pop += zonePop(i);
+    out.set(k, e);
+  });
+  return out;
+}
+
+/** 승격할 수 있는 군: 인구 15만 이상, 광역시에 딸리지 않은 군 (북측은 지방자치 뒤) */
+function cityUpTargets() {
+  const L = state.local;
+  return [...counties().values()].filter((c) => /군$/.test(c.z.name) && !L.cityUp?.includes(c.key) && !isMetroCity(c.region)
+    && (c.z.country === 'KR' || L.autonomyKP) && c.pop >= CITY_UP_MIN_POP).sort((a, b) => b.pop - a.pop);
+}
+
+function cityUpHTML() {
+  const t = cityUpTargets(), L = state.local;
+  return `<div class="item"><div class="t">군 → 시 승격</div>
+    <div class="m">인구 ${CITY_UP_MIN_POP / 1e4}만 이상 군을 시로 올립니다 (군수 → 시장). 시가 되어 인구 ${PROMOTE_MIN_POP / 1e4}만을 넘으면 광역시로 승격할 수 있습니다 · 한 곳 ${formatWon(EVENT_COST.cityUp)}</div>
+    <div class="row" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${t.map((c) => `<button class="small" data-city-up="${esc(c.key)}">${esc(c.name)} ${fmtPop(c.pop)}</button>`).join('') || '<span class="m">대상 군이 없습니다.</span>'}</div>
+    ${L.cityUp?.length ? `<div class="m" style="margin-top:4px">승격한 시: ${L.cityUp.map((k) => esc(k.split('|')[1].replace(/군$/, '시'))).join(', ')}</div>` : ''}</div>`;
+}
+
+let zoneAdj = null;   // 존 → 맞닿은 존들 (시군 경계 자료에서)
+function adjacency() {
+  if (zoneAdj) return zoneAdj;
+  zoneAdj = new Map();
+  fetchEdges().then((edges) => {
+    for (const f of edges) {
+      const { a, b, w } = f.properties;
+      if (w || a < 0 || b < 0 || a === b) continue;   // 물 위 경계(제주–전남, 거제–부산 등)로는 잇지 않는다
+      for (const [x, y] of [[a, b], [b, a]]) { if (!zoneAdj.has(x)) zoneAdj.set(x, new Set()); zoneAdj.get(x).add(y); }
+    }
+    zoneAdj.ready = true;
+    renderRequests();
+  });
+  return zoneAdj;
+}
+
+/** 광역시(특별시·광역시)마다 맞닿은 다른 광역 단체의 시군: [[광역시, [시군…]]] */
+function annexTargets() {
+  const adj = adjacency();
+  if (!adj.ready) return null;
+  const L = state.local, cs = counties();
+  const byZone = new Map();
+  for (const c of cs.values()) for (const i of c.zones) byZone.set(i, c);
+  // 구(區) 존도 그 시의 광역 단체로 (서울 강남구 등이 맞닿은 시군을 찾을 때)
+  const regionAt = (i) => byZone.get(i)?.region ?? (zoneProps[i]?.ext ? null : regionOf(state, zoneProps[i]));
+  const out = new Map();
+  zoneProps.forEach((z, i) => {
+    const r = regionAt(i);
+    if (!r || !isMetroCity(r) || /세종/.test(r)) return;
+    for (const j of adj.get(i) || []) {
+      const d = byZone.get(j);
+      if (!d || d.region === r || isMetroCity(d.region) || (d.z.country === 'KP' && !L.autonomyKP) || L.independent.includes(d.name)) continue;
+      if (!out.has(r)) out.set(r, new Map());
+      out.get(r).set(d.key, d);
+    }
+  });
+  return [...out].map(([r, m]) => [r, [...m.values()].sort((a, b) => b.pop - a.pop)]).sort((a, b) => a[0].localeCompare(b[0], 'ko'));
+}
+
+function annexHTML() {
+  const t = annexTargets(), L = state.local;
+  const done = Object.entries(L.annex || {});
+  return `<div class="item"><div class="t">광역시 편입</div>
+    <div class="m">광역시가 맞닿은 시군을 편입합니다 (그 시군은 도에서 빠져 광역시의 시·군이 되고, 두 광역 단체장을 다시 뽑습니다) · 한 곳 ${formatWon(EVENT_COST.annex)}.
+      읍면동 하나씩 편입하려면 지도 범례에서 읍면동 보기(인구 밀도 등)를 고르고 그 읍면동을 누르세요 (${formatWon(EVENT_COST.annexSub)}).</div>
+    ${t == null ? '<p class="m">경계 자료를 읽는 중…</p>' : t.length ? t.map(([r, cs]) => `<div class="m" style="margin-top:6px"><b>${esc(r)}</b></div>
+      <div class="row" style="display:flex;gap:4px;flex-wrap:wrap">${cs.map((c) => `<button class="small" data-annex="${esc(c.key)}" data-annex-to="${esc(r)}" title="${esc(c.region)}에서 ${esc(r)}로">${esc(c.name)} ${fmtPop(c.pop)}</button>`).join('')}</div>`).join('') : '<p class="m">편입할 수 있는 시군이 없습니다.</p>'}
+    ${done.length ? `<div class="m" style="margin-top:4px">편입한 시군: ${done.map(([k, r]) => `${esc(k.split('|')[1])} → ${esc(r)}`).join(', ')}</div>` : ''}</div>`;
 }
 
 /** 건설 탭: 국가 대형 사업 목록 (착공 전·공사 중·완공). 선형 보기·효과 미리보기·착공 */
@@ -4435,6 +4594,29 @@ function bindLocalSettings(el) {
     const r = renameKPLines(base, state);
     if (!r.ok) { alert(r.reason); return; }
     save(state); refreshLinks(); renderAll();
+  });
+  el.querySelectorAll('[data-city-up]').forEach((b) => {
+    b.onclick = () => {
+      const k = b.dataset.cityUp, c = counties().get(k);
+      if (!c || !payEvent(EVENT_COST.cityUp)) return;
+      (L.cityUp ||= []).push(k);
+      state.log.unshift(`${state.year}년 ${c.name} → ${c.name.replace(/군$/, '시')} 승격`);
+      syncMayors();   // 군수 → 시장
+      refreshNames(map);
+      save(state); renderAll();
+    };
+  });
+  el.querySelectorAll('[data-annex]').forEach((b) => {
+    b.onclick = () => {
+      const k = b.dataset.annex, to = b.dataset.annexTo, c = counties().get(k);
+      if (!c || !confirm(`${c.name}(${c.region})을(를) ${to}에 편입할까요? 두 광역 단체장을 다시 뽑습니다. ${formatWon(EVENT_COST.annex)}`)) return;
+      if (!payEvent(EVENT_COST.annex)) return;
+      (L.annex ||= {})[k] = to;
+      state.log.unshift(`${state.year}년 ${c.name}, ${c.region}에서 ${to}로 편입`);
+      holdElection([to, c.region], `${to} 시군 편입 선거`);
+      syncMayors();
+      save(state); renderAll();
+    };
   });
   el.querySelectorAll('[data-ev-city]').forEach((b) => {
     b.onclick = () => {
@@ -7308,7 +7490,7 @@ function subPanel(i) {
   const change = s.pop[i] / Math.max(subPop0[i], 1) - 1;
   return `${header(name)}
     <table class="kv">
-      <tr><td>소속</td><td>${esc(zoneProps[z].province)} ${esc(zoneProps[z].name)}</td></tr>
+      <tr><td>소속</td><td>${esc(subRegion(i))} ${esc(zoneName(z))}${state.local?.annexSub?.[subKey(i)] ? ` <span class="m">(${esc(regionOf(state, zoneProps[z]))}에서 편입)</span>` : ''}</td></tr>
       <tr><td>인구</td><td>${Math.round(s.pop[i]).toLocaleString()}명 <span class="${change >= 0 ? 'pos' : 'neg'}">(${change >= 0 ? '+' : ''}${pct(change)})</span></td></tr>
       <tr><td>인구 밀도</td><td>${Math.round(s.pop[i] / subArea(i)).toLocaleString()}/km²</td></tr>
       <tr><td>대중교통 접근 (대기 포함)</td><td>${Math.round(s.transit[i])}분</td></tr>
@@ -7316,7 +7498,13 @@ function subPanel(i) {
       <tr><td>교통 체감 개선 (시작 대비)</td><td class="${(gains?.[i] || 0) >= 0 ? 'pos' : 'neg'}">${(gains?.[i] || 0) >= 0 ? '+' : ''}${(gains?.[i] || 0).toFixed(1)}점</td></tr>
       <tr><td>주민 행복도 · 지지율</td><td>${subMetric('subHappy', i)?.toFixed(0) ?? '–'} · ${Math.round(subMetric('subApproval', i) ?? 0)}%</td></tr>
     </table>
-    <p class="hint">해마다 주민 일부가 같은 시군구 안에서 대중교통·철도 접근이 좋고 덜 붐비는 곳으로 옮겨 갑니다. 새 역을 놓으면 주변 인구가 늘어납니다.</p>`;
+    <p class="hint">해마다 주민 일부가 같은 시군구 안에서 대중교통·철도 접근이 좋고 덜 붐비는 곳으로 옮겨 갑니다. 새 역을 놓으면 주변 인구가 늘어납니다.</p>
+    ${(() => {
+      const t = subAnnexTargets(i);
+      if (!t.length) return '';
+      return `<h4>광역시 편입</h4><p class="hint">이 읍면동만 맞닿은 광역시로 옮깁니다 (시군 전체는 민원·정책 탭에서). 광역 인구·경계가 바뀝니다 · ${formatWon(EVENT_COST.annexSub)}</p>
+        <div class="actions">${t.map((r) => `<button class="small" data-annex-sub="${esc(r)}">${esc(r)}에 편입</button>`).join('')}</div>`;
+    })()}`;
 }
 
 function airportPanel(id) {
