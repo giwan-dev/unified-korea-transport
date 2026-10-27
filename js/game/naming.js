@@ -1,6 +1,6 @@
 // 신규 역·IC·JCT 이름 자동 생성.
 // 역은 곁의 기존 역(환승)·놓인 동 이름을 먼저 보고(stationHints), 없으면 가장 가까운 지명(도시 > 읍 > 동·마을 순으로 가중)을 따고,
-// 겹치면 방향 접두어(동·서·남·북)를 붙인다.
+// 겹치면 번호(○○2역)를 붙이지 않고 접두어·접미어로 가린다: 방향(서평양), 큰 도시 이름(평택지제·천안아산처럼), 신(신경주), 입구·중앙.
 
 import { kmBetween } from '../sim/model.js';
 
@@ -39,7 +39,8 @@ export class Namer {
   }
 
   /**
-   * 이름 후보: 가장 가까운 지명 → 방향 접두어(서평양 등) → 다음으로 가까운 지명 → 번호
+   * 이름 후보: 가장 가까운 지명 → 방향 접두어(서평양 등) → 가까운 동네 이름 → 다음으로 가까운 지명
+   * → 지명마다 도시 이름 접두어(평택지제)·다른 방향·신(新)·입구·중앙
    * @param {number} lon
    * @param {number} lat
    * @param {'station'|'IC'|'JCT'} kind
@@ -68,11 +69,22 @@ export class Namer {
       for (const p of near.slice(1)) candidates.push(st(p) + suffix);
     }
     for (const c of candidates) if (!this.isUsed(c, kind)) return this.take(c, kind);
-    for (let i = 2; i < 100; i++) {
-      const c = `${base}${i}${suffix}`;
-      if (!this.isUsed(c, kind)) return this.take(c, kind);
-    }
-    return this.take(`${base}${Date.now() % 1000}${suffix}`, kind);
+    // 그래도 겹치면 붙임말로 가린다 (예전에는 ○○2역처럼 번호를 붙였다)
+    const stems0 = new Set(candidates.map((c) => c.slice(0, c.length - suffix.length)));
+    const city = near.find((p) => p[1] === 'city');
+    const cityStem = city ? st(city) : '';
+    // 이미 방향·신을 붙인 후보(서수원)는 다시 꾸미지 않는다 (동서수원·수원서수원이 되던 것)
+    const stems = [...new Set(candidates.map((c) => c.slice(0, c.length - suffix.length)))].filter((b) => !(/^[동서남북신]/.test(b) && stems0.has(b.slice(1))));
+    const decorate = (b) => [
+      ...(cityStem && !b.includes(cityStem) ? [cityStem + b] : []),
+      ...['동', '서', '남', '북'].map((d) => d + b),
+      '신' + b, b + '입구', b + '중앙',
+      ...(cityStem && !b.includes(cityStem) ? ['동', '서', '남', '북', '신'].map((d) => cityStem + d + b) : []),
+    ];
+    for (const b of stems) for (const c of decorate(b)) if (!this.isUsed(c + suffix, kind)) return this.take(c + suffix, kind);
+    // 거의 일어나지 않는다: 가까운 두 동네 이름을 잇는다 (가좌·수색처럼)
+    for (const a of stems) for (const b of stems) if (a !== b && !this.isUsed(a + b + suffix, kind)) return this.take(a + b + suffix, kind);
+    return this.take(`신${cityStem}${base}${suffix}`, kind);
   }
 
   take(name, kind) { this.reserve(name, kind); return name; }
@@ -80,7 +92,8 @@ export class Namer {
 
 export function stem(name) {
   const s = name.replace(/\s.*$/, '');
-  const t = s.replace(ADMIN_TAIL, '');
+  // 동 번호는 뗀다: 룡당2동 → 룡당, 장유1동 → 장유 (역 이름에 번호가 붙지 않게)
+  const t = s.replace(ADMIN_TAIL, '').replace(/제?\d+(?:\.\d+)?가?$/, '');
   return t.length >= 2 ? t : s;
 }
 

@@ -458,6 +458,25 @@ function resetNamer() {
   namer = new Namer(places, existing);
   namer.stationHints = stationNameHints;
   namer.fix = (name, lon, lat) => kpFix(name, lon, lat);
+  renameNumbered();
+}
+
+/** 예전 판이 겹치는 자동 이름에 번호를 붙인 것(○○2역·○○3IC)을 붙임말 이름(서○○역·○○입구역 등)으로 바꾼다. 직접 지은 이름은 그대로 */
+function renameNumbered() {
+  const done = [];
+  for (const [k, v] of Object.entries(state.names || {})) {
+    if (!v.auto || !/[가-힣]\d+(역|IC|JCT|휴게소)$/.test(v.name)) continue;
+    const c = nodeCoord(+k);
+    if (!c) continue;
+    namer.release(v.name, v.kind);
+    const nw = namer.suggest(c[0], c[1], v.kind);
+    done.push(`${v.name} → ${nw}`);
+    v.name = nw;
+  }
+  if (!done.length) return;
+  state.log.unshift(`${state.year}년 번호를 붙였던 자동 이름 ${done.length}곳을 바꿨습니다: ${done.slice(0, 5).join(', ')}${done.length > 5 ? ' 등' : ''}`);
+  save(state);
+  if (map) refreshPoints();
 }
 
 // ------------------------------------------------------------ 시뮬레이션 결과
