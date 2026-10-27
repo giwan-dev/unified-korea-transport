@@ -8,6 +8,9 @@ const DENS_DX = 0.0113, DENS_DY = 0.009;   // 약 1km
 function densCell(x, y) { return [Math.floor(x / DENS_DX), Math.floor(y / DENS_DY)]; }
 function densKey(x, y) { const [i, j] = densCell(x, y); return `${i}:${j}`; }
 
+/** 신호 고도화·장편성 개량으로 늘어난 선로 수송력 배수 */
+const capUp = (l) => (l.sig ? P.signalCapFactor : 1) * (l.long ? P.longTrainFactor : 1);
+
 export class Model {
   /**
    * @param {object[]} zones data/zones.json의 존 속성 배열 (subs: 소구역 [경도, 위도, 인구비중, 면적])
@@ -187,7 +190,9 @@ export class Model {
         // 모든 역에 서는 계통(광역 전철 등)은 밑 선로의 기본 열차와 시간이 똑같아 배정이 기본 열차로만 가므로,
         // 시간표가 정해진 계통을 아주 조금 낫게 친다 (계통 이용객이 0으로 잡히지 않게)
         this.freeTime[i] = Math.max(1, t - l.skip * P.railDwellMin) * 0.995;
-        this.capacity[i] = l.trains * (l.seatCap || P.railPaxPerTrain[l.cls]);
+        // 다니는 구간이 모두 장편성이면 이 계통 열차도 길게 다닌다
+        const longF = l.via.length && l.via.every((v) => L[v].long) ? P.longTrainFactor : 1;
+        this.capacity[i] = l.trains * (l.seatCap || P.railPaxPerTrain[l.cls]) * longF;
         this.virtual.push(i);
         continue;
       }
@@ -212,7 +217,7 @@ export class Model {
         this.capacity[i] = cap;
       } else if (l.mode === 2) {
         this.freeTime[i] = (l.len / l.speed) * 60 + (l.freqWait || 0);
-        this.capacity[i] = P.metroTrainsPerDay * P.metroPaxPerTrain * (l.tracks >= 3 ? 1.5 : 1) * (l.freq || 1);
+        this.capacity[i] = P.metroTrainsPerDay * P.metroPaxPerTrain * (l.tracks >= 3 ? 1.5 : 1) * (l.freq || 1) * capUp(l);
       } else {
         const pen = l.power === 'AC' ? 1 : P.railNonACPenalty;
         // 양 끝이 역이면 정차 시간을 반씩 얹는다 (모든 역에 서는 열차 기준)
@@ -221,14 +226,15 @@ export class Model {
         this.freeTime[i] = (l.len / l.speed) * 60 * pen + dwell + (l.freqWait || 0);
         // 고속철도는 모두 복선이다 (OSM에서 방향별 선로를 따로 그린 구간이 단선으로 들어오는 것을 바로잡는다)
         const tracks = l.cls === 'hsr' ? Math.max(2, l.tracks) : l.tracks;
-        this.capacity[i] = P.railTrainsPerDay[Math.min(tracks, 4)] * P.railPaxPerTrain[l.cls] * (l.freq || 1);
+        this.capacity[i] = P.railTrainsPerDay[Math.min(tracks, 4)] * P.railPaxPerTrain[l.cls] * (l.freq || 1) * capUp(l);
       }
     }
     // 운행 계통 열차(광역 통근 전동차 등)는 제 정원만큼 밑 선로 수송력을 늘린다.
     // 선로 기본 용량은 보통 열차 정원(450명)으로 잡혀 있어, 정원 1,600명 전동차가 다니는 구간의 혼잡을 부풀린다
     for (const v of this.virtual) {
       const lv = L[v];
-      const extra = lv.trains * ((lv.seatCap || P.railPaxPerTrain[lv.cls]) - P.railPaxPerTrain[lv.cls]);
+      const longF = lv.via.length && lv.via.every((v) => L[v].long) ? P.longTrainFactor : 1;
+      const extra = lv.trains * ((lv.seatCap || P.railPaxPerTrain[lv.cls]) - P.railPaxPerTrain[lv.cls]) * longF;
       if (extra > 0) for (const u of new Set(lv.via)) this.capacity[u] += extra;
     }
     if (!this.volume || this.volume.length !== L.length) {

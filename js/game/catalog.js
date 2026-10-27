@@ -52,6 +52,27 @@ export const UPGRADES = [
     applies: (l) => l.tracks >= 2 && l.tracks < 4,
     apply: () => ({ tracks: 4 }),
   },
+  // 선로 수를 더 늘리지 않고 수송력을 키우는 개량 (2복선 뒤에도 붐비는 구간)
+  {
+    id: 'signal', mode: 1, label: '신호 고도화 (KTCS-2·열차 간격 단축, 운행 횟수 +30%)', perKm: 30, years: 3, keepGauge: true,
+    applies: (l) => !l.sig,
+    apply: () => ({ sig: 1 }),
+  },
+  {
+    id: 'longtrain', mode: 1, label: '장편성 (승강장 연장, 열차 정원 +50%)', perKm: 20, years: 3, keepGauge: true,
+    applies: (l) => l.cls === 'conv' && !l.long,
+    apply: () => ({ long: 1 }),
+  },
+  {
+    id: 'cbtc', mode: 2, label: '신호 고도화 (CBTC·무인 운전, 운행 횟수 +30%)', perKm: 60, years: 3,
+    applies: (l) => !l.sig,
+    apply: () => ({ sig: 1 }),
+  },
+  {
+    id: 'metrolong', mode: 2, label: '장편성 (지하 승강장 연장, 열차 정원 +50%)', perKm: 80, years: 4,
+    applies: (l) => !l.long,
+    apply: () => ({ long: 1 }),
+  },
   {
     id: 'electrify', mode: 1, years: 2,
     label: (l) => (l.power === 'DC' ? '교류 25kV 전환 (북 직류 3kV)' : '전철화 (교류 25kV)'),
@@ -65,7 +86,7 @@ export const UPGRADES = [
     apply: (l) => ({ speed: Math.min(l.speed + 12, 50) }),
   },
   {
-    id: 'metrocap', mode: 2, label: '증편 (신호 개량·차량 증차)', perKm: 60, years: 2,
+    id: 'metrocap', mode: 2, label: '증편 (차량 증차·배차 간격 단축)', perKm: 60, years: 2,
     applies: (l) => !(l.tracks >= 3),
     apply: () => ({ tracks: 3 }),
   },
@@ -138,8 +159,8 @@ export function formatWon(eok) {
   return `${Math.round(eok).toLocaleString()}억`;
 }
 
-/** 개량을 적용한 속성. 철도 개량은 선로를 다시 까므로 북측 협궤(762mm)도 표준궤가 된다 (std) */
+/** 개량을 적용한 속성. 철도 개량은 선로를 다시 까므로 북측 협궤(762mm)도 표준궤가 된다 (std). 신호·승강장만 손보는 개량은 그대로 */
 export function upgradeAttrs(u, link) {
   const a = u.apply(link);
-  return u.mode === 1 ? { ...a, std: 1 } : a;
+  return u.mode === 1 && !u.keepGauge ? { ...a, std: 1 } : a;
 }

@@ -19,6 +19,8 @@ export const P = {
 
   railTrainsPerDay: [0, 60, 300, 420, 500],  // 선로 수별 일 운행 가능 열차(양방향). 경부고속선 평택–오송 약 380회
   railPaxPerTrain: { hsr: 750, conv: 450 },
+  signalCapFactor: 1.3,       // 신호 고도화(KTCS-2·CBTC): 열차 간격이 줄어 하루 운행 가능 횟수가 늘어난다
+  longTrainFactor: 1.5,       // 장편성(승강장 연장): 열차 한 편성 정원이 늘어난다 (8량 → 12량쯤)
   railWaitMin: { hsr: 20, conv: 35, kpConv: 60 },
   railNonACPenalty: 1.15,     // 비전철·직류 구간: 기관차 교체·디젤 운행 지체
   stationRadiusKm: 25,
