@@ -60,7 +60,7 @@ export const P = {
   targetKrConvVC: 0.65,       // 기준 연도 보정 목표: 남측 일반철도 V/C 상위 5% 구간 (경부선·경인선 수도권 구간)
   railCalibQuantile: 0.95,
   calibrationRounds: 7,
-  calibVersion: 4,            // 보정 방식이 바뀌면 올린다: 예전 기준 연도(data/baseline.json)는 쓰지 않고 새로 보정한다
+  calibVersion: 5,            // 보정 방식이 바뀌면 올린다: 예전 기준 연도(data/baseline.json)는 쓰지 않고 새로 보정한다
   railASCStep: 25,            // 보정 반복마다 철도 상수 조정 폭(분)
   msaIterations: 5,
   msaIterationsWarm: 1,       // 해마다 지난해 결과에서 이어 배정할 때. 새 배정은 warmMsaOffset만큼 묽게(1/4) 섞어 경로가 튀지 않는다 (2번이면 연도 넘기기가 두 배)

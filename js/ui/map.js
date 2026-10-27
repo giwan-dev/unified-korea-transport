@@ -364,7 +364,25 @@ const METRO_COLOR = ['case', ['==', ['get', 'colour'], ''], '#1a9a6c', ['get', '
 
 let linksCache = null;
 /** 계산망 선 자료를 바꾼다 (혼잡 주의 표시를 다시 만들 때 쓰려고 기억해 둔다) */
-const HOUSING_R = { s: 0.6, m: 1.0, l: 1.6, xl: 2.6 };   // 택지지구 반지름 (km): 보통은 main.js가 h.R로 넘긴다
+const HOUSING_R = { s: 0.6, m: 1.0, l: 1.6, xl: 2.6 };
+
+/**
+ * 닫힌 꺾은선을 곡선으로 (차이킨 모서리 깎기 3번: 꼭짓점 하나가 8개로)
+ * @param {[number,number][]} pts 닫지 않은 꼭짓점들
+ */
+export function smoothRing(pts, rounds = 3) {
+  if (!pts || pts.length < 3) return pts;
+  let r = pts;
+  for (let k = 0; k < rounds; k++) {
+    const out = [];
+    for (let i = 0; i < r.length; i++) {
+      const a = r[i], b = r[(i + 1) % r.length];
+      out.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25], [a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+    }
+    r = out;
+  }
+  return r;
+}   // 택지지구 반지름 (km): 보통은 main.js가 h.R로 넘긴다
 
 /**
  * 택지지구를 배경 지도에 그린다. 다 지은 곳은 시가지 면과 150m 간격 격자 도로(지구마다 방향이 다르다), 공사 중은 점선 경계
@@ -387,7 +405,9 @@ export function setHousing(map, list) {
     const kx = 111.32 * Math.cos((h.lat * Math.PI) / 180), ky = 110.57;
     const at = (x, y) => [h.lon + x / kx, h.lat + y / ky];
     const seed = [...h.id].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 11);
-    let ring = h.ring ? [...h.ring, h.ring[0]] : null;
+    // 직접 그린 경계는 곡선으로 지었다(h.smooth). 예전 저장의 꺾은선 경계도 곡선으로 그린다
+    let ring = h.ring ? (h.smooth ? h.ring : smoothRing(h.ring)) : null;
+    if (ring) ring = [...ring, ring[0]];
     if (!ring) {
       // 둥근 단지가 아니라 조금 일그러진 모양 (지구마다 고정)
       ring = [];
@@ -397,27 +417,7 @@ export function setHousing(map, list) {
     const built = h.built || h.done;
     features.push({ type: 'Feature', properties: { k: 'area', done: !!built }, geometry: { type: 'Polygon', coordinates: [ring] } });
     features.push({ type: 'Feature', properties: { k: 'label', name: h.done ? h.name : built ? `${h.name} (입주 중)` : `${h.name} (공사 중)` }, geometry: { type: 'Point', coordinates: [h.lon, h.lat] } });
-    if (!built) continue;
-    // 150m 간격 격자 도로 (지구마다 방향이 다르다), 경계 안 조각만
-    // 간선도로와 같은 방향 (h.ang: 지구 도로망을 짤 때 정한 각도, 예전 저장은 지구 id로)
-    const ang = (((h.ang ?? seed) % 90) * Math.PI) / 180, c = Math.cos(ang), sn = Math.sin(ang);
-    const r = R * (h.ring ? 1.8 : 0.92);
-    for (let off = -r + 0.075; off < r; off += 0.15) {
-      const half = h.ring ? r : Math.sqrt(Math.max(0, r * r - off * off));
-      for (const [ux, uy, vx, vy] of [[c, sn, -sn, c], [-sn, c, c, sn]]) {
-        if (!h.ring) {
-          features.push({ type: 'Feature', properties: { k: 'street' }, geometry: { type: 'LineString', coordinates: [at(vx * off - ux * half, vy * off - uy * half), at(vx * off + ux * half, vy * off + uy * half)] } });
-          continue;
-        }
-        let seg = null;
-        for (let t = -half; t <= half; t += 0.05) {
-          const p = at(vx * off + ux * t, vy * off + uy * t);
-          if (inRing(p[0], p[1], h.ring)) (seg ||= []).push(p);
-          else if (seg) { if (seg.length > 1) features.push({ type: 'Feature', properties: { k: 'street' }, geometry: { type: 'LineString', coordinates: seg } }); seg = null; }
-        }
-        if (seg?.length > 1) features.push({ type: 'Feature', properties: { k: 'street' }, geometry: { type: 'LineString', coordinates: seg } });
-      }
-    }
+    // (예전에는 다 지은 지구 안에 150m 간격 격자 도로를 그렸다: 확대하면 지저분해 뺐다. 단지 간선도로는 실제 도로망에 있다)
   }
   src.setData({ type: 'FeatureCollection', features });
 }
@@ -497,8 +497,6 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addLayer({ id: 'housing-fill', type: 'fill', source: 'housing', filter: ['==', ['get', 'k'], 'area'],
     // 밑의 인구 분포(시군구·읍면동 색)가 비쳐 보이게 옅게: 경계선과 단지 안 도로로 지구를 알아본다
     paint: { 'fill-color': dark ? '#4a4540' : '#e9dfcf', 'fill-opacity': ['case', ['get', 'done'], 0.35, 0.15] } }, below);
-  map.addLayer({ id: 'housing-street', type: 'line', source: 'housing', filter: ['==', ['get', 'k'], 'street'], minzoom: 11,
-    paint: { 'line-color': dark ? '#6b6560' : '#ffffff', 'line-opacity': 0.75, 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 0.6, 14, 2.2] } }, below);
   map.addLayer({ id: 'housing-edge', type: 'line', source: 'housing', filter: ['all', ['==', ['get', 'k'], 'area'], ['get', 'done']],
     paint: { 'line-color': dark ? '#a39a8c' : '#8a7550', 'line-width': 1.6 } }, below);
   map.addLayer({ id: 'housing-edge-building', type: 'line', source: 'housing', filter: ['all', ['==', ['get', 'k'], 'area'], ['!', ['get', 'done']]],
@@ -723,7 +721,7 @@ export function setBasemap(map, kind) {
 
 /** 택지지구 표시(면·경계·단지 안 격자 도로·이름)를 켜고 끈다 */
 export function setHousingVisible(map, on) {
-  for (const id of ['housing-fill', 'housing-street', 'housing-edge', 'housing-edge-building', 'housing-label']) {
+  for (const id of ['housing-fill', 'housing-edge', 'housing-edge-building', 'housing-label']) {
     if (map?.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
   }
 }

@@ -193,7 +193,7 @@ export async function migrateState(old, { base, zones }) {
       return b > 0 ? a / b : 1;
     })();
     const pop0 = Array.isArray(snap.pop) ? snap.pop.slice() : null;
-    for (const key of ['pop', 'income', 'le', 'mys', 'eys', 'hdi', 'amenity', 'tourKP']) {
+    for (const key of ['pop', 'income', 'le', 'mys', 'eys', 'hdi', 'amenity', 'amenExcess', 'inc0', 'tourKP']) {
       const arr = snap[key];
       if (!Array.isArray(arr) || arr.length !== Z0) { if (arr && arr.length !== Z1) delete snap[key]; continue; }
       const out = new Array(Z1);

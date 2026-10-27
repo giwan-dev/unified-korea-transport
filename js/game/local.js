@@ -220,8 +220,12 @@ export function regionOf(state, z) {
   }
   // 통일 뒤 남북에 강원이 둘이므로 북측 강원도는 늘 강원북도 (남측은 강원특별자치도, 도 복원 뒤에는 강원남도)
   if (side === 'KP' && r === '강원도') r = '강원북도';
-  return A.dueum === 'apply' && side === 'KP' ? dueum(r) : r;
+  const out = A.dueum === 'apply' && side === 'KP' ? dueum(r) : r;
+  return L.renamedRegions?.[out] || out;   // 평양시 → 평양광역시처럼 이름만 바꾼 단체
 }
+
+/** 북측 직할시(독립시): 이름을 ○○광역시로 바꿀 수 있다 */
+export const KP_DIRECT_CITIES = ['평양시', '남포시', '개성시', '라선시'];
 
 /** 예전 이름 → 지금 이름 (예전 저장의 단체장 자리를 옮길 때) */
 export const REGION_RENAMED = { 강원도: '강원북도' };

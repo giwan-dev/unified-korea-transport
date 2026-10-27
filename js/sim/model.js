@@ -46,6 +46,9 @@ export class Model {
     this.eys = new Float64Array(Z);
     this.hdi = new Float64Array(Z);
     this.amenity = new Float64Array(Z);
+    // 북측 지역 매력 가운데 시작 때 소득 격차를 메우던 몫(남측 평균보다 높은 만큼)과 그때 소득: 소득이 따라잡는 만큼 줄어든다
+    this.amenExcess = new Float64Array(Z);
+    this.inc0 = new Float64Array(Z);
     this.access = new Float64Array(Z);
     this.healthAccess = new Float64Array(Z);
     this.ccomp = new Float32Array(Z * Z);
@@ -61,6 +64,8 @@ export class Model {
   /** 저장된 존 상태 복원 */
   restore(s) {
     for (const k of ['pop', 'income', 'le', 'mys', 'eys', 'hdi', 'amenity']) this[k].set(s[k]);
+    if (s.amenExcess?.length === this.Z) { this.amenExcess.set(s.amenExcess); this.inc0.set(s.inc0); }
+    else this.initAmenityGap(true);   // 예전 저장·기준 연도: 지금 매력에서 다시 나누고, 시작 소득은 북측 기본값으로 본다
     if (s.subW && s.subW.length === this.S) {
       this.subW.set(s.subW); this.subAmenity.set(s.subAmenity); this.subAmenityReady = true;
     }
@@ -152,7 +157,7 @@ export class Model {
 
   snapshot() {
     const o = { K: this.K, railASC: this.railASC, hsrASC: this.hsrASC, transitASC: this.transitASC, accessRef: this.accessRef, frontier: this.frontier };
-    for (const k of ['pop', 'income', 'le', 'mys', 'eys', 'hdi', 'amenity']) o[k] = Array.from(this[k]);
+    for (const k of ['pop', 'income', 'le', 'mys', 'eys', 'hdi', 'amenity', 'amenExcess', 'inc0']) o[k] = Array.from(this[k]);
     o.subW = Array.from(this.subW, (v) => Math.round(v * 1e6) / 1e6);
     o.subAmenity = Array.from(this.subAmenity, (v) => Math.round(v * 1e4) / 1e4);
     o.waits = Array.from(this.stationNode, (nd, i) => [nd, Math.round(this.stationWait[i] * 10) / 10]);
@@ -1557,13 +1562,35 @@ export class Model {
       this.hdi[i] = hdiOf(this.le[i], this.mys[i], this.eys[i], this.income[i]);
     }
     this.calibrateAmenity(0, 'closed');
+    this.initAmenityGap();
     this.calibrateSubAmenity();
+  }
+
+  /**
+   * 기준 연도 보정은 북측 소득이 남측의 20분의 1인데도 사람이 떠나지 않도록 북측 지역 매력을 남측보다 2 넘게 높게 잡는다.
+   * 그 몫(남측 인구 가중 평균보다 높은 만큼)을 따로 적어 두고, 북측 소득이 남측 수준으로 따라잡는 만큼 줄인다
+   * (예전에는 소득이 따라잡은 뒤에도 남아 2050년대부터 남측 인구가 북측으로 크게 옮겨 갔다). old: 예전 저장에서 다시 나눌 때
+   */
+  initAmenityGap(old = false) {
+    let a = 0, w = 0;
+    for (let i = 0; i < this.Z; i++) if (!this.isExt[i] && !this.isKP[i]) { a += this.amenity[i] * this.pop[i]; w += this.pop[i]; }
+    const kr = w ? a / w : 0;
+    for (let i = 0; i < this.Z; i++) {
+      this.amenExcess[i] = this.isKP[i] && !this.isExt[i] ? Math.max(0, this.amenity[i] - kr) : 0;
+      this.inc0[i] = old && this.isKP[i] ? Math.min(this.income[i], P.incomeKP) : this.income[i];
+    }
+  }
+
+  /** 북측 소득이 시작 때에서 남측 수준(frontier)까지 따라잡은 몫 (0~1) */
+  catchUp(i) {
+    const a = Math.log(this.inc0[i] || 1), b = Math.log(this.frontier);
+    return b > a ? Math.min(1, Math.max(0, (Math.log(this.income[i]) - a) / (b - a))) : 1;
   }
 
   utility(i) {
     const dens = this.pop[i] / this.area[i];
     return Math.log(this.income[i]) + P.migAccessWeight * Math.log(this.access[i] / this.accessRef + 1e-6)
-      - P.migDensityElasticity * Math.log(dens + 1) + this.amenity[i];
+      - P.migDensityElasticity * Math.log(dens + 1) + this.amenity[i] - this.amenExcess[i] * this.catchUp(i);
   }
 
   /** 존별 인구이동 흐름. 반환: 존별 순유입 */
