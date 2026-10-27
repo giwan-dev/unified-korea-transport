@@ -243,14 +243,34 @@ function enableRoads(map) {
   map.on('moveend', update);
 }
 
+let unitIndex = null;
+
+/**
+ * 이 범위에 걸친 시도의 자세한 읍면동 경계 (data/admin/units). 지도 경계선과 같은 저장소를 쓰므로 두 번 받지 않고, 받으면 경계선도 그린다.
+ * 계산용 소구역(subzones.geojson)은 크게 단순화돼 있어, 그 모양으로 칠하면 지도 경계와 어긋나 쐐기·조각처럼 보인다
+ */
+export async function unitFeaturesIn(map, x0, y0, x1, y1) {
+  if (!unitIndex) unitIndex = await fetch('data/admin/units/index.json').then((r) => r.json()).catch(() => null);
+  if (!unitIndex) return [];
+  const need = unitIndex.filter(({ bbox: [a, b, c, d] }) => c >= x0 && a <= x1 && d >= y0 && b <= y1);
+  let added = false;
+  await Promise.all(need.map(async (e) => {
+    if (unitFiles.get(e.file)?.length) return;
+    const fc = await fetch(`data/admin/units/${e.file}`).then((r) => r.json()).catch(() => null);
+    if (fc) { unitFiles.set(e.file, fc.features); added = true; }
+  }));
+  if (added && map) setUnits(map);
+  return need.flatMap((e) => unitFiles.get(e.file) || []);
+}
+
 /** 9배 이상 확대하면 화면에 들어온 시도의 읍면동 경계 파일만 받아 그린다 */
 function enableUnits(map) {
-  let index = null;
   const loaded = unitFiles;
   const update = async () => {
     if (map.getZoom() < 8.5) return;
     // 받기에 실패하면(연결 끊김 등) 다음에 지도를 옮길 때 다시 받는다
-    if (!index) index = await fetch('data/admin/units/index.json').then((r) => r.json()).catch(() => null);
+    if (!unitIndex) unitIndex = await fetch('data/admin/units/index.json').then((r) => r.json()).catch(() => null);
+    const index = unitIndex;
     if (!index) return;
     const b = map.getBounds();
     const need = index.filter(({ bbox: [x0, y0, x1, y1] }) => x1 >= b.getWest() && x0 <= b.getEast() && y1 >= b.getSouth() && y0 <= b.getNorth())

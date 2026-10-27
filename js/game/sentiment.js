@@ -58,7 +58,7 @@ export function updateMayorApproval(state, zGains) {
   const prev = state.zoneGainPrev || [];
   for (const [k, off] of Object.entries(state.local?.offices || {})) {
     if (!k.startsWith('m:')) continue;
-    const i = +k.slice(2);
+    const i = parseInt(k.slice(2), 10);   // 분구한 구의 구청장은 'm:존#구'
     const d = (zGains[i] || 0) - (prev[i] ?? zGains[i] ?? 0);
     off.approval = clamp(off.approval + clamp(d * SENTI.mayorStep, -SENTI.mayorMax, SENTI.mayorMax), 0, 100);
   }

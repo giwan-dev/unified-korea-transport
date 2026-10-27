@@ -153,7 +153,12 @@ export async function migrateState(old, { base, zones }) {
   for (const sv of s.services || []) { sv.stops = mapArr(sv.stops, mN); sv.replan = true; }
   for (const p of s.ppp || []) p.links = mapArr(p.links, mL);
   if (s.local) {
-    const office = (k) => (k.startsWith('m:') ? (mZ(+k.slice(2)) >= 0 ? `m:${mZ(+k.slice(2))}` : null) : k);
+    // 'm:존' 또는 분구한 구의 'm:존#구'
+    const office = (k) => {
+      if (!k.startsWith('m:')) return k;
+      const [id, gu] = k.slice(2).split('#');
+      return mZ(+id) >= 0 ? `m:${mZ(+id)}${gu ? `#${gu}` : ''}` : null;
+    };
     s.local.offices = rekey(s.local.offices, office);
     for (const o of Object.values(s.local.offices)) if (o.zone != null) o.zone = mZ(o.zone);
     s.local.proposals = (s.local.proposals || []).filter((pr) => office(pr.office || '') !== null);
