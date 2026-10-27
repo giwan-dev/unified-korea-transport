@@ -281,7 +281,7 @@ export function cancelProject(base, state, id) {
   if (p.kind === 'airport') state.newAirports = (state.newAirports || []).filter((a) => a.id !== p.airport || a.built);
   for (const k of ['devels', 'sez', 'transfers']) if (state[k]) state[k] = state[k].filter((x) => x.id !== p.id);
   if (p.kind === 'housing') cancelHousingPhase(state, p);
-  if (state.restAreas) state.restAreas = state.restAreas.filter((r) => r.built || !(p.links || []).includes(r.links[0]));
+  if (state.restAreas) state.restAreas = state.restAreas.filter((r) => r.built || (r.project !== p.id && !(p.links || []).includes(r.links[0])));
   // 시민들은 짓다 만 사업을 반기지 않는다: 큰 사업일수록 지지율이 조금 내린다
   const hit = p.cost >= 50000 ? 2 : p.cost >= 10000 ? 1 : 0;
   state.approval = Math.max(0, state.approval - hit);
@@ -1051,7 +1051,7 @@ function completeProject(base, state, p) {
       for (const l of state.newLinks) if (l.mode >= 1 && !l.replaced && (want.has(l.a) || want.has(l.b))) { live.add(l.a); live.add(l.b); }
       (state.closedStations ||= []).push(...shut.filter((n) => !live.has(n)));
     }
-    for (const r of state.restAreas || []) if (p.links.includes(r.links[0])) r.built = true;
+    for (const r of state.restAreas || []) if (r.project === p.id || p.links.includes(r.links[0])) r.built = true;
     for (const s of p.stations) if (!state.newStations.includes(s)) state.newStations.push(s);
   }
 }

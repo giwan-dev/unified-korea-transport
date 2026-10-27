@@ -27,6 +27,17 @@ export const UPGRADES = [
     applies: (l) => l.lanes < 10,
     apply: (l) => ({ lanes: l.lanes + 2 }),
   },
+  // 고속도로를 줄이거나 내리는 개량: 수요가 적은 북측 고속도로·도심 구간 정리
+  {
+    id: 'narrow', mode: 0, label: '차로 축소 (−2차로, 유지비 절감·보행 공간)', perKm: 15, years: 1,
+    applies: (l) => l.lanes > 2,
+    apply: (l) => ({ lanes: l.lanes - 2 }),
+  },
+  {
+    id: 'tonational', mode: 0, label: '국도 전환 (고속도로 지정 해제, 80km/h)', perKm: 10, years: 1,
+    applies: (l) => l.cls === 'motorway',
+    apply: (l) => ({ cls: 'trunk', speed: Math.min(l.speed, 80) }),
+  },
   {
     id: 'tomotorway', mode: 0, label: '고속도로 격상 (4차로)', perKm: 300, years: 4,
     applies: (l) => l.cls !== 'motorway',

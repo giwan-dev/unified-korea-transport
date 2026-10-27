@@ -3461,6 +3461,7 @@
   },
   {
    "id": "pyongyang-kaesong-expwy",
+   "retireLine": ["평양-개성고속도로"],
    "name": "평양–개성 고속도로 재건설",
    "type": "motorway",
    "group": "남북 연결",
@@ -5145,6 +5146,7 @@
   },
   {
    "id": "pyongyang-wonsan-expwy",
+   "retireLine": ["평양원산관광도로"],
    "name": "평양–원산 고속도로 재건설",
    "type": "motorway",
    "group": "북측 간선",
