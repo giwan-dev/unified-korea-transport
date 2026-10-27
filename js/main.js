@@ -291,7 +291,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { planStraighten: () => planStraighten(), openPlan, refreshPoints, openServiceEditor, popNear, effectiveGrid, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { reopenPlan: (id) => reopenPlan(id), startReopen: (id) => startReopen(id), planStraighten: () => planStraighten(), openPlan, refreshPoints, openServiceEditor, popNear, effectiveGrid, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
@@ -5207,7 +5207,7 @@ function drawHousingSites() {
 }
 
 // 택지지구 자리: 기존 시가지(반경 1km 인구밀도) 밖, 평지(단지 범위 안 표고 차·거칠기), 물·다른 택지지구와 겹치지 않는 곳
-const HOUSING_SITE = { r: { s: 0.6, m: 1.0, l: 1.6 }, urbanDensity: 3000, reliefM: 60, roughM: 40, searchKm: 6 };
+const HOUSING_SITE = { r: { s: 0.6, m: 1.0, l: 1.6, xl: 2.4 }, urbanDensity: 3000, reliefM: 60, roughM: 40, searchKm: 6 };
 
 // 도심(업무지구)은 사는 사람이 적어도 시가지다: 1km 안 도로 교차점·역이 많으면 시가지로 본다
 let fabricGrid = null;
@@ -5381,11 +5381,11 @@ function housingClick(e) {
 }
 
 /**
- * 택지지구 도로망: 단지 가운데에서 네 방향으로 4차로 간선도로(십자 축)를 경계까지 깔고,
+ * 택지지구 도로망: 단지 가운데에서 네 방향으로 4차로 간선도로(십자 축)를 경계까지 깔고 (1기 신도시급은 여덟 방향 6차로),
  * 경계 끝마다 바깥 4km 안의 가장 가까운 간선도로 노드에 잇는다. 광역교통개선대책이 있으면 연결도로를 4차로로,
  * 고속도로 IC까지 따로 잇는다(12km 안). 연결도로 공사비(억원)와 링크·노드 계획을 돌려준다 (아직 망에 넣지 않는다)
  */
-function housingRoadPlan({ lon, lat, ring, R, name, levy }) {
+function housingRoadPlan({ lon, lat, ring, R, name, levy, households = 0 }) {
   const kx = 111.32 * Math.cos((lat * Math.PI) / 180), ky = 110.57;
   const seed = Math.abs(Math.round((lon * 1000 + lat * 777) % 90));
   const ang0 = (seed * Math.PI) / 180;
@@ -5425,11 +5425,12 @@ function housingRoadPlan({ lon, lat, ring, R, name, levy }) {
     return best;
   };
   const arms = [], links = [];
+  const big = households >= HOUSING.bigTown, nArm = big ? 8 : 4;
   let connKm = 0;
-  for (let k = 0; k < 4; k++) {
-    const a = ang0 + (k * Math.PI) / 2, e = edgeAt(a);
+  for (let k = 0; k < nArm; k++) {
+    const a = ang0 + (k * 2 * Math.PI) / nArm, e = edgeAt(a);
     arms.push(e);
-    links.push({ from: 'C', to: `E${k}`, pts: [[lon, lat], e], attrs: { cls: 'primary', lanes: 4, speed: 50, name: `${name.replace(/지구$/, '')}대로` } });
+    links.push({ from: 'C', to: `E${k}`, pts: [[lon, lat], e], attrs: { cls: 'primary', lanes: big ? 6 : 4, speed: big ? 60 : 50, name: `${name.replace(/지구$/, '')}대로` } });
     const n = nearestRoad(e, a);
     if (n != null) {
       const c = nodeCoord(n);
@@ -5478,13 +5479,13 @@ function openHousingDialog({ lon, lat, zi0 = -1, ring = null, km2 = null, househ
   const rows = options.map((o) => {
     if (o.why) return `<div class="item"><div class="t">${o.label} · ${o.households.toLocaleString()}세대</div><div class="m">이 자리에는 들어가지 않습니다 (${o.why}).</div></div>`;
     const pl = housingPlan({ households: o.households, zone: zp, lat, lon, score: sc.score });
-    const rp = housingRoadPlan({ lon, lat, ring, R: o.R, name, levy: pl.levy > 0 });
+    const rp = housingRoadPlan({ lon, lat, ring, R: o.R, name, levy: pl.levy > 0, households: o.households });
     const roadCost = Math.max(0, rp.connCost - pl.levy);   // 연결도로는 분담금으로 놓고, 모자라면 더 낸다
     const phaseSel = o.households >= HOUSING.levyMin
       ? `<label class="m"><input type="checkbox" data-phase="${o.key}"> 2단계로 나눠 짓기 (절반은 ${HOUSING.phase2Lag}년 늦게 준공)</label>` : '';
     return `<div class="item"><div class="t">${o.label} · ${o.households.toLocaleString()}세대 · 입주 ${fmtPeople(pl.persons)} (모두 순증)</div>
       <div class="m">택지 조성 ${formatWon(pl.cost)}${pl.levy ? ` + 광역교통개선대책 분담금 ${formatWon(pl.levy)}` : ''}${roadCost ? ` + 연결도로 ${formatWon(roadCost)}` : ''} · ${pl.years}년 · 분양 수익 ${formatWon(pl.revenue)}</div>
-      <div class="m">도로망: 단지 안 4차로 간선 십자 축, 둘레 간선도로 연결 ${rp.links.filter((r) => /연결도로$/.test(r.attrs.name) && !r.ic).length}곳${rp.links.find((r) => r.ic) ? ` · ${esc(rp.links.find((r) => r.ic).ic)}까지 4차로` : ''} (연결도로 ${rp.connKm.toFixed(1)}km)</div>
+      <div class="m">도로망: 단지 안 ${o.households >= HOUSING.bigTown ? '6차로 간선 여덟 방향' : '4차로 간선 십자 축'}, 둘레 간선도로 연결 ${rp.links.filter((r) => /연결도로$/.test(r.attrs.name) && !r.ic).length}곳${rp.links.find((r) => r.ic) ? ` · ${esc(rp.links.find((r) => r.ic).ic)}까지 4차로` : ''} (연결도로 ${rp.connKm.toFixed(1)}km)</div>
       ${phaseSel}
       <button class="small primary" data-housing="${o.key}">착공</button></div>`;
   }).join('');
@@ -5513,7 +5514,7 @@ function openHousingDialog({ lon, lat, zi0 = -1, ring = null, km2 = null, househ
     if (k !== 'cancel') {
       const o = options.find((x) => x.key === k);
       const pl = housingPlan({ households: o.households, zone: zp, lat, lon, score: sc.score });
-      const rp = housingRoadPlan({ lon, lat, ring, R: o.R, name, levy: pl.levy > 0 });
+      const rp = housingRoadPlan({ lon, lat, ring, R: o.R, name, levy: pl.levy > 0, households: o.households });
       const roadCost = Math.max(0, rp.connCost - pl.levy);
       const phases = wrap.querySelector(`[data-phase="${k}"]`)?.checked ? 2 : 1;
       const n0 = state.newNodes.length, l0 = state.newLinks.length;
@@ -7006,29 +7007,67 @@ function startClosedReopen(id, type) {
 
 // ------------------------------------------------------------ 여객 재개통 (역이 없거나 거의 없어 아무도 타지 않는 선로)
 
-const REOPEN = { perKm: 30, station: 150, years: 2, minPop: 1500, spacingKm: 4, maxStations: 15 };
+const REOPEN = { perKm: 30, station: 150, years: 2, minPop: 1500, spacingKm: 4, maxStations: 15, sampleKm: 1, minKm: 5 };
+// 여객 재개통 대상이 아닌 선로: 이미 여객 열차가 지나는 노선 사이를 잇는 짧은 연결선·삼각선, 차량기지·시험선, 국경 다리
+const REOPEN_SKIP = /삼각선|연결선|기지선|시험선|진입선|입환|친선교|다리$|고속선/;
 
-/** 노선(같은 이름 구간들) 위 노드 가운데 반경 2km 인구가 많은 곳을 서로 4km 이상 떨어지게 골라 역 자리로 */
+/** 구간 도형을 따라 stepKm마다 짚은 점들 [lon, lat] */
+function sampleAlong(geom, stepKm) {
+  const out = [];
+  let need = stepKm;   // 다음 점까지 남은 거리
+  for (let k = 0; k + 3 < geom.length; k += 2) {
+    const x1 = geom[k], y1 = geom[k + 1], x2 = geom[k + 2], y2 = geom[k + 3];
+    if ([x1, y1, x2, y2].some(Number.isNaN)) continue;
+    const d = kmBetween(x1, y1, x2, y2);
+    let pos = 0;
+    while (d - pos >= need) { pos += need; need = stepKm; out.push([x1 + ((x2 - x1) * pos) / d, y1 + ((y2 - y1) * pos) / d]); }
+    need -= d - pos;
+  }
+  return out;
+}
+
+/**
+ * 노선(같은 이름 구간들)을 따라 1km마다 짚은 자리 가운데 반경 2km 인구가 많은 곳을 역 자리로 고른다.
+ * 기존 역(어느 노선이든)과 고른 역끼리 4km 넘게 떨어지게 한다. 노드가 아닌 자리는 착공 때 선로를 갈라 역을 놓는다
+ * (예전에는 선로 노드만 후보여서 긴 선로에 역이 한두 곳뿐이었고, 같은 노선 역하고만 거리를 재서 연결선·삼각선에 큰 역 바로 옆 역을 내던 것)
+ */
 function reopenPlan(id) {
-  const route = sameRoute(id).filter((i) => !(i < base.links.length && linkPending(base, state, i)) && !state.replaced?.[i]);
-  const stations = new Set(effectiveNetwork(base, state).stations);
+  const l0 = linkAt(base, state, id);
+  if (REOPEN_SKIP.test(l0.name || '')) return null;
+  const route = sameRoute(id).filter((i) => !(i < base.links.length && linkPending(base, state, i)) && !state.replaced?.[i] && !(i >= base.links.length && state.newLinks[i - base.links.length]?.replaced));
+  const net = effectiveNetwork(base, state);
+  const stations = new Set(net.stations);
   const nodes = new Set();
   let km = 0, kp = 0;
   for (const i of route) { const l = linkAt(base, state, i); nodes.add(l.a); nodes.add(l.b); km += l.len; if (l.kp) kp += l.len; }
+  if (km < REOPEN.minKm) return null;
   const have = [...nodes].filter((n) => stations.has(n));
   if (have.length > Math.max(1, km / 15)) return null;   // 역이 이미 넉넉하면 재개통 대상이 아니다
-  const far = (n, list) => list.every((m) => { const a = nodeCoord(n), b = nodeCoord(m); return kmBetween(a[0], a[1], b[0], b[1]) >= REOPEN.spacingKm; });
-  const cand = [...nodes].filter((n) => !stations.has(n)).map((n) => { const c = nodeCoord(n); return { n, pop: c ? popNear(c[0], c[1], 2) : 0 }; })
-    .filter((x) => x.pop >= REOPEN.minPop).sort((a, b) => b.pop - a.pop);
+  // 둘레 기존 역 (철도·도시철도 모두): 그 4km 안에는 새 역을 내지 않는다
+  const xs = route.flatMap((i) => { const l = linkAt(base, state, i); return [nodeCoord(l.a), nodeCoord(l.b)]; }).filter(Boolean);
+  const pad = 0.6;
+  const x0 = Math.min(...xs.map((c) => c[0])) - pad, x1 = Math.max(...xs.map((c) => c[0])) + pad, y0 = Math.min(...xs.map((c) => c[1])) - pad, y1 = Math.max(...xs.map((c) => c[1])) + pad;
+  const near = [];
+  for (const n of stations) { const c = nodeCoord(n); if (c && c[0] > x0 && c[0] < x1 && c[1] > y0 && c[1] < y1) near.push(c); }
+  // 후보: 노선 노드 + 구간 도형 위 1km마다
+  const cand = [];
+  for (const n of nodes) if (!stations.has(n)) { const c = nodeCoord(n); if (c) cand.push({ n, link: null, lon: c[0], lat: c[1] }); }
+  for (const i of route) {
+    const l = linkAt(base, state, i);
+    if (!l.geom) continue;
+    for (const [x, y] of sampleAlong(l.geom, REOPEN.sampleKm)) cand.push({ n: null, link: i, lon: x, lat: y });
+  }
+  for (const c of cand) c.pop = popNear(c.lon, c.lat, 2);
+  const far = (c, list) => list.every(([x, y]) => kmBetween(c.lon, c.lat, x, y) >= REOPEN.spacingKm);
   const pick = [];
-  for (const x of cand) {
+  for (const c of cand.filter((x) => x.pop >= REOPEN.minPop).sort((a, b) => b.pop - a.pop || (a.n == null) - (b.n == null))) {
     if (pick.length >= REOPEN.maxStations) break;
-    if (far(x.n, [...have, ...pick.map((p) => p.n)])) pick.push(x);
+    if (far(c, near) && far(c, pick.map((q) => [q.lon, q.lat]))) pick.push(c);
   }
   if (!pick.length) return null;
   const f = kp * 2 > km ? KP_COST_FACTOR : 1;
   const cost = Math.round((REOPEN.perKm * km + REOPEN.station * pick.length) * f);
-  return { route, km, pick, cost, pop: pick.reduce((s, x) => s + x.pop, 0) };
+  return { route, km, pick, cost, pop: pick.reduce((s0, x) => s0 + x.pop, 0) };
 }
 
 function reopenHTML(id, l) {
@@ -7042,14 +7081,38 @@ function reopenHTML(id, l) {
     <div class="actions"><button class="small ${ok ? 'primary' : ''}" id="reopen-go" ${ok ? '' : 'disabled'}>재개통 ${formatWon(r.cost)} · ${REOPEN.years}년</button></div>`;
 }
 
+/** 갈라진(splitLink) 구간이면 그 조각들 가운데 이 점에 가장 가까운 것 */
+function liveLinkAt(id, lon, lat) {
+  const gone = (i) => (i < base.links.length ? state.replaced?.[i] : state.newLinks[i - base.links.length]?.replaced);
+  while (gone(id)) {
+    let best = null, bd = Infinity;
+    state.newLinks.forEach((nl, k) => {
+      if (nl.split !== id) return;
+      const g = nl.geom || [];
+      for (let j = 0; j + 1 < g.length; j += 2) { const d = (g[j] - lon) ** 2 + (g[j + 1] - lat) ** 2; if (d < bd) { bd = d; best = base.links.length + k; } }
+    });
+    if (best == null) return id;
+    id = best;
+  }
+  return id;
+}
+
 function startReopen(id) {
   const r = reopenPlan(id);
   if (!r) return;
   if (!canAfford(state, r.cost, REOPEN.years)) { alert('예산과 차입 한도가 부족합니다.'); return; }
   const l = linkAt(base, state, id);
+  // 노드가 아닌 역 자리는 선로를 갈라 노드를 만든다 (역은 완공 때 연다)
+  for (const x of r.pick) if (x.n == null) x.n = splitLink(base, state, liveLinkAt(x.link, x.lon, x.lat), x.lon, x.lat);
+  // 시속 70km로 손볼 구간: 갈라진 구간은 그 조각 모두
+  const pieces = (i) => {
+    const gone = i < base.links.length ? state.replaced?.[i] : state.newLinks[i - base.links.length]?.replaced;
+    if (!gone) return [i];
+    return state.newLinks.flatMap((nl, k) => (nl.split === i ? pieces(base.links.length + k) : []));
+  };
   const newNames = {};
-  for (const x of r.pick) { const c = nodeCoord(x.n); newNames[x.n] = { name: namer ? namer.suggest(c[0], c[1], 'station') : `${l.name || ''}역`, kind: 'station', auto: true }; }
-  startProject(state, { id: crypto.randomUUID(), kind: 'reopen', links: [], relinks: r.route, stations: r.pick.map((x) => x.n), newNames,
+  for (const x of r.pick) newNames[x.n] = { name: namer ? namer.suggest(x.lon, x.lat, 'station') : `${l.name || ''}역`, kind: 'station', auto: true };
+  startProject(state, { id: crypto.randomUUID(), kind: 'reopen', links: [], relinks: [...new Set(r.route.flatMap(pieces))], stations: r.pick.map((x) => x.n), newNames,
     cost: r.cost, years: REOPEN.years, fund: fundFor(state, [l]), label: `${l.name || '선로'} 여객 재개통 (역 ${r.pick.length}곳)` });
   save(state); renderAll();
 }

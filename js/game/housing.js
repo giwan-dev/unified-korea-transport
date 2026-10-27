@@ -10,8 +10,10 @@ export const HOUSING = {
   sizes: {
     s: { label: '소규모', households: 10000 },
     m: { label: '중규모', households: 25000 },
-    l: { label: '신도시급', households: 50000 },
+    l: { label: '2기 신도시급', households: 50000 },
+    xl: { label: '1기 신도시급 (분당·일산 규모)', households: 100000 },
   },
+  bigTown: 80000,            // 이 세대 수 이상이면 간선 축을 여덟 방향 6차로로 (분당·일산처럼 격자 간선망)
   density: 6000,             // 직접 그린 구역: km²당 세대 (3기 신도시 평균쯤)
   householdSize: 2.4,
   siteCost: { capital: 0.9, metro: 0.6, other: 0.4, kp: 0.25 },   // 세대당 토지 보상·단지 안 기반시설 (억원)
@@ -25,9 +27,9 @@ export const HOUSING = {
   complaintKm: 3,            // 입주를 마쳤는데 이보다 먼 곳에만 철도역이 있으면 교통 대책 민원
 };
 
-/** 세대 수에 따른 공기 (1만 세대 5년, 5만 세대 8년쯤) */
+/** 세대 수에 따른 공기 (1만 세대 5년, 5만 세대 8년, 10만 세대 10년쯤: 분당은 1989년 착공, 1996년 준공) */
 export function housingYears(households) {
-  return Math.round(Math.min(9, 4 + households / 12500));
+  return Math.round(Math.min(10, 4 + households / 12500));
 }
 
 /**
