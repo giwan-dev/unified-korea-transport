@@ -289,6 +289,9 @@ function enableUnits(map) {
 /** 도로 혼잡도(V/C) 색 단계 */
 export const VC_STOPS = [[0, '#3f9e63'], [0.6, '#c5c23a'], [1, '#f0a030'], [2, '#e0582c'], [4, '#c21f2f'], [7, '#7e1048'], [10, '#2e0a3f']];
 
+const PARTY_NAMES = ['민주당', '국민의힘', '개혁신당', '정의당', '무소속', '관선 (임명)'];
+const PARTY_MAP = { ramp: ['#1f5fd1', '#e0383e', '#ff7210', '#e6b800', '#7d848d', '#4b5563'], stops: [0, 1, 2, 3, 4, 5], categorical: PARTY_NAMES, fmt: (v) => PARTY_NAMES[Math.round(v)] || '' };
+
 export const METRICS = {
   none: { label: '표시 안 함' },
   density: { label: '인구 밀도 (1km 격자)' },
@@ -302,8 +305,9 @@ export const METRICS = {
   hdi: { label: '인간개발지수 (HDI)', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [0.55, 0.65, 0.75, 0.85, 0.95], fmt: (v) => v.toFixed(2) },
   income: { label: '1인당 소득 (PPP $)', ramp: ['#f7f4ea', '#c7d9ee', '#5b8fd1', '#1d3f8f'], stops: [2000, 10000, 30000, 60000], fmt: (v) => `$${Math.round(v / 1000)}k` },
   happiness: { label: '주민 행복도', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [40, 50, 60, 70, 80], fmt: (v) => v.toFixed(0) },
-  partyMayor: { label: '정당 지도 (시군구청장)', ramp: ['#1f5fd1', '#f2f2f2', '#e0383e'], stops: [0, 0.5, 1], fmt: (v) => (v < 0.5 ? '민주당' : '국민의힘') },
-  partyGov: { label: '정당 지도 (광역단체장)', ramp: ['#1f5fd1', '#f2f2f2', '#e0383e'], stops: [0, 0.5, 1], fmt: (v) => (v < 0.5 ? '민주당' : '국민의힘') },
+  // 지자체장 소속 정당: 정당마다 한 색 (값은 정당 번호: 민주당 0, 국민의힘 1, 개혁신당 2, 정의당 3, 무소속 4, 관선 5)
+  partyMayor: { label: '지자체장 소속 정당 (시군구청장)', ...PARTY_MAP },
+  partyGov: { label: '지자체장 소속 정당 (광역단체장)', ...PARTY_MAP },
   access: { label: '접근성 (상대)', ramp: ['#f7f4ea', '#c8e0b4', '#5aa36b', '#1d5c3a'], stops: [0.2, 0.6, 1.2, 2.5], fmt: (v) => v.toFixed(1) },
 };
 
@@ -782,7 +786,10 @@ export function legendHTML(metric, view = 'all', basemap = 'plain') {
   const m = METRICS[metric];
   const opts = Object.entries(METRICS).map(([k, v]) => `<option value="${k}" ${k === metric ? 'selected' : ''}>${v.label}</option>`).join('');
   let ramp = '';
-  if (m.ramp) {
+  if (m.categorical) {
+    // 정당처럼 나뉘는 값은 색 띠 대신 색 칸
+    ramp = `<div style="display:flex;flex-wrap:wrap;gap:4px 8px;font-size:11px;margin-top:4px">${m.categorical.map((n, k) => `<span style="display:inline-flex;align-items:center;gap:3px"><i style="width:10px;height:10px;border-radius:2px;background:${m.ramp[k]};display:inline-block"></i>${n}</span>`).join('')}</div>`;
+  } else if (m.ramp) {
     ramp = `<div class="ramp" style="background:linear-gradient(to right,${m.ramp.join(',')})"></div>
       <div class="ends"><span>${m.fmt(m.stops[0])}</span><span>${m.fmt(m.stops[m.stops.length - 1])}</span></div>`;
   }

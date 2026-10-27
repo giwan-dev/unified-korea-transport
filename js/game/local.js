@@ -4,7 +4,13 @@
 export const PARTIES = {
   D: { name: '더불어민주당', short: '민주당', color: '#1f5fd1' },
   P: { name: '국민의힘', short: '국민의힘', color: '#e0383e' },
+  R: { name: '개혁신당', short: '개혁신당', color: '#ff7210' },
+  J: { name: '정의당', short: '정의당', color: '#e6b800' },
+  I: { name: '무소속', short: '무소속', color: '#7d848d' },
 };
+/** 두 큰 정당 밖 (3당·무소속): 접전 지역에서 가끔 이기고, 현직이면 지지율에 따라 지킨다 */
+export const THIRD = ['R', 'J', 'I'];
+const THIRD_W = [['I', 0.45], ['R', 0.3], ['J', 0.25]];
 
 /** 시도별 국민의힘 양당 득표율 어림 (2022 지방선거 광역단체장 기준 단순화). 북측은 반반에서 시작 */
 const LEAN_P = {
@@ -270,15 +276,76 @@ export function leanP(z) {
 
 /** 선거 한 번: 현직 정당의 득표에 지지율(50 기준)과 실적을 반영. rnd: 0~1 난수 함수 */
 /** mood: 이번 선거의 전국 바람 (국민의힘 쪽 +, 모든 지역에 같이 붙는다) */
-export function runElection(lean, office, rnd, mood = 0) {
-  let p = lean + mood;
-  if (office) {
+export function runElection(lean, office, rnd, mood = 0, third = null) {
+  // 3당·무소속: 현직이면 지지율만큼 지키고, 아니면 접전(두 큰 정당 차이 12%p 안)일수록 이변이 난다 (실제로는 드물다).
+  // third: 이 지역 3당·무소속 지지 변동(%p, {R, J, I}): 플레이어가 그 당 제안을 받아 주면 오른다
+  const thirdInc = office && THIRD.includes(office.party);
+  const two = lean + mood;
+  const boost = third ? Math.max(0, (third.R || 0) + (third.J || 0) + (third.I || 0)) / 100 : 0;
+  const chance = thirdInc ? 0.25 + ((office.approval - 50) / 50) * 0.25 : 0.025 + (Math.abs(two - 0.5) < 0.06 ? 0.05 : 0) + boost;
+  if (rnd() < chance) {
+    let party = thirdInc ? office.party : 'I';
+    if (!thirdInc) {
+      const ws = THIRD_W.map(([k, w]) => [k, Math.max(0.01, w + (third?.[k] || 0) / 10)]);
+      let r = rnd() * ws.reduce((t, [, w]) => t + w, 0);
+      for (const [k, w] of ws) { if ((r -= w) < 0) { party = k; break; } }
+    }
+    return { party, share: 0.36 + rnd() * 0.12 };
+  }
+  let p = two;
+  if (office && !thirdInc) {
     const swing = ((office.approval - 50) / 50) * 0.12 + Math.min(0.06, (office.delivered || 0) * 0.015);
     p += office.party === 'P' ? swing : -swing;
   }
-  p += (rnd() - 0.5) * 0.08;
+  p += (rnd() - 0.5) * 0.12;   // 지역마다 후보·쟁점 차이
   p = Math.min(0.97, Math.max(0.03, p));
   return { party: p >= 0.5 ? 'P' : 'D', share: p >= 0.5 ? p : 1 - p };
+}
+
+/**
+ * 시군의 정당 지지율 (합 1): 기본 성향(leanP: 두 큰 정당 몫) 위에 광역 단체별 변동(%p, 제안을 받아 주거나 거절해 오르내림)을 더한다
+ * @param {object} delta 그 광역 단체의 {D, P, R, J, I} 변동 (%p)
+ */
+export function partySupport(z, delta = {}) {
+  const lp = leanP(z);
+  const s = { D: 0.86 * (1 - lp), P: 0.86 * lp, R: 0.05, J: 0.04, I: 0.05 };
+  for (const k of Object.keys(s)) s[k] = Math.max(0.005, s[k] + (delta[k] || 0) / 100);
+  const t = Object.values(s).reduce((a, b) => a + b, 0);
+  for (const k of Object.keys(s)) s[k] /= t;
+  return s;
+}
+
+/** 지자체장 연임 한도 (지방자치법: 3기까지) */
+export const TERM_LIMIT = 3;
+/** 현직이 같은 정당 공천을 받지 못하거나 나서지 않을 확률 (선거마다, 연임 한도 전) */
+export const RETIRE_CHANCE = 0.2;
+
+// 지자체장 이름 (게임 속 가상 인물): 성은 대략 인구 비율로, 이름은 1950~70년대생에 흔한 음절로
+const SURNAMES = [['김', 215], ['이', 147], ['박', 84], ['최', 47], ['정', 43], ['강', 24], ['조', 21], ['윤', 21], ['장', 20], ['임', 17], ['한', 15], ['오', 15],
+  ['서', 15], ['신', 14], ['권', 14], ['황', 14], ['안', 13], ['송', 13], ['전', 11], ['홍', 11], ['유', 10], ['고', 9], ['문', 9], ['양', 9], ['손', 9], ['배', 8],
+  ['백', 7], ['허', 6], ['남', 5], ['심', 5], ['노', 4], ['하', 4], ['곽', 4], ['성', 4], ['차', 4], ['주', 4], ['우', 4], ['구', 4], ['민', 3], ['류', 3], ['나', 3],
+  ['진', 3], ['지', 3], ['엄', 3], ['채', 3], ['원', 3], ['천', 2], ['방', 2], ['공', 2], ['현', 2], ['함', 2], ['변', 2], ['염', 2], ['여', 1], ['추', 1], ['도', 1],
+  ['석', 1], ['선', 1], ['설', 1], ['길', 1], ['연', 1], ['위', 1], ['표', 1], ['명', 1], ['반', 1], ['왕', 1], ['금', 1], ['옥', 1], ['육', 1], ['남궁', 1], ['황보', 1]];
+// 북측 표기 (두음법칙 없음)
+const KP_SURNAME = { 이: '리', 임: '림', 노: '로', 유: '류', 나: '라', 양: '량' };
+const GIVEN = {
+  m1: '영성정상동재승진종용병기경광명현준태석수철형대인규창학호원만세흥', m2: '수호철민식준훈석진기영우환혁일규남섭근길국현태성용배',
+  f1: '영정미은혜경순명현숙희옥선', f2: '숙자옥순미경희영정화애',
+  k1: '영성광명철정룡학경일혁남국춘', k2: '철혁룡남일국성수호진식명학',
+};
+const pick = (s, rnd) => s[Math.floor(rnd() * s.length)];
+
+/** 가상 지자체장 이름. side: 'KP'면 북측 표기·이름 결 */
+export function personName(rnd, side = 'KR') {
+  const tot = SURNAMES.reduce((t, [, w]) => t + w, 0);
+  let r = rnd() * tot, sur = '김';
+  for (const [s, w] of SURNAMES) { if ((r -= w) < 0) { sur = s; break; } }
+  if (side === 'KP') sur = KP_SURNAME[sur] || sur;
+  const female = rnd() < 0.15;
+  const a = female ? pick(GIVEN.f1, rnd) : side === 'KP' ? pick(GIVEN.k1, rnd) : pick(GIVEN.m1, rnd);
+  let b = female ? pick(GIVEN.f2, rnd) : side === 'KP' ? pick(GIVEN.k2, rnd) : pick(GIVEN.m2, rnd);
+  if (b === a) b = pick(female ? GIVEN.f2 : GIVEN.m2, rnd);
+  return sur + a + b;
 }
 
 /** 단체장 지지율 변화: 받아들인 제안 +3, 완공 +6, 거절 -4 (0~100) */

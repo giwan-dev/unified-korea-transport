@@ -47,7 +47,7 @@ import { P } from './sim/params.js';
 import { PPP_TYPES, PPP_DEFAULTS, initPPP, tollKind, linkToll, annualRevenue, evaluatePPP } from './game/ppp.js';
 import {
   PARTIES, initLocal, regionOf, hasAutonomy, leanP, runElection, bumpApproval, governorTitle, mayorTitle, countyTitle, metroName, isMetroCity,
-  HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST, ADMIN_OPTIONS, ADMIN_DEFAULT, adminNames, HISTORIC_COUNTIES, PROPAGANDA_STEMS, kpPlaceText, CITY_UP_MIN_POP, countyId, unitId, REGION_RENAMED, promotedName, countyDisplayName, regionBase,
+  HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST, ADMIN_OPTIONS, ADMIN_DEFAULT, adminNames, HISTORIC_COUNTIES, PROPAGANDA_STEMS, kpPlaceText, CITY_UP_MIN_POP, countyId, unitId, REGION_RENAMED, personName, TERM_LIMIT, RETIRE_CHANCE, partySupport, THIRD, promotedName, countyDisplayName, regionBase,
 } from './game/local.js';
 import { openAdminSetup } from './ui/setup.js';
 import { flushSave, saveError, slotMeta, saveSlot, loadSlot, keepBackup, loadBackup } from './game/savestore.js';
@@ -135,6 +135,7 @@ async function init() {
   fetch('data/closed_lines.json').then((r) => (r.ok ? r.json() : { lines: [] })).then((c) => { closedFile = c.lines || []; closedLines = closedFile; if (map) refreshClosed(); }).catch(() => {});
   fetch('data/plans.json').then((r) => (r.ok ? r.json() : { plans: [] })).then((p) => { plans = p.plans || []; migratePlanLines(); if (map) renderBuild(); }).catch(() => {});
   fetch('data/historic_targets.json').then((r) => (r.ok ? r.json() : [])).then((h) => { historic = h; }).catch(() => {});
+  fetch('data/halls.json').then((r) => (r.ok ? r.json() : [])).then((h) => { halls = h; if (map) drawHalls(); }).catch(() => {});
   rememberNetwork(meta?.stamp, base, zoneProps);
   subPop0 = zoneProps.flatMap((zp) => zp.subs.map((s) => s[2] * zp.pop));
   state = await load();
@@ -175,6 +176,7 @@ async function init() {
   for (const nl of state.newLinks || []) if (nl.mode >= 1 && !nl.sstd && (nl.split == null || nl.split >= base.links.length)) { nl.sstd = 1; nl.std = 1; }
   if (convertRadialHousingRoads()) save(state);   // 예전 1기 신도시급 방사형 간선 → # 격자
   // 예전 저장: 광역시로 승격한 시 자체는 중구, 편입한 시군은 구가 됐다 → 단체장 직함을 지금 이름으로
+  renamePyongyangMetro();
   initLocal(state);
   syncGovernors();
   if (state.local?.independent?.length || Object.keys(state.local?.annex || {}).length) syncMayors();
@@ -198,7 +200,7 @@ async function init() {
   initPPP(state);
   if (!Object.keys(state.local.offices).length) holdElection('all', '지방선거 (게임 시작 시점)');
   // 지방자치가 없는 북측 도의 단체장 (예전 저장: 장단·옹진을 북측 도로 옮기면 그 도에 도지사를 뽑던 것)은 지운다
-  { const regs = regions(); for (const k of Object.keys(state.local.offices)) if (k.startsWith('g:') && !regs.has(k.slice(2))) delete state.local.offices[k]; }
+  { const regs = regions(); for (const [k, o] of Object.entries(state.local.offices)) if (k.startsWith('g:') && !regs.has(k.slice(2)) && !o.appointed) delete state.local.offices[k]; }
   syncMayors();   // 시군 단체장은 한 시군에 하나 (예전 저장: 옛 군 땅 조각마다 군수가 있던 것)
   for (const [k, off] of Object.entries(state.local.offices)) if (k.startsWith('g:')) off.title = governorTitle(k.slice(2));   // 직함은 지금 규칙으로
   // OSM 공사 중 노선 → 진행 중 사업 (이름 없는 구간은 가까운 시군 이름으로)
@@ -303,7 +305,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { fixBunguNames: () => fixBunguNames(), migrateSubKeys: (st, s) => migrateSubKeys(st, s), convertRadialHousingRoads: () => convertRadialHousingRoads(), reopenPlan: (id) => reopenPlan(id), startReopen: (id) => startReopen(id), planStraighten: () => planStraighten(), openPlan, refreshPoints, openServiceEditor, popNear, effectiveGrid, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { fixBunguNames: () => fixBunguNames(), holdElection: (o, r) => holdElection(o, r), hallList: () => hallList(), migrateSubKeys: (st, s) => migrateSubKeys(st, s), convertRadialHousingRoads: () => convertRadialHousingRoads(), reopenPlan: (id) => reopenPlan(id), startReopen: (id) => startReopen(id), planStraighten: () => planStraighten(), openPlan, refreshPoints, openServiceEditor, popNear, effectiveGrid, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
@@ -446,6 +448,29 @@ function settleSEZ(done) {
   }
 }
 
+/**
+ * 평양 지하철 천리마선·혁신선을 평양 도시철도 1·2호선으로 (통일 뒤 남측 도시철도처럼 번호로 부른다). 새 게임·예전 저장 모두.
+ * 게임에서 놓은 '평양 지하철 N호선'도 같이
+ */
+const PY_METRO = { 천리마선: '평양 도시철도 1호선', 혁신선: '평양 도시철도 2호선' };
+function renamePyongyangMetro() {
+  const to = (n) => PY_METRO[n] || (/^평양 지하철 \d+호선$/.test(n || '') ? n.replace('평양 지하철', '평양 도시철도') : null);
+  let n = 0;
+  base.links.forEach((l, i) => {
+    const cur = state.overrides[i]?.name ?? l.name, nw = l.mode === 2 && to(cur);
+    if (nw) { state.overrides[i] = { ...(state.overrides[i] || {}), name: nw }; n++; }
+  });
+  for (const l of state.newLinks) { const nw = l.mode === 2 && to(l.name); if (nw) { l.name = nw; n++; } }
+  for (const sv of state.services || []) {
+    if (to(sv.line)) sv.line = to(sv.line);
+    if (sv.lines) sv.lines = [...new Set(sv.lines.map((x) => to(x) || x))];
+    if (sv.name) for (const [a, b] of Object.entries(PY_METRO)) sv.name = sv.name.replace(a, b);
+  }
+  for (const p of state.projects || []) if (p.label) p.label = p.label.replace(/평양 지하철 (\d+)호선/g, '평양 도시철도 $1호선');
+  if (n && !state.pyMetroRenamed) state.log.unshift(`${state.year}년 평양 지하철 천리마선·혁신선을 평양 도시철도 1·2호선으로 부릅니다.`);
+  state.pyMetroRenamed = true;
+}
+
 function resetNamer() {
   const existing = [
     ...base.stations.map(([name]) => ({ name, kind: 'station' })),
@@ -458,6 +483,7 @@ function resetNamer() {
   namer = new Namer(places, existing);
   namer.stationHints = stationNameHints;
   namer.fix = (name, lon, lat) => kpFix(name, lon, lat);
+  namer.hallHints = (lon, lat) => hallsNear(lon, lat);
   renameNumbered();
 }
 
@@ -1200,6 +1226,77 @@ function subAnnexTargets(i) {
 }
 
 /** 따로 편입한 읍면동을 광역 경계처럼 굵은 선으로 */
+/**
+ * 시청·군청·구청 (data/halls.json, OSM 청사 또는 어림한 소재지). 이름은 지금 행정구역을 따른다:
+ * 군→시 승격하면 시청, 광역시에 편입한 시는 구청, 광역시로 승격한 시는 광역시청, 분구하면 구마다 구청(가운데 구는 원래 청사, 나머지는 인구가 가장 많은 읍면동).
+ * → [{name, kind: 'do'|'si'|'gun'|'gu', lon, lat}]
+ */
+let halls = [];
+function hallList() {
+  if (!state || !zoneProps) return [];
+  const L = state.local || {};
+  const out = [];
+  const bunguZones = new Set(Object.keys(L.bungu || {}).flatMap((u) => unitZones(u)));
+  for (const h of halls) {
+    const z = zoneProps[h.z];
+    if (!z || z.ext) continue;
+    let name;
+    if (h.k === 'do') name = `${regionOf(state, z)}청`;
+    else {
+      const own = promotedName(state, z);
+      const metro = L.independent?.includes(own) && !z.city;
+      if (metro) name = `${metroName(own)}청`;   // 광역시로 승격한 시의 청사는 광역시청
+      else if (h.k === 'si' && z.city) name = `${placeName(state, 'zone', h.z, z.city)}청`;   // 일반구가 있는 시(수원시)의 시청
+      else if (h.k === 'gu' && (z.city || /시$/.test(z.name)) && h.osm) name = h.osm;   // 시에 딸린 일반구 구청 (장안구청): 게임에서는 시 하나라 OSM 이름 그대로
+      else if (bunguZones.has(h.z) && !isGeneralGu(h.z)) {
+        const g = zoneGus(countyRep(h.z));
+        name = g ? `${g[0]}청` : `${officeName(h.z)}청`;   // 분구한 시군의 원래 청사는 가운데 구의 구청
+      } else name = `${officeName(h.z)}청`;
+    }
+    out.push({ name, kind: h.k, lon: h.x, lat: h.y });
+  }
+  // 분구한 구의 구청: 가운데 구(원래 청사 자리)를 뺀 구마다, 그 구에서 인구가 가장 많은 읍면동
+  for (const [unit, b] of Object.entries(L.bungu || {})) {
+    const zs = unitZones(unit);
+    if (!zs.length) continue;
+    const metroCore = L.independent?.includes(unit);   // 광역시로 승격한 도시: 원래 청사는 광역시청이 되고 중구청은 따로
+    const core = b.core || zoneGus(countyRep(zs[0]))?.[0];
+    const best = new Map();
+    for (const z of zs) zoneProps[z].subs.forEach((sp, k) => {
+      const i = zoneProps[z].sub0 + k, g = b.gu[subKey(i)];
+      if (!g || (g === core && !metroCore)) return;
+      const w = result ? result.subs.pop[i] : sp[2] * zoneProps[z].pop;
+      if (!best.has(g) || w > best.get(g).w) best.set(g, { w, lon: sp[0], lat: sp[1] });
+    });
+    for (const [g, e] of best) out.push({ name: `${g}청`, kind: 'gu', lon: e.lon, lat: e.lat });
+  }
+  return out;
+}
+
+let showHalls = true;
+try { showHalls = localStorage.getItem('ukt-halls') !== '0'; } catch { /* 기본은 켬 */ }
+function drawHalls() {
+  if (!map?.getSource('links')) return;
+  if (!map.getSource('halls')) {
+    map.addSource('halls', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    // 도청·광역시청은 넓게 볼 때부터, 시·군청은 7.5, 구청은 9부터
+    const minz = ['match', ['get', 'kind'], 'do', 5.5, 'gu', 9, 7.5];
+    map.addLayer({ id: 'halls-dot', type: 'circle', source: 'halls', filter: ['>=', ['zoom'], minz],
+      paint: { 'circle-radius': ['match', ['get', 'kind'], 'do', 5, 3.6], 'circle-color': '#ffffff', 'circle-stroke-color': '#1d3f8f', 'circle-stroke-width': ['match', ['get', 'kind'], 'do', 2.2, 1.6] } });
+    map.addLayer({ id: 'halls-label', type: 'symbol', source: 'halls', filter: ['>=', ['zoom'], ['+', minz, 1]],
+      layout: { 'text-field': ['get', 'name'], 'text-font': ['Noto Sans Regular'], 'text-size': ['match', ['get', 'kind'], 'do', 12, 11], 'text-offset': [0, 0.9], 'text-anchor': 'top', 'text-optional': true },
+      paint: { 'text-color': '#1d3f8f', 'text-halo-color': '#ffffff', 'text-halo-width': 1.3 } });
+  }
+  const vis = showHalls ? 'visible' : 'none';
+  for (const l of ['halls-dot', 'halls-label']) map.setLayoutProperty(l, 'visibility', vis);
+  map.getSource('halls').setData({ type: 'FeatureCollection', features: showHalls ? hallList().map((h) => ({ type: 'Feature', properties: { name: h.name, kind: h.kind }, geometry: { type: 'Point', coordinates: [h.lon, h.lat] } })) : [] });
+}
+
+/** 이 자리 가까이(km)의 청사 이름: 새 역 이름 '○○시청역'용 */
+function hallsNear(lon, lat, km = 0.6) {
+  return hallList().map((h) => ({ h, d: kmBetween(lon, lat, h.lon, h.lat) })).filter((x) => x.d < km).sort((a, b) => a.d - b.d).map((x) => x.h.name);
+}
+
 function drawAnnexedSubs() {
   if (!map || !subsFC) return;
   if (!map.getSource('annexed-subs')) {
@@ -1593,7 +1690,7 @@ function placeAirport(lngLat) {
   const r = startAirport(state, { lon: lngLat.lng, lat: lngLat.lat, name });
   if (!r.ok) { alert(r.reason); return; }
   cancelDraft();
-  save(state); renderAll(); switchTab('projects');
+  save(state); renderAll(); startedNotice(state.projects[state.projects.length - 1]);
 }
 
 /** 누른 곳에서 가까운 같은 수단 구간 위의 점 (화면 거리 maxPx 안) */
@@ -2241,8 +2338,7 @@ async function commitDraft() {
   save(state);
   renderAll();
   refreshClosed();   // 복원 계획을 벌이면 같은 노선의 폐선 표시도 지운다
-  switchTab('projects');
-  showGazette(builtProj, { fromBuild: true });
+  startedNotice(builtProj);
 }
 
 function addFeatureStatesAfterRebuild() { refreshLinks(); }
@@ -2294,6 +2390,11 @@ function bindUI() {
       showServices = e.target.checked;
       try { localStorage.setItem('ukt-svc-lines', showServices ? '1' : '0'); } catch { /* 저장 못 해도 이번에는 적용 */ }
       drawServices();
+    }
+    if (e.target.id === 'halls-toggle') {
+      showHalls = e.target.checked;
+      try { localStorage.setItem('ukt-halls', showHalls ? '1' : '0'); } catch { /* 저장 못 해도 이번에는 적용 */ }
+      drawHalls();
     }
     if (e.target.id === 'housing-toggle') {
       showHousing = e.target.checked;
@@ -2533,6 +2634,7 @@ function renderAllPanels() {
   if (map) { setHousing(map, (state.housing || []).map((h) => ({ ...h, R: housingR(h) }))); setHousingVisible(map, showHousing); }
   renderTop(); renderLegend(); renderStatus(); renderBuild(); renderProjects(); renderRequests(); renderOps(); renderSettings(); renderStats(); renderSelection();
   drawServices();
+  drawHalls();
 }
 
 /** 지도의 광역 단체 경계·이름: 북측 도 복원, 광역시 승격(독립)이 바로 보이게 */
@@ -2561,7 +2663,8 @@ function renderLegend() {
   // 좁은 화면에서는 고르기 칸과 색 띠만 보이고, 나머지는 '범례 더 보기'로 편다 (지도를 덜 가리게)
   $('#legend').innerHTML = legendHTML(metric, layerView, basemap) + `<div class="lg-extra">${railKindLegend()}${trainsLegend()}
     <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:4px"><input type="checkbox" id="svc-lines-toggle" ${showServices ? 'checked' : ''}> 운행 계통 노선 보기</label>
-    <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:2px"><input type="checkbox" id="housing-toggle" ${showHousing ? 'checked' : ''}> 택지지구 경계·단지 보기</label></div>`
+    <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:2px"><input type="checkbox" id="housing-toggle" ${showHousing ? 'checked' : ''}> 택지지구 경계·단지 보기</label>
+    <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:2px"><input type="checkbox" id="halls-toggle" ${showHalls ? 'checked' : ''}> 시청·군청·구청 보기</label></div>`
     + `<button type="button" class="small lg-toggle">${$('#legend').classList.contains('open') ? '범례 접기' : '범례 더 보기'}</button>`;
 }
 
@@ -4327,18 +4430,33 @@ function retireChoiceHTML() {
     ${cur.length ? `<p class="hint">완공되면 새 ${spec.mode ? '노선' : '도로'} 양 끝 사이의 옛 ${esc(cur.join('·'))} 구간을 걷어 냅니다.${spec.mode ? ' 옛 역은 3km 안의 새 역으로 넘기고,' : ''} 옛 ${spec.mode ? '선로' : '고속도로'} 중간에서 갈라지던 ${spec.mode ? '지선·분기 노선은' : '고속도로는'} 새 ${spec.mode ? '노선의 가까운 역' : '도로'}에 연결선을 놓아 잇습니다 (사업비에 더함).</p>` : ''}`;
 }
 
+/**
+ * 착공 알림: 지금 창(건설 탭·계획 목록)을 그대로 두고 알림 띠만 띄운다 (여러 사업을 잇달아 착공할 수 있게).
+ * 예전에는 착공할 때마다 사업 탭으로 넘어갔다. 고시문은 '착공 때 고시문 자동으로 보기'를 켰을 때만 뜬다
+ */
+function startedNotice(p) {
+  if (!p) return;
+  if (showGazette(p, { fromBuild: true })) return;
+  toast(`<b>착공</b> ${esc(p.label)} · ${formatWon(p.cost)} · ${p.doneYear}년 완공 예정 <a href="#" data-toast-tab="projects">사업 탭</a>`);
+  document.querySelector('#toast [data-toast-tab]')?.addEventListener('click', (e) => { e.preventDefault(); switchTab('projects'); });
+}
+
 function plansHTML() {
   if (!plans.length) return '';
   const started = new Set([...state.projects.filter((p) => p.status !== 'cancelled').map((p) => p.plan).filter(Boolean), ...plansTakenByClosed()]);
-  const groups = [...new Set(plans.map((p) => p.group))];
+  // 다 지은 계획은 목록에서 뺀다 (사업 탭의 완공 사업에서 본다)
+  const doneIds = new Set(state.projects.filter((p) => p.status === 'done' && p.plan).map((p) => p.plan));
+  const building = new Map(state.projects.filter((p) => p.status === 'building' && p.plan).map((p) => [p.plan, p]));
+  const open = plans.filter((p) => !doneIds.has(p.id));
+  const groups = [...new Set(open.map((p) => p.group))];
   return `<h4>계획 사업</h4>
     <p class="hint">국가·광역 교통계획(제4·5차 국가철도망 구축계획, 제3차 국가도로망 종합계획 등)에 나온 노선입니다. 계획 이름을 누르면 지도에 그 노선이 점선으로 보이고, 그 선이나 "열기"를 누르면 경유지가 찍힌 채로 그리기가 열립니다. 사업비를 확인한 뒤 착공합니다 (경로는 고칠 수 있습니다).</p>
-    ${groups.map((g) => subFold(`plans:${g}`, `${esc(g)} <span class="cnt">${plans.filter((p) => p.group === g).length}</span>`, `<div class="list">${plans.filter((p) => p.group === g).map((p) => {
+    ${groups.map((g) => subFold(`plans:${g}`, `${esc(g)} <span class="cnt">${open.filter((p) => p.group === g).length}</span>`, `<div class="list">${open.filter((p) => p.group === g).map((p) => {
       let km = 0;
       for (let i = 1; i < p.points.length; i++) km += kmBetween(p.points[i - 1][1], p.points[i - 1][2], p.points[i][1], p.points[i][2]);
       const spec = NEW_BUILDS[p.type];
       return `<div class="item line"><div class="n" data-plan-show="${p.id}" style="cursor:pointer;${shownPlan === p.id ? 'text-decoration:underline' : ''}" title="지도에 노선 보기"><b>${esc(p.name)}</b>${p.note ? ` <span class="m">${esc(p.note)}</span>` : ''}<span class="m" title="${esc(p.source || '')}">${spec.label.replace(/ 신설.*$/, '')} · 약 ${Math.round(km * 1.1)}km · ${formatWon(km * 1.1 * spec.perKm)}${p.source ? ` · 출처: ${esc(p.source.split(' · 현황')[0].split(/[,(]/)[0].trim())}` : ''}</span></div>
-        <button class="small" data-plan="${p.id}" ${started.has(p.id) ? 'disabled' : ''}>${started.has(p.id) ? '착공함' : '열기'}</button></div>`;
+        <button class="small" data-plan="${p.id}" ${started.has(p.id) ? 'disabled' : ''}>${building.has(p.id) ? `공사 중 (${building.get(p.id).doneYear}년)` : started.has(p.id) ? '착공함' : '열기'}</button></div>`;
     }).join('')}</div>`)).join('')}`;
 }
 
@@ -4364,34 +4482,74 @@ function zonePop(i) { return result ? result.zones.pop[i] : zoneProps[i].pop; }
 function holdElection(only = 'all', reason = '') {
   const L = state.local;
   const regs = regions();
-  let gov = { D: 0, P: 0 }, may = { D: 0, P: 0 }, kept = 0, total = 0;
-  // 전국 바람: 선거마다 한쪽으로 쏠린다 (±6%p). 행정구역 개편 같은 보궐 성격 선거에는 약하게
-  const mood = (rng() - 0.5) * (only === 'all' ? 0.12 : 0.06);
+  const gov = {}, may = {}, flips = [], govRows = [];
+  let kept = 0, total = 0;
+  // 전국 바람: 선거마다 한쪽으로 쏠린다 (±12%p: 2018·2022년처럼 한쪽이 휩쓰는 해가 있다). 행정구역 개편 같은 보궐 성격 선거에는 약하게
+  const mood = (rng() - 0.5) * (only === 'all' ? 0.24 : 0.08);
+  let limited = 0, retired = 0;
   for (const [r, zs] of regs) {
     if (Array.isArray(only) && !only.includes(r)) continue;
     if (only === 'kp' && !zs.some((i) => zoneProps[i].country === 'KP')) continue;
     let w = 0, s = 0;
     for (const i of zs) { const p = zonePop(i); w += p; s += p * leanP(zoneProps[i]); }
-    const key = `g:${r}`, cur = L.offices[key];
-    const res = runElection(w > 0 ? s / w : 0.5, cur, rng, mood);
+    const key = `g:${r}`;
+    const { cur, why } = incumbent(L.offices[key]);
+    if (why === 'limit') limited++; else if (why === 'retire') retired++;
+    const res = runElection((w > 0 ? s / w : 0.5) + supportShift(r), cur, rng, mood, L.support?.[r]);
+    const before = L.offices[key];
     if (cur && cur.party === res.party) { cur.approval = 50 + (cur.approval - 50) / 2; cur.terms = (cur.terms || 1) + 1; kept++; }
-    else L.offices[key] = { title: governorTitle(r), region: r, party: res.party, since: state.year, approval: 50, accepted: 0, delivered: 0, terms: 1 };
+    else L.offices[key] = { title: governorTitle(r), name: personName(rng, sideOfRegion(r)), region: r, party: res.party, since: state.year, approval: 50, accepted: 0, delivered: 0, terms: 1 };
     L.offices[key].share = res.share;
-    gov[res.party]++; total++;
+    gov[res.party] = (gov[res.party] || 0) + 1; total++;
+    const now = L.offices[key];
+    govRows.push({ title: now.title, name: now.name, party: now.party, share: res.share, terms: now.terms, was: before && !before.appointed ? { name: before.name, party: before.party } : null, why, appointed: !!before?.appointed });
+    if (before && !before.appointed && before.party !== now.party) flips.push(now.title);
     if (only === 'all' || only === 'kp' || Array.isArray(only)) {
       for (const i of zs) {
         if (Array.isArray(only)) break;   // 광역 단체만 새로 뽑는 경우 (행정구역 개편·독립)
         if (only === 'kp' && zoneProps[i].country !== 'KP') continue;
         if (countyRep(i) !== i) continue;   // 한 시군에 단체장은 하나 (옛 군 땅을 떼어 낸 계산용 조각은 몸통 단체장이 맡는다)
-        const won = electMayor(i, mood, may);
-        if (won) may[won]++;
+        const was = L.offices[`m:${i}`];
+        const wasParty = was && !was.appointed ? was.party : null;
+        const won = electMayor(i, mood, may, (w) => { if (w === 'limit') limited++; else if (w === 'retire') retired++; });
+        if (won) may[won] = (may[won] || 0) + 1;
+        if (won && wasParty && wasParty !== won) flips.push(L.offices[`m:${i}`].title);
       }
     }
   }
   if (!total) return;
   L.elections.push({ year: state.year, gov, may, reason });
-  const m = may.D + may.P ? ` · 기초 민주당 ${may.D} 국민의힘 ${may.P}` : '';
-  state.log.unshift(`${state.year}년 ${reason || '지방선거'}: 광역 민주당 ${gov.D} 국민의힘 ${gov.P}${m}${kept ? ` (광역 재선 ${kept})` : ''}`);
+  const tally = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${PARTIES[k]?.short || k} ${v}`).join(' ');
+  const m = Object.keys(may).length ? ` · 기초 ${tally(may)}` : '';
+  state.log.unshift(`${state.year}년 ${reason || '지방선거'}: 광역 ${tally(gov)}${m}${kept ? ` (광역 재선 ${kept})` : ''}${limited ? ` · 3선 연임 제한으로 물러난 단체장 ${limited}명` : ''}${retired ? ` · 불출마·공천 탈락 ${retired}명` : ''}`);
+  syncAppointed();
+  // 게임을 시작할 때 채우는 선거는 알리지 않는다
+  if (!/게임 시작/.test(reason)) electionNotice({ year: state.year, reason: reason || '지방선거', gov, may, govRows, flips, limited, retired, mood });
+}
+
+/** 선거 결과 알림창: 정당별 당선, 광역단체장 당선인, 바뀐 곳 */
+function electionNotice(e) {
+  const bar = (o) => {
+    const tot = Object.values(o).reduce((a, b) => a + b, 0) || 1;
+    return `<div style="display:flex;height:14px;border-radius:3px;overflow:hidden;margin:4px 0">${Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span title="${esc(PARTIES[k]?.name || k)} ${v}" style="width:${(v / tot) * 100}%;background:${PARTIES[k]?.color || '#999'}"></span>`).join('')}</div>
+      <div class="m">${Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${partyBadge(k)} ${v}`).join(' ')}</div>`;
+  };
+  const rows = e.govRows.map((r) => `<tr><td>${esc(r.title)}</td><td>${partyBadge(r.party)} <b>${esc(r.name || '')}</b></td><td>${Math.round(r.share * 100)}%</td>
+    <td class="m">${r.appointed ? '첫 민선' : r.was && r.was.name === r.name ? `재선 (${r.terms}선)` : r.was ? `${r.why === 'limit' ? '연임 제한 · ' : r.why === 'retire' ? '불출마 · ' : ''}${r.was.party !== r.party ? `${esc(PARTIES[r.was.party]?.short || '')} → ${esc(PARTIES[r.party]?.short || '')}` : '같은 정당 새 인물'}` : '신설'}</td></tr>`).join('');
+  const wrap = document.createElement('div');
+  wrap.className = 'setup-wrap';
+  wrap.innerHTML = `<div class="setup" role="dialog" aria-modal="true"><h2>${e.year}년 ${esc(e.reason)} 결과</h2>
+    <p class="setup-intro hint">전국 바람: ${e.mood > 0.02 ? '국민의힘 쪽' : e.mood < -0.02 ? '민주당 쪽' : '어느 쪽도 아님'} (${(Math.abs(e.mood) * 100).toFixed(1)}%p)
+      ${e.flips.length ? ` · 정당이 바뀐 곳 ${e.flips.length}곳` : ''}${e.limited ? ` · 3선 연임 제한 ${e.limited}명` : ''}${e.retired ? ` · 불출마·공천 탈락 ${e.retired}명` : ''}</p>
+    <div class="setup-body">
+      <h4>광역단체장 (${e.govRows.length}곳)</h4>${bar(e.gov)}
+      ${Object.keys(e.may).length ? `<h4>기초단체장·구청장</h4>${bar(e.may)}` : ''}
+      <table class="cmp" style="margin-top:8px"><tr><th>직함</th><th>당선인</th><th>득표율</th><th></th></tr>${rows}</table>
+      ${e.flips.length ? `<p class="hint">정당이 바뀐 곳: ${e.flips.slice(0, 30).map(esc).join(', ')}${e.flips.length > 30 ? ' …' : ''}</p>` : ''}
+    </div>
+    <div class="setup-btns"><span style="flex:1"></span><button class="small primary" data-el-close>확인</button></div></div>`;
+  document.body.appendChild(wrap);
+  wrap.querySelector('[data-el-close]').onclick = () => wrap.remove();
 }
 
 /** 해마다: 선거 연도면 선거, 단체장들이 SOC 사업을 제안한다 */
@@ -4403,8 +4561,10 @@ function localYear(doneProjects) {
     const pr = L.proposals.find((x) => x.id === p.proposal);
     const off = pr && L.offices[pr.office];
     if (off) { off.delivered++; bumpApproval(off, 6); }
-    if (pr) pr.status = 'done';
+    if (pr) { bumpSupport(proposalRegion(pr), proposalParty(pr), 2); pr.status = 'done'; }
   }
+  // 정당 지지 변동은 해마다 10%씩 옅어진다
+  for (const d of Object.values(L.support || {})) for (const k of Object.keys(d)) d[k] = Math.round(d[k] * 0.9 * 100) / 100;
   if (state.year >= ELECTION.firstYear && (state.year - ELECTION.firstYear) % ELECTION.every === 0
     && !L.elections.some((e) => e.year === state.year && !e.reason)) holdElection('all');
   // 오래 묵힌 제안은 거절한 것으로 본다
@@ -4413,6 +4573,7 @@ function localYear(doneProjects) {
       pr.status = 'expired';
       const off = L.offices[pr.office];
       if (off) bumpApproval(off, -4);
+      bumpSupport(proposalRegion(pr), proposalParty(pr), -0.5);
     }
   }
   proposeProjects();
@@ -4455,21 +4616,103 @@ function guKey(i, gu) {
 }
 
 /** 시군 단체장 선거 (존 i가 그 시군의 대표 존). 분구한 시군은 구마다 구청장을 뽑는다. 이긴 정당을 돌려준다 (tally가 있으면 구청장까지 센다) */
-function electMayor(i, mood = 0, tally = null) {
+/**
+ * 이번 선거에 나오는 현직: 관선(임명직)은 현직이 아니고, 3선을 채웠으면 물러나며(연임 제한),
+ * 그 전에도 선거마다 일부는 불출마·공천 탈락으로 같은 정당의 새 후보가 나온다 (예전에는 같은 정당이 이기면 같은 사람이 끝없이 이어 했다)
+ */
+function incumbent(off) {
+  if (!off || off.appointed) return { cur: null, why: null };
+  if ((off.terms || 1) >= TERM_LIMIT) return { cur: null, why: 'limit' };
+  if (rng() < RETIRE_CHANCE) return { cur: null, why: 'retire' };
+  return { cur: off, why: null };
+}
+
+/** 광역 단체의 정당 지지 변동(%p)이 두 큰 정당 대결에 주는 몫 (국민의힘 쪽 +) */
+function supportShift(region) {
+  const d = state.local.support?.[region];
+  return d ? ((d.P || 0) - (d.D || 0)) / 100 : 0;
+}
+
+/** 정당 지지 변동 (%p, 광역 단체 단위, ±15까지). 해마다 10%씩 줄어든다 */
+function bumpSupport(region, party, d) {
+  if (!region || !party) return;
+  const L = state.local;
+  const s = ((L.support ||= {})[region] ||= {});
+  s[party] = Math.max(-15, Math.min(15, (s[party] || 0) + d));
+}
+
+/** 시군 창: 정당별 지지율 막대 */
+function supportHTML(i) {
+  const z = zoneProps[i];
+  if (z.ext || !hasAutonomy(state, z)) return '';
+  const r = regionOf(state, z), sup = partySupport(z, state.local.support?.[r]);
+  const rows = Object.entries(sup).sort((a, b) => b[1] - a[1]);
+  return `<div class="m" style="margin-top:6px">정당 지지율 (이 시군)</div>
+    <div style="display:flex;height:12px;border-radius:3px;overflow:hidden;margin:3px 0">${rows.map(([k, v]) => `<span title="${esc(PARTIES[k].name)} ${(v * 100).toFixed(1)}%" style="width:${v * 100}%;background:${PARTIES[k].color}"></span>`).join('')}</div>
+    <div class="m">${rows.map(([k, v]) => `${partyBadge(k)} ${(v * 100).toFixed(1)}%`).join(' ')}</div>
+    <p class="hint">여당(단체장 정당)이든 야당이든 그 정당이 낸 사업 제안을 받아 주고 완공하면 그 정당 지지가 오르고, 거절하면 내립니다. 지지율은 다음 선거에 반영됩니다.</p>`;
+}
+
+/** 광역 단체가 북측 쪽인지 (이름 결을 고를 때) */
+function sideOfRegion(r) {
+  const z = zoneProps.find((q) => !q.ext && regionOf(state, q) === r);
+  return z ? regionBase(state, z).side : 'KR';
+}
+
+/**
+ * 북측 지방자치를 시행하기 전에는 중앙정부가 도지사·시장·군수를 임명한다 (관선). 지방선거가 없어 정당이 없고 제안도 하지 않으며,
+ * 4년마다 인사로 바뀐다. 지방자치를 시행하면 첫 지방선거에서 민선으로 바뀐다
+ */
+function syncAppointed() {
+  const L = state.local;
+  if (!L?.offices) return;
+  const regs = new Map();
+  zoneProps.forEach((z, i) => {
+    if (z.ext || hasAutonomy(state, z)) return;
+    const r = regionOf(state, z);
+    if (!regs.has(r)) regs.set(r, []);
+    regs.get(r).push(i);
+  });
+  const stale = (o) => o?.appointed && state.year - o.since >= ELECTION.every;   // 4년마다 인사
+  const want = new Set();
+  for (const [r, zs] of regs) {
+    const gk = `g:${r}`;
+    want.add(gk);
+    if (!L.offices[gk] || stale(L.offices[gk])) L.offices[gk] = { appointed: true, title: governorTitle(r), name: personName(rng, 'KP'), region: r, since: state.year, approval: 50, accepted: 0, delivered: 0, terms: 1 };
+    else if (L.offices[gk].appointed) L.offices[gk].title = governorTitle(r);
+    for (const i of zs) {
+      if (countyRep(i) !== i) continue;
+      const t = mayorTitleOf(i), mk = `m:${i}`;
+      if (!t) continue;
+      want.add(mk);
+      if (!L.offices[mk] || stale(L.offices[mk])) L.offices[mk] = { appointed: true, title: t, name: personName(rng, 'KP'), zone: i, since: state.year, approval: 50, accepted: 0, delivered: 0, terms: 1 };
+      else if (L.offices[mk].appointed) L.offices[mk].title = t;
+    }
+  }
+  // 지방자치를 시행한 곳의 관선 단체장은 민선이 대신한다 (첫 선거에서 바뀐다)
+  for (const [k, o] of Object.entries(L.offices)) if (o.appointed && !want.has(k)) delete L.offices[k];
+  // 예전 저장: 이름 없는 단체장
+  for (const o of Object.values(L.offices)) if (!o.name) o.name = personName(rng, o.zone != null ? zoneProps[o.zone]?.country : o.region ? sideOfRegion(o.region) : 'KR');
+}
+
+function electMayor(i, mood = 0, tally = null, onOut = null) {
   const L = state.local, mk = `m:${i}`, mc = L.offices[mk];
   const title = mayorTitleOf(i);
   if (!title) { delete L.offices[mk]; return null; }   // 광역시 전체인 시: 기초단체장 없음
-  const one = (key, cur, t, extra = {}) => {
-    const rm = runElection(leanP(zoneProps[i]), cur, rng, mood);
+  const one = (key, office, t, extra = {}) => {
+    const { cur, why } = incumbent(office);
+    if (why) onOut?.(why);
+    const rg = regionOf(state, zoneProps[i]);
+    const rm = runElection(leanP(zoneProps[i]) + supportShift(rg), cur, rng, mood, L.support?.[rg]);
     if (cur && cur.party === rm.party) { cur.approval = 50 + (cur.approval - 50) / 2; cur.terms = (cur.terms || 1) + 1; cur.title = t; }
-    else L.offices[key] = { title: t, zone: i, ...extra, party: rm.party, since: state.year, approval: 50, accepted: 0, delivered: 0, terms: 1 };
+    else L.offices[key] = { title: t, name: personName(rng, zoneProps[i].country), zone: i, ...extra, party: rm.party, since: state.year, approval: 50, accepted: 0, delivered: 0, terms: 1 };
     L.offices[key].share = rm.share;
     return rm.party;
   };
   const won = one(mk, mc, title);
   for (const gu of (zoneGus(i) || []).slice(1)) {
     const p = one(`m:${i}#${gu}`, L.offices[`m:${i}#${gu}`], `${gu}청장`, { gu });
-    if (tally) tally[p]++;
+    if (tally) tally[p] = (tally[p] || 0) + 1;
   }
   return won;
 }
@@ -4496,6 +4739,7 @@ function syncMayors() {
     if (!k.startsWith('m:')) continue;
     const [id, gu] = k.slice(2).split('#'), i = +id;
     const title = gu ? (zoneGus(i)?.slice(1).includes(gu) ? `${gu}청장` : null) : mayorTitleOf(i);
+    if (L.offices[k].appointed) continue;   // 관선은 syncAppointed가 맡는다
     if (countyRep(i) !== i || !hasAutonomy(state, zoneProps[i]) || !title) { delete L.offices[k]; continue; }
     L.offices[k].title = title;
   }
@@ -4503,9 +4747,10 @@ function syncMayors() {
     for (const i of zs) {
       if (countyRep(i) !== i || !mayorTitleOf(i)) continue;
       // 단체장이 없는 시군, 또는 분구로 새로 생긴 구의 구청장
-      if (!L.offices[`m:${i}`] || (zoneGus(i) || []).slice(1).some((gu) => !L.offices[`m:${i}#${gu}`])) electMayor(i);
+      if (!L.offices[`m:${i}`] || L.offices[`m:${i}`].appointed || (zoneGus(i) || []).slice(1).some((gu) => !L.offices[`m:${i}#${gu}`])) electMayor(i);
     }
   }
+  syncAppointed();
 }
 
 /** 단체장 제안: 자기 지역의 혼잡 민원 가운데 가장 급한 것 (광역단체장은 해마다 1건, 시군구청장은 전국에서 6건) */
@@ -4533,6 +4778,21 @@ function proposeProjects() {
     const c = cand.find((x) => !used.has(x.r) && x.region === off.region);
     if (c) add(key, c);
   }
+  // 지역 야당도 광역 단체마다 해마다 1건: 단체장 정당이 아닌 정당(민주당·국민의힘·개혁신당·정의당) 가운데 그 지역 지지율에 비례해 고른다
+  // (제1야당만이 아니다: 3당 제안을 받아 주면 3당 지지가 올라 다음 선거에서 이변을 낼 수 있다)
+  for (const [key, off] of Object.entries(L.offices)) {
+    if (!key.startsWith('g:') || off.appointed) continue;
+    const r = off.region, z0 = zoneProps.find((q) => !q.ext && regionOf(state, q) === r);
+    if (!z0) continue;
+    const sup = partySupport(z0, L.support?.[r]);
+    const ps = ['D', 'P', 'R', 'J'].filter((k) => k !== off.party && !L.proposals.some((p) => p.status === 'open' && p.party === k && p.region === r));
+    const tot = ps.reduce((t, k) => t + sup[k], 0);
+    if (!tot) continue;
+    let x = rng() * tot, opp = ps[0];
+    for (const k of ps) { if ((x -= sup[k]) < 0) { opp = k; break; } }
+    const c = cand.find((x) => !used.has(x.r) && x.region === r);
+    if (c && add(null, c)) Object.assign(L.proposals[L.proposals.length - 1], { party: opp, region: r });
+  }
   let n = 0;
   for (const c of cand) {
     if (n >= 6) break;
@@ -4551,6 +4811,7 @@ function acceptProposal(id) {
   pr.decided = state.year;
   const off = L.offices[pr.office];
   if (off) { off.accepted++; bumpApproval(off, 3); }
+  bumpSupport(proposalRegion(pr), proposalParty(pr), pr.party ? 1.5 : 1);   // 야당 제안을 받아 주면 그 당이 더 득을 본다
   // 같은 구간의 확장 요구는 공사가 시작됐으므로 목록에서 뺀다
   const work = linksUnderWork(state);
   requests = requests.filter((q) => !q.links.every((lid) => work.has(lid)));
@@ -4564,8 +4825,24 @@ function rejectProposal(id) {
   pr.decided = state.year;
   const off = L.offices[pr.office];
   if (off) bumpApproval(off, -4);
+  bumpSupport(proposalRegion(pr), proposalParty(pr), -0.7);
   toast(`<b>거절</b> ${esc(pr.title)}`, 'no');
   save(state); renderAll();
+}
+
+/** 제안한 정당·광역 단체: 단체장 제안은 그 단체장의 정당, 야당 제안은 pr.party */
+function proposalParty(pr) { return pr.party || state.local.offices[pr.office]?.party || null; }
+function proposalRegion(pr) {
+  if (pr.region) return pr.region;
+  const off = state.local.offices[pr.office];
+  return off?.region || (off?.zone != null ? regionOf(state, zoneProps[off.zone]) : null);
+}
+/** 제안한 쪽 표시 */
+function proposerHTML(pr) {
+  const off = state.local.offices[pr.office];
+  if (off) return `${partyBadge(off.party)} ${esc(off.title)}`;
+  if (pr.party) return `${partyBadge(pr.party)} ${esc(PARTIES[pr.party]?.short || '')} ${esc(pr.region || '')}당 (야당)`;
+  return '';
 }
 
 function partyBadge(p) {
@@ -4575,7 +4852,9 @@ function partyBadge(p) {
 
 function officeLine(off) {
   if (!off) return '<span class="m">지방자치 미시행</span>';
-  return `${partyBadge(off.party)} ${esc(off.title)} <span class="m">${off.since}년~ · 지지율 ${Math.round(off.approval)}% · 제안 수용 ${off.accepted} · 완공 ${off.delivered}${off.terms > 1 ? ` · ${off.terms}선` : ''}</span>`;
+  if (off.appointed) return `<span class="op-badge" style="background:#6b7280">관선</span> ${esc(off.title)} <b>${esc(off.name || '')}</b> <span class="m">${off.since}년~ · 중앙정부 임명 (북측 지방자치를 시행하면 선거로 뽑습니다)</span>`;
+  const t = off.terms || 1;
+  return `${partyBadge(off.party)} ${esc(off.title)} <b>${esc(off.name || '')}</b> <span class="m">${off.since}년~ · 지지율 ${Math.round(off.approval)}% · 제안 수용 ${off.accepted} · 완공 ${off.delivered}${t > 1 ? ` · ${t}선${t >= TERM_LIMIT ? ' (연임 제한, 다음 선거에 못 나옴)' : ''}` : ''}</span>`;
 }
 
 /** 민원 탭에 붙는 지자체 SOC 제안 */
@@ -4602,18 +4881,18 @@ function proposalsHTML() {
   const doneRow = (p) => {
     const off = L.offices[p.office], proj = p.status === 'accepted' && state.projects.find((x) => x.proposal === p.id);
     return `<div class="item decided ${p.status}"><div class="t">${p.status === 'accepted' ? '✓ ' : ''}${esc(p.title)}</div>
-      <div class="m">${off ? `${partyBadge(off.party)} ${esc(off.title)} · ` : ''}${p.status === 'accepted'
+      <div class="m">${proposerHTML(p) ? `${proposerHTML(p)} · ` : ''}${p.status === 'accepted'
         ? `<span class="pos">받아들임 · 공사 시작${proj ? ` · ${proj.doneYear}년 완공 예정` : ''}</span>` : '<span class="neg">거절함</span>'}</div></div>`;
   };
   return `<h3>지자체 SOC 제안 (${open.length})</h3>
-    <p class="hint">선거로 뽑힌 단체장이 자기 지역 사업을 중앙정부에 제안합니다. 받아들여 완공하면 그 단체장의 지지율이 올라 재선에 유리합니다. 2년 안에 답하지 않으면 거절한 것으로 봅니다.</p>
+    <p class="hint">선거로 뽑힌 단체장과 그 지역 야당(시도당)이 사업을 중앙정부에 제안합니다. 받아들여 완공하면 제안한 단체장의 지지율과 그 정당 지지가 올라 다음 선거에 유리합니다(야당 제안이면 야당이 득을 봅니다). 2년 안에 답하지 않으면 거절한 것으로 봅니다.</p>
     ${decided.length ? `<p class="hint">올해 답한 제안 ${decided.length}건: 받아들인 사업은 사업 탭에서 공사 진행을 볼 수 있습니다.</p>` : ''}
     <div class="list">${shown.map((p) => {
       if (p.status !== 'open') return doneRow(p);
       const off = L.offices[p.office], ck = proposalCheck(p);
       const partial = ck.targets.length < p.links.length ? ` · 일부 구간(${ck.targets.length}/${p.links.length})은 이미 공사 중` : '';
       return `<div class="item"><div class="t">${esc(p.title)}</div>
-        <div class="m">${off ? `${partyBadge(off.party)} ${esc(off.title)}` : ''} · ${p.year}년 제안 · ${formatWon(ck.cost)}${partial}</div>
+        <div class="m">${proposerHTML(p)} · ${p.year}년 제안 · ${formatWon(ck.cost)}${partial}</div>
         <div class="actions"><button class="small primary" data-prop-ok="${p.id}" ${ck.afford ? '' : 'disabled title="예산과 차입 한도가 부족합니다"'}>${ck.afford ? '받아들이기' : '받아들이기 (예산 부족)'}</button>
         <button class="small" data-prop-no="${p.id}">거절</button></div></div>`;
     }).join('')}</div>`;
@@ -4793,7 +5072,7 @@ function syncGovernors() {
   if (!Object.keys(L.offices || {}).some((k) => k.startsWith('g:'))) return;
   const had = new Set();
   for (const k of Object.keys(L.offices)) {
-    if (!k.startsWith('g:')) continue;
+    if (!k.startsWith('g:') || L.offices[k].appointed) continue;
     const r = k.slice(2);
     if (!now.has(r)) {
       // 이름만 바뀐 단체(북측 강원도 → 강원북도)는 단체장을 그대로 옮긴다
@@ -4807,6 +5086,7 @@ function syncGovernors() {
   // 남측(처음부터 지방자치)과, 북측 지방자치를 시행 중이면 북측 단체도
   const missing = [...now.keys()].filter((r) => !had.has(r) && now.get(r).some((i) => hasAutonomy(state, zoneProps[i])));
   if (missing.length) holdElection(missing, '광역단체장 선거 (행정구역 정리)');
+  syncAppointed();
 }
 
 // ---- 분구: 광역시로 승격한 시(한 존), 또는 광역시에 편입한 시를 읍면동 묶음으로 여러 구로 나눈다
@@ -5508,14 +5788,16 @@ function localZoneHTML(i) {
   const L = state.local, r = regionOf(state, z);
   return `<h4>지방자치 · ${esc(r)}</h4>
     <div class="m" style="margin:2px 0">${officeLine(L.offices[`g:${r}`])}</div>
-    <div class="m" style="margin:2px 0">${officeLine(L.offices[mayorKey(i)])}</div>`;
+    <div class="m" style="margin:2px 0">${officeLine(L.offices[mayorKey(i)])}</div>
+    ${supportHTML(i)}`;
 }
 
 /** 정당 지도 값: 국민의힘 1, 민주당 0, 미시행 null */
 function partyValue(i, level) {
   const L = state.local, z = zoneProps[i];
   const off = level === 'gov' ? L.offices[`g:${regionOf(state, z)}`] : L.offices[mayorKey(i)];
-  return off ? (off.party === 'P' ? 1 : 0) : null;
+  if (!off) return null;
+  return off.appointed ? 5 : ({ D: 0, P: 1, R: 2, J: 3, I: 4 }[off.party] ?? null);   // map.js PARTY_MAP 순서
 }
 
 // ------------------------------------------------------------ 구간 직선화 (두 역 사이를 가장 단순한 곡선으로)
@@ -5964,8 +6246,7 @@ function commitStraighten() {
   state.log[0] = `${state.year}년 착공: ${p.label} (${formatWon(p.cost)}, ${p.years}년)${conns.length ? ` · 갈라지던 ${[...new Set(conns)].join('·')}${obj([...new Set(conns)].pop())} 새 선로에 잇는 연결선 포함` : ''}`;
   endStraighten();
   save(state); refreshLinks(); refreshPoints(); renderAll();
-  switchTab('projects');
-  showGazette(p, { fromBuild: true });
+  startedNotice(p);
 }
 
 /**
@@ -6810,7 +7091,7 @@ function commitPointAdd() {
   pointAdd.pick.reserved = false;
   endPointAdd();
   save(state); refreshLinks(); refreshPoints(); renderAll();
-  switchTab('projects');
+  startedNotice(state.projects[state.projects.length - 1]);
 }
 
 function previewPointAdd() {
@@ -8174,8 +8455,8 @@ function startClosedReopen(id, type) {
   const r = startNewBuild(base, state, { type, points: withTangents(points, NEW_BUILDS[type].mode), names, lineName: c.name, title: `${c.label} 재개통`, segFactor });
   if (!r.ok) { alert(r.reason); return; }
   if (state.projects.length > n0) state.projects[state.projects.length - 1].closedLine = id;
-  save(state); refreshClosed(); refreshLinks(); renderAll(); switchTab('projects');
-  if (state.projects.length > n0) showGazette(state.projects[state.projects.length - 1], { fromBuild: true });
+  save(state); refreshClosed(); refreshLinks(); renderAll();
+  if (state.projects.length > n0) startedNotice(state.projects[state.projects.length - 1]);
 }
 
 // ------------------------------------------------------------ 여객 재개통 (역이 없거나 거의 없어 아무도 타지 않는 선로)

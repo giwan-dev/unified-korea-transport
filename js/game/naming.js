@@ -47,12 +47,17 @@ export class Namer {
    */
   suggest(lon, lat, kind) {
     const suffix = SUFFIX[kind];
-    // 역: 바로 곁(400m)의 다른 종류 기존 역 이름(환승역은 같은 이름), 그다음 역이 놓인 동·이웃 동 이름을 먼저 본다
-    if (kind === 'station' && this.stationHints) {
-      for (const h of this.stationHints(lon, lat)) {
-        const c = stem(h.name).replace(/역$/, '') + suffix;
-        if (h.sameStation || !this.isUsed(c, kind)) return this.take(c, kind);
-      }
+    // 역: 바로 곁(400m)의 다른 종류 기존 역 이름(환승역은 같은 이름) → 시청·군청·구청 바로 곁(600m)이면 그 청사 이름(수원시청역·노원구청역)
+    // → 역이 놓인 동·이웃 동 이름
+    const hints = kind === 'station' && this.stationHints ? this.stationHints(lon, lat) : [];
+    const same = hints.find((h) => h.sameStation);
+    if (same) return this.take(stem(same.name).replace(/역$/, '') + suffix, kind);
+    if (kind === 'station' && this.hallHints) {
+      for (const h of this.hallHints(lon, lat)) { const c = h + suffix; if (!this.isUsed(c, kind)) return this.take(c, kind); }
+    }
+    for (const h of hints) {
+      const c = stem(h.name).replace(/역$/, '') + suffix;
+      if (!this.isUsed(c, kind)) return this.take(c, kind);
     }
     const near = this.nearbyPlaces(lon, lat);
     // fix: 행정구역 정리(선전용 지명·노동자구·두음법칙)를 지명에 적용 (북측 지명: 김책 → 성진)
@@ -92,8 +97,8 @@ export class Namer {
 
 export function stem(name) {
   const s = name.replace(/\s.*$/, '');
-  // 동 번호는 뗀다: 룡당2동 → 룡당, 장유1동 → 장유 (역 이름에 번호가 붙지 않게)
-  const t = s.replace(ADMIN_TAIL, '').replace(/제?\d+(?:\.\d+)?가?$/, '');
+  // 행정동 번호는 뗀다: 룡당2동 → 룡당, 장유1동 → 장유, 신당제5동 → 신당. 종로3가·을지로4가처럼 '○가'는 실제 지명이라 둔다
+  const t = /\d동$/.test(s) ? s.replace(/제?\d+(?:[.·,]\d+)*동$/, '') : s.replace(ADMIN_TAIL, '');
   return t.length >= 2 ? t : s;
 }
 

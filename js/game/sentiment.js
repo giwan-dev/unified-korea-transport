@@ -80,7 +80,8 @@ export function registerSentimentMetrics(METRICS) {
 
 /** 득표율 (국민의힘 몫): 단체장의 정당과 득표율로 */
 export function pShare(off) {
-  if (!off || off.share == null) return null;
+  if (!off || off.share == null || off.appointed) return null;
+  if (off.party !== 'P' && off.party !== 'D') return null;   // 3당·무소속 당선: 두 큰 정당 득표율 지도에서는 비운다
   return off.party === 'P' ? off.share : 1 - off.share;
 }
 
