@@ -715,6 +715,8 @@ export function startNewBuild(base, state, plan) {
     links.push({
       id: firstId + links.length, a: nodeIds[i0], b: nodeIds[i1], mode: spec.mode, len: Math.round(len * 100) / 100,
       kp, name: plan.lineName || '', built: false, geom: geom.flat().map((v) => Math.round(v * 1e5) / 1e5), ...spec.attrs,
+      // 새로 놓는 선로는 북측 땅이라도 남측 규격(표준궤·남측 설계 기준)으로 짓는다: '남측 규격 일괄 개량' 대상이 아니고 북측 규격 표시도 없다
+      ...(spec.mode >= 1 ? { sstd: 1, std: 1 } : {}),
     });
   }
   total += plan.extraCost || 0;   // 중간 IC·역·휴게소 설치비
@@ -877,6 +879,17 @@ function applyLinePolicy(links, state) {
   }
 }
 
+export const REPAY_SHARES = [0, 0.2, 0.5, 1];   // 해마다 남은 예산에서 자동으로 갚는 몫
+
+/** 지금 가진 예산으로 빚을 갚는다 (예산·부채 모두 줄고, 이자도 그만큼 준다). 실제로 갚은 금액 */
+export function repayDebt(state, amount) {
+  const r = Math.round(Math.min(state.debt, Math.max(0, state.budget), Math.max(0, amount)));
+  if (r <= 0) return 0;
+  state.debt -= r; state.budget -= r;
+  state.log.unshift(`${state.year}년 부채 상환: ${formatWon(r)} (남은 부채 ${formatWon(state.debt)})`);
+  return r;
+}
+
 export function closeLine(state, name) {
   (state.closedLines ||= {})[name] = state.year;
   delete state.lineFreq?.[name];
@@ -944,9 +957,9 @@ export function advanceBudgetYear(base, state) {
       p.paid += amt;
     }
   }
-  // 상환: 남은 예산의 일부로 빚을 갚는다
+  // 자동 상환: 남은 예산의 일부(사업 탭에서 고른 몫, 기본 20%)로 빚을 갚는다
   if (state.debt > 0 && state.budget > 0) {
-    const r = Math.min(state.debt, Math.round(state.budget * 0.2));
+    const r = Math.min(state.debt, Math.round(state.budget * (state.repayShare ?? 0.2)));
     state.debt -= r; state.budget -= r;
   }
   state.integration = Math.min(1, state.integration + P.integrationPerYear);

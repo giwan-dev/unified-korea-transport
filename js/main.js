@@ -7,7 +7,7 @@ import {
   placeName, setPlaceName, startRestoreName, RENAME, startAirport, startAirportExpand, renameLine, splitLink,
   fundFor, settlePPP, settleRail, renameKPLines, KP_LINE_RENAME, LINE_RENAME_COST, railDividend, railEquity, mergeRail, OP_FACTORS, initOngoing, linkPending, setProjectPace, PACES,
   initAirRoutes, updateAirRoutes, startOpenRoute, closeRoute, AIR,
-  closeLine, reopenLine, setLineFreq, FREQ_STEPS, CLOSE_APPROVAL, REOPEN_PER_KM, startMega, settleMega,
+  closeLine, reopenLine, setLineFreq, FREQ_STEPS, CLOSE_APPROVAL, REOPEN_PER_KM, startMega, settleMega, repayDebt, REPAY_SHARES,
 } from './game/state.js';
 import { MEGA, TSR_FREIGHT, megaGeometry, applyMega } from './game/mega.js';
 import { AIRPORT } from './game/catalog.js';
@@ -170,6 +170,8 @@ async function init() {
   }
   state ||= newGame('normal');
   if (meta) state.dataStamp = meta.stamp;
+  // 예전 저장: 새로 놓은 선로를 남측 규격으로 (기존 북측 선로를 갈라 생긴 조각은 그대로)
+  for (const nl of state.newLinks || []) if (nl.mode >= 1 && !nl.sstd && (nl.split == null || nl.split >= base.links.length)) { nl.sstd = 1; nl.std = 1; }
   initAirRoutes(state, world.routes || []);
   seedInterKoreaAir(state);
   initRail(state);
@@ -2601,6 +2603,38 @@ function renameDraftPoint(i, name) {
   namer.reserve(name, p.kind);
 }
 
+// ---- 부채 상환: 남은 예산으로 언제든 갚고, 해마다 자동으로 갚을 몫을 고른다
+function debtHTML(annual) {
+  const d = DIFFICULTY[state.difficulty];
+  if (state.debt <= 0) return '';
+  const can = Math.max(0, Math.min(state.debt, state.budget));
+  const share = state.repayShare ?? 0.2;
+  // 다음 해로 넘어갈 때 연 예산을 넘는 몫은 불용된다: 그 몫은 갚는 편이 낫다
+  const lapse = Math.max(0, state.budget - annual - d.annualBudget);
+  return `<h3>부채 상환</h3>
+    <p class="hint">부채 ${formatWon(state.debt)} · 연 이자 ${formatWon(Math.round(state.debt * d.interest))} (${(d.interest * 100).toFixed(1)}%) · 차입 한도 ${formatWon(d.borrowLimit)} · 가용 예산 ${formatWon(Math.max(0, state.budget))}.
+      부채가 많을수록 지지율이 깎입니다.${lapse > 0 ? ` <b>내년으로 넘어갈 때 약 ${formatWon(lapse)}이 불용될 예정이니 상환에 쓰는 편이 낫습니다.</b>` : ''}</p>
+    <div class="actions" style="flex-wrap:wrap;gap:6px">
+      <button class="small primary" data-repay="${can}" ${can ? '' : 'disabled'}>${can >= state.debt ? '전액' : '가용 예산 모두'} 상환 ${formatWon(can)}</button>
+      ${can > 1 ? `<button class="small" data-repay="${Math.round(can / 2)}">절반 ${formatWon(Math.round(can / 2))}</button>` : ''}
+      <input type="number" id="repay-amt" min="0" step="1000" placeholder="억원" style="width:7em"><button class="small" id="repay-go">상환</button></div>
+    <div class="pace" style="margin-top:6px">해마다 남은 예산에서 자동 상환 ${REPAY_SHARES.map((x) => `<button class="small ${x === share ? 'on' : ''}" data-repay-share="${x}">${Math.round(x * 100)}%</button>`).join('')}</div>`;
+}
+
+function bindDebt(el) {
+  const go = (amt) => {
+    const r = repayDebt(state, amt);
+    if (!r) { toast('갚을 예산이 없습니다.'); return; }
+    toast(`${formatWon(r)}을 갚았습니다. 남은 부채 ${formatWon(state.debt)}.`);
+    save(state); renderProjects(); renderTop();
+  };
+  el.querySelectorAll('[data-repay]').forEach((b) => { b.onclick = () => go(+b.dataset.repay); });
+  el.querySelector('#repay-go')?.addEventListener('click', () => go(+el.querySelector('#repay-amt').value || 0));
+  el.querySelectorAll('[data-repay-share]').forEach((b) => {
+    b.onclick = () => { state.repayShare = +b.dataset.repayShare; save(state); renderProjects(); };
+  });
+}
+
 function renderProjects() {
   const el = $('[data-panel=projects]');
   const building = state.projects.filter((p) => p.status === 'building').sort((x, y) => x.doneYear - y.doneYear);
@@ -2621,7 +2655,7 @@ function renderProjects() {
         ${cancelBlocked(p) ? '' : `<button class="small danger" data-cancel-proj="${p.id}" title="이미 낸 돈은 돌려받지 못하고 남은 사업비만 아낍니다">사업 취소</button>`}</div></div>`;
   };
   const ongoing = building.filter((p) => p.kind === 'osm'), mine = building.filter((p) => p.kind !== 'osm');
-  el.innerHTML = `
+  el.innerHTML = `${debtHTML(annual)}
     <p class="hint">내년 정부 예산 투입: ${formatWon(annual)} / 연 예산 ${formatWon(DIFFICULTY[state.difficulty].annualBudget)}.
       사업마다 투입 속도를 바꾸면 연 투입액과 완공 연도가 달라집니다 (빠르게 하면 남은 사업비에 할증이 붙습니다).</p>
     <h3>진행 중인 사업 (이어받은 공사 ${ongoing.length})</h3>
@@ -2632,6 +2666,7 @@ function renderProjects() {
     ${housingStatusHTML()}
     <h3 style="margin-top:16px">완공 (${state.projects.filter((p) => p.status === 'done').length})</h3>
     <div class="list">${done.map((p) => `<div class="item">${projectBounds(p) ? `<button class="t link" data-locate="${p.id}" title="지도에서 보기">${esc(p.label)}</button>` : `<div class="t">${esc(p.label)}</div>`}<div class="m">${p.doneYear}년 완공 · ${formatWon(p.cost)}${p.kind === 'new' || p.kind === 'upgrade' ? ` · <button class="t link" data-gazette="${p.id}">고시문</button>` : ''}</div></div>`).join('') || '<p class="hint">아직 없습니다.</p>'}</div>`;
+  bindDebt(el);
   el.querySelectorAll('[data-locate]').forEach((b) => { b.onclick = () => locateProject(state.projects.find((x) => x.id === b.dataset.locate)); });
   el.querySelectorAll('[data-gazette]').forEach((b) => { b.onclick = () => showGazette(state.projects.find((x) => x.id === b.dataset.gazette)); });
   el.querySelectorAll('[data-house-go]').forEach((b) => {

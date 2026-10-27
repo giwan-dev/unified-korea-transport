@@ -78,7 +78,7 @@ export const UPGRADES = [
   {
     id: 'kpstd', mode: 1, label: '남측 규격 일괄 개량 (복선·교류 25kV·120km/h·표준궤)', years: 5,
     perKm: (l) => 70 + (l.tracks < 2 ? 140 : 0) + (l.power === 'AC' ? 0 : l.power === 'DC' ? 15 : 25),
-    applies: (l) => !!l.kp && l.cls === 'conv' && (l.speed < 120 || l.tracks < 2 || l.power !== 'AC' || !l.std),
+    applies: (l) => !!l.kp && !l.sstd && l.cls === 'conv' && (l.speed < 120 || l.tracks < 2 || l.power !== 'AC' || !l.std),
     apply: (l) => ({ speed: Math.max(l.speed, 120), tracks: Math.max(2, l.tracks), power: 'AC' }),
   },
   // 고속도로 재건축: 북측 고속도로(시속 60km급)는 남측 규격으로, 남측의 2차로 고속도로는 4차로로 다시 짓는다
