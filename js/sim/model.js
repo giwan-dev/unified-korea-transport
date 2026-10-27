@@ -365,7 +365,7 @@ export class Model {
   /**
    * 존(시군구) 안에서 도시철도를 타는 짧은 통행: 모형은 존 사이 통행만 배정하므로 같은 구 안 이용이 빠진다.
    * 역마다 역세권(반경 약 800m) 인구 × metroLocalRate명이 타고, 평균 metroLocalKm만큼 노선을 따라 간다고 보고 구간에 얹는다.
-   * 갈림길에서는 갈래마다 나눈다. 보고하는 이용객과 혼잡도에만 더한다 (경로 선택에는 쓰지 않는다)
+   * 갈림길에서는 갈래마다 나눈다. 보고하는 이용객·혼잡도와 경로 선택의 혼잡(updateCosts)에 더한다
    */
   metroLocalLoads() {
     const L = this.net.links, out = new Float32Array(L.length);
@@ -792,7 +792,10 @@ export class Model {
   updateCosts() {
     const L = this.net.links;
     for (let i = 0; i < L.length; i++) {
-      const vc = this.capacity[i] > 0 ? this.volume[i] / this.capacity[i] : 0;
+      // 도시철도는 구 안 짧은 이용객(metroLocal)도 같은 열차를 탄다: 경로 선택의 혼잡에도 넣는다 (예전에는 보고에만 더해,
+      // 지도에는 붐비는 노선이 배정에는 비어 보여 존 사이 통행이 가장 빠른 한 노선에만 몰렸다)
+      const vol = L[i].mode === 2 ? this.volume[i] + (this.metroLocal?.[i] || 0) : this.volume[i];
+      const vc = this.capacity[i] > 0 ? vol / this.capacity[i] : 0;
       if (L[i].mode === 0) {
         const r = Math.min(1 + P.bprAlpha * vc ** P.bprBeta, P.bprMaxRatio);
         // 지체는 짧은 구간(다리 진입부·교차로)에도 최소 bprMinBaseMin분 기준으로 붙인다.
@@ -801,6 +804,9 @@ export class Model {
         const t = t0 + Math.max(t0, P.bprMinBaseMin) * (r - 1);
         // 운전자는 같은 시간이면 고속도로를 고른다 (신호·교차로·안전에 대한 체감 차이)
         this.cost[i] = t * (P.roadPerceived[L[i].cls] ?? 1);
+      } else if (L[i].mode === 2) {
+        // 도시철도 혼잡: 붐비기 시작하면(혼잡도 0.6~) 서서 가고 한두 대 보내는 불편이 커진다 → 나란한 노선·버스·광역철도로 나뉜다
+        this.cost[i] = this.freeTime[i] * Math.min(1 + P.metroCrowdAlpha * vc ** P.metroCrowdBeta, P.metroCrowdMax);
       } else {
         this.cost[i] = this.freeTime[i] * (1 + 0.5 * Math.max(0, vc - 1));
         // 고속철도 구간은 비싼 운임(일반철도와의 차이)을 시간으로 바꿔 경로 비용에 넣는다:

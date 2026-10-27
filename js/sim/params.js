@@ -76,6 +76,9 @@ export const P = {
   metroRadiusKm: 6,
   metroLocalRate: 0.2,        // 역세권(반경 800m) 주민 1명당 하루 구 안 도시철도 승차 (존 사이 통행은 따로 배정)
   metroLocalKm: 5,            // 구 안 도시철도 통행 평균 거리 (km)
+  metroCrowdAlpha: 0.3,       // 도시철도 혼잡 체감: 시간 × (1 + α·(V/C)^β), 혼잡도 1이면 1.3배, 1.5면 약 2배
+  metroCrowdBeta: 3,
+  metroCrowdMax: 3,
   // --- 존(시군구) 안 짧은 통행 (도시철도 사업 편익: 효과 미리보기에서만 쓴다, model.localTransitCost)
   localTripRate: 1.0,         // 존 인구 1명당 하루 존 안 동(읍면동) 사이 통행 (걷기만 하는 같은 동 안 통행은 뺀다)
   localTripKm: 3,             // 존 안 통행의 거리 감쇠 (중력식 exp(−거리/이 값))
