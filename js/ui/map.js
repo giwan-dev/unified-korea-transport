@@ -697,6 +697,13 @@ export function setBasemap(map, kind) {
   sat || !map.getLayer('zones-line') ? 'bg-lake' : 'zones-line');
 }
 
+/** 택지지구 표시(면·경계·단지 안 격자 도로·이름)를 켜고 끈다 */
+export function setHousingVisible(map, on) {
+  for (const id of ['housing-fill', 'housing-street', 'housing-edge', 'housing-edge-building', 'housing-label']) {
+    if (map?.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+  }
+}
+
 export const LAYER_VIEWS = { all: '모두 보기', road: '도로만', rail: '철도만', air: '항공만', none: '아무것도 안 보기' };
 const ROAD_LAYERS = ['roads', 'roads-minor', 'roads-casing', 'roads-motorway', 'bg-roads', 'ferries'];
 const RAIL_LAYERS = ['rails', 'metro'];

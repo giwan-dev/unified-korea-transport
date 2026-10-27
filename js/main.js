@@ -1,5 +1,5 @@
 // 게임 진행과 화면 패널.
-import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView, LAYER_VIEWS, setBasemap } from './ui/map.js';
+import { createMap, addLayers, colorFor, legendHTML, METRICS, setLayerView, LAYER_VIEWS, setBasemap, setHousingVisible } from './ui/map.js';
 import { Namer, stem } from './game/naming.js';
 import {
   newGame, START_YEAR, REOPEN_SPEED, baseTransfers, startProject, cancelProject, cancelBlocked, save, load, clearSave, effectiveNetwork, linkAt, startUpgrade, startNewBuild, advanceBudgetYear,
@@ -47,7 +47,7 @@ import { P } from './sim/params.js';
 import { PPP_TYPES, PPP_DEFAULTS, initPPP, tollKind, linkToll, annualRevenue, evaluatePPP } from './game/ppp.js';
 import {
   PARTIES, initLocal, regionOf, hasAutonomy, leanP, runElection, bumpApproval, governorTitle, mayorTitle, countyTitle, metroName, isMetroCity,
-  HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST, ADMIN_OPTIONS, ADMIN_DEFAULT, adminNames, HISTORIC_COUNTIES, PROPAGANDA_STEMS, kpPlaceText, CITY_UP_MIN_POP, countyId, promotedName,
+  HISTORIC_CITIES, PROMOTE_MIN_POP, ELECTION, EVENT_COST, ADMIN_OPTIONS, ADMIN_DEFAULT, adminNames, HISTORIC_COUNTIES, PROPAGANDA_STEMS, kpPlaceText, CITY_UP_MIN_POP, countyId, promotedName, countyDisplayName, regionBase,
 } from './game/local.js';
 import { openAdminSetup } from './ui/setup.js';
 import { flushSave, saveError, slotMeta, saveSlot, loadSlot, keepBackup, loadBackup } from './game/savestore.js';
@@ -172,6 +172,11 @@ async function init() {
   if (meta) state.dataStamp = meta.stamp;
   // 예전 저장: 새로 놓은 선로를 남측 규격으로 (기존 북측 선로를 갈라 생긴 조각은 그대로)
   for (const nl of state.newLinks || []) if (nl.mode >= 1 && !nl.sstd && (nl.split == null || nl.split >= base.links.length)) { nl.sstd = 1; nl.std = 1; }
+  if (convertRadialHousingRoads()) save(state);   // 예전 1기 신도시급 방사형 간선 → # 격자
+  // 예전 저장: 광역시로 승격한 시 자체는 중구, 편입한 시군은 구가 됐다 → 단체장 직함을 지금 이름으로
+  initLocal(state);
+  syncGovernors();
+  if (state.local?.independent?.length || Object.keys(state.local?.annex || {}).length) syncMayors();
   initAirRoutes(state, world.routes || []);
   seedInterKoreaAir(state);
   initRail(state);
@@ -279,10 +284,10 @@ async function init() {
     addPlansLayer(map);
     addTrainsLayer(map);
     setTrainsProvider(trainsData);
-    setNameResolver((level, id, original) => placeName(state, level, id, level === 'zone' && zoneProps[id] ? promotedName(state, zoneProps[id]) : original));
+    setNameResolver((level, id, original) => (level === 'zone' && zoneProps[id] && guNamesOfZone(id) ? '' : placeName(state, level, id, level === 'zone' && zoneProps[id] ? countyDisplayName(state, zoneProps[id]) : original)));
     setLabelGroup((z) => ({ key: countyKey(z), weight: zoneProps[z]?.area || 0 }));
     refreshNames(map);
-    subsReady.then(() => { map.getSource('subs').setData(subsFC); drawAnnexedSubs(); });
+    subsReady.then(() => { map.getSource('subs').setData(subsFC); drawAnnexedSubs(); drawBungu(); });
     refreshPoints();
     placesReady.then(resetNamer);
     bindMap();
@@ -293,7 +298,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { reopenPlan: (id) => reopenPlan(id), startReopen: (id) => startReopen(id), planStraighten: () => planStraighten(), openPlan, refreshPoints, openServiceEditor, popNear, effectiveGrid, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { convertRadialHousingRoads: () => convertRadialHousingRoads(), reopenPlan: (id) => reopenPlan(id), startReopen: (id) => startReopen(id), planStraighten: () => planStraighten(), openPlan, refreshPoints, openServiceEditor, popNear, effectiveGrid, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
@@ -652,7 +657,9 @@ function avgHappiness() {
   return out;
 }
 
-function zoneName(i) { return placeName(state, 'zone', i, promotedName(state, zoneProps[i])); }
+/** 단체장 직함에 쓰는 시군 이름 (분구한 곳도 존 이름 그대로: 중구) */
+function officeName(i) { return placeName(state, 'zone', i, countyDisplayName(state, zoneProps[i])); }
+function zoneName(i) { const g = guNamesOfZone(i); return g ? g.join('·') : placeName(state, 'zone', i, countyDisplayName(state, zoneProps[i])); }
 /** 지도에서 한 시군으로 보이는 존끼리 같은 값: 보이는 이름 + 광역 단체 (옛 군 땅을 떼어 낸 계산용 조각은 몸통과 같다) */
 function countyKey(i) { const z = zoneProps[i]; return z.ext ? `ext:${i}` : `${zoneName(i)}|${regionOf(state, z)}`; }
 
@@ -2223,6 +2230,11 @@ function bindUI() {
       try { localStorage.setItem('ukt-svc-lines', showServices ? '1' : '0'); } catch { /* 저장 못 해도 이번에는 적용 */ }
       drawServices();
     }
+    if (e.target.id === 'housing-toggle') {
+      showHousing = e.target.checked;
+      try { localStorage.setItem('ukt-housing', showHousing ? '1' : '0'); } catch { /* 저장 못 해도 이번에는 적용 */ }
+      setHousingVisible(map, showHousing);
+    }
     if (e.target.id === 'trains-toggle') {
       if (e.target.checked && !confirm('지도에 열차 위치를 그리면 컴퓨터 부하가 커집니다 (화면에 보이는 열차를 1초에 5번 다시 그립니다). 느려지면 다시 끄세요. 켤까요?')) { e.target.checked = false; return; }
       setTrains(map, e.target.checked);
@@ -2453,7 +2465,7 @@ function renderAllPanels() {
   stalePanels.clear();
   renderRegions();
   // 다 지은 택지지구는 배경 지도에 시가지로 (반지름은 여기 크기표를 따른다: 지도 쪽 표에 1기 신도시급이 없어 1km 원으로 그리던 것)
-  if (map) setHousing(map, (state.housing || []).map((h) => ({ ...h, R: housingR(h) })));
+  if (map) { setHousing(map, (state.housing || []).map((h) => ({ ...h, R: housingR(h) }))); setHousingVisible(map, showHousing); }
   renderTop(); renderLegend(); renderStatus(); renderBuild(); renderProjects(); renderRequests(); renderOps(); renderSettings(); renderStats(); renderSelection();
   drawServices();
 }
@@ -2481,7 +2493,8 @@ let basemap = (() => { try { return localStorage.getItem('ukt-basemap') || 'plai
 function renderLegend() {
   // 좁은 화면에서는 고르기 칸과 색 띠만 보이고, 나머지는 '범례 더 보기'로 편다 (지도를 덜 가리게)
   $('#legend').innerHTML = legendHTML(metric, layerView, basemap) + `<div class="lg-extra">${railKindLegend()}${trainsLegend()}
-    <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:4px"><input type="checkbox" id="svc-lines-toggle" ${showServices ? 'checked' : ''}> 운행 계통 노선 보기</label></div>`
+    <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:4px"><input type="checkbox" id="svc-lines-toggle" ${showServices ? 'checked' : ''}> 운행 계통 노선 보기</label>
+    <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:2px"><input type="checkbox" id="housing-toggle" ${showHousing ? 'checked' : ''}> 택지지구 경계·단지 보기</label></div>`
     + `<button type="button" class="small lg-toggle">${$('#legend').classList.contains('open') ? '범례 접기' : '범례 더 보기'}</button>`;
 }
 
@@ -4258,10 +4271,10 @@ function zoneOfLink(id) {
 /** 시군 단체장 선거 (존 i가 그 시군의 대표 존). 이긴 정당을 돌려준다 */
 function electMayor(i, mood = 0) {
   const L = state.local, mk = `m:${i}`, mc = L.offices[mk];
-  if (!countyTitle(zoneName(i), regionOf(state, zoneProps[i]))) { delete L.offices[mk]; return null; }   // 광역시 전체인 시: 기초단체장 없음
+  if (!countyTitle(officeName(i), regionOf(state, zoneProps[i]))) { delete L.offices[mk]; return null; }   // 광역시 전체인 시: 기초단체장 없음
   const rm = runElection(leanP(zoneProps[i]), mc, rng, mood);
-  if (mc && mc.party === rm.party) { mc.approval = 50 + (mc.approval - 50) / 2; mc.terms = (mc.terms || 1) + 1; mc.title = countyTitle(zoneName(i), regionOf(state, zoneProps[i])); }
-  else L.offices[mk] = { title: countyTitle(zoneName(i), regionOf(state, zoneProps[i])), zone: i, party: rm.party, since: state.year, approval: 50, accepted: 0, delivered: 0, terms: 1 };
+  if (mc && mc.party === rm.party) { mc.approval = 50 + (mc.approval - 50) / 2; mc.terms = (mc.terms || 1) + 1; mc.title = countyTitle(officeName(i), regionOf(state, zoneProps[i])); }
+  else L.offices[mk] = { title: countyTitle(officeName(i), regionOf(state, zoneProps[i])), zone: i, party: rm.party, since: state.year, approval: 50, accepted: 0, delivered: 0, terms: 1 };
   L.offices[mk].share = rm.share;
   return rm.party;
 }
@@ -4287,11 +4300,11 @@ function syncMayors() {
   for (const k of Object.keys(L.offices)) {
     if (!k.startsWith('m:')) continue;
     const i = +k.slice(2);
-    const title = countyTitle(zoneName(i), regionOf(state, zoneProps[i]));
+    const title = countyTitle(officeName(i), regionOf(state, zoneProps[i]));
     if (countyRep(i) !== i || !hasAutonomy(state, zoneProps[i]) || !title) { delete L.offices[k]; continue; }
     L.offices[k].title = title;
   }
-  for (const [, zs] of regions()) for (const i of zs) if (countyRep(i) === i && !L.offices[`m:${i}`] && countyTitle(zoneName(i), regionOf(state, zoneProps[i]))) electMayor(i);
+  for (const [, zs] of regions()) for (const i of zs) if (countyRep(i) === i && !L.offices[`m:${i}`] && countyTitle(officeName(i), regionOf(state, zoneProps[i]))) electMayor(i);
 }
 
 /** 단체장 제안: 자기 지역의 혼잡 민원 가운데 가장 급한 것 (광역단체장은 해마다 1건, 시군구청장은 전국에서 6건) */
@@ -4435,8 +4448,14 @@ function localSettingsHTML() {
       <button class="small primary" id="ev-rename">바꾸기</button></div>`}
     <div class="item"><div class="t">광역시 독립·승격</div>
       <div class="m">${L.historic ? '북측 옛 직할시(평양·남포)를 도에서 다시 떼어 내거나, ' : ''}인구 ${PROMOTE_MIN_POP / 1e4}만 이상 시를 도에서 떼어 광역시로 만듭니다. 시장을 따로 뽑습니다 · 한 곳 ${formatWon(EVENT_COST.independence)}</div>
+      ${promotable.length ? `<div class="m" style="margin-top:4px">승격할 때 ${bunguSelect('bungu-n')}</div>` : ''}
       <div class="row" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${promotable.map((c) => `<button class="small" data-ev-city="${esc(c)}">${esc(c)}</button>`).join('') || '<span class="m">대상 도시가 없습니다.</span>'}</div>
-      ${L.independent.length ? `<div class="m" style="margin-top:4px">독립·승격한 도시: ${L.independent.map(esc).join(', ')}</div>` : ''}</div>
+      ${L.independent.length ? `<div class="m" style="margin-top:4px">독립·승격한 도시: ${L.independent.map(esc).join(', ')}</div>` : ''}
+      ${(() => {
+        const can = bunguUnits();
+        return can.length ? `<div class="m" style="margin-top:4px">분구 (승격한 도시·광역시에 편입한 시, ${formatWon(EVENT_COST.cityUp)}): ${bunguSelect('bungu-n2')}
+          ${can.map(([u, nm]) => `<button class="small" data-bungu="${esc(u)}">${esc(nm)}</button>`).join('')}</div>` : '';
+      })()}</div>
     ${cityUpHTML()}
     ${annexHTML()}`;
 }
@@ -4487,39 +4506,210 @@ function adjacency() {
   return zoneAdj;
 }
 
-/** 광역시(특별시·광역시)마다 맞닿은 다른 광역 단체의 시군: [[광역시, [시군…]]] */
+/**
+ * 편입 대상: 광역시(특별시·광역시)는 맞닿은 다른 광역 단체의 시·군을, 도는 맞닿은 군을 (평양시 강동군 → 평안남도, 철원군 → 강원북도).
+ * [[광역 단체, [시군…]]]. 물 위 경계로는 잇지 않는다
+ */
 function annexTargets() {
   const adj = adjacency();
   if (!adj.ready) return null;
   const L = state.local, cs = counties();
   const byZone = new Map();
   for (const c of cs.values()) for (const i of c.zones) byZone.set(i, c);
-  // 구(區) 존도 그 시의 광역 단체로 (서울 강남구 등이 맞닿은 시군을 찾을 때)
   const regionAt = (i) => byZone.get(i)?.region ?? (zoneProps[i]?.ext ? null : regionOf(state, zoneProps[i]));
   const out = new Map();
   zoneProps.forEach((z, i) => {
     const r = regionAt(i);
-    if (!r || !isMetroCity(r) || /세종/.test(r)) return;
+    // 지방자치가 없는 단체(북측 지방자치 전의 북측 도)로는 옮기지 않는다: 남측 군이 단체장을 잃는다
+    if (!r || /세종/.test(r) || !hasAutonomy(state, z)) return;
+    const metro = isMetroCity(r);
     for (const j of adj.get(i) || []) {
       const d = byZone.get(j);
-      if (!d || d.region === r || isMetroCity(d.region) || (d.z.country === 'KP' && !L.autonomyKP) || L.independent.includes(d.name)) continue;
+      if (!d || d.region === r || /세종/.test(d.region) || (d.z.country === 'KP' && !L.autonomyKP) || L.independent.includes(d.name)) continue;
+      // 광역시는 도의 시·군을, 도는 군만 (다른 도·광역시의 군)
+      if (metro ? isMetroCity(d.region) || !/[시군]$/.test(d.name) : !/군$/.test(d.name)) continue;
       if (!out.has(r)) out.set(r, new Map());
-      out.get(r).set(d.key, d);
+      out.get(r).set(d.key, { ...d, via: i });
     }
   });
-  return [...out].map(([r, m]) => [r, [...m.values()].sort((a, b) => b.pop - a.pop)]).sort((a, b) => a[0].localeCompare(b[0], 'ko'));
+  return [...out].map(([r, m]) => [r, [...m.values()].sort((a, b) => b.pop - a.pop)])
+    .sort((a, b) => (isMetroCity(b[0]) - isMetroCity(a[0])) || a[0].localeCompare(b[0], 'ko'));
+}
+
+/** 편입할 때 적어 둘 대상 단체의 바탕: 맞닿은 그 단체 존의 바탕, 승격한 도시면 그 도시 이름 */
+function annexBase(to, zi) {
+  const b = regionBase(state, zoneProps[zi]);
+  const c = state.local.independent.find((x) => metroName(x) === to);
+  return { prov: c || b.prov, side: b.side };
+}
+
+/** 편입한 시군(열쇠)이 지금 속한 광역 단체 */
+function annexRegion(k) {
+  const i = zoneProps.findIndex((z) => !z.ext && countyId(z) === k);
+  return i >= 0 ? regionOf(state, zoneProps[i]) : '';
+}
+
+/**
+ * 광역단체장 정리: 지금 없는 단체(도 복원으로 이름이 바뀐 강원도 등)의 단체장은 없애고, 직함은 지금 이름으로.
+ * 단체장이 없어진 단체는 새로 뽑는다 (예전 저장에서 강원북도·강원남도 단체장이 '강원도지사'로 남던 것)
+ */
+function syncGovernors() {
+  const L = state.local, now = regions();
+  if (!Object.keys(L.offices || {}).some((k) => k.startsWith('g:'))) return;
+  const had = new Set();
+  for (const k of Object.keys(L.offices)) {
+    if (!k.startsWith('g:')) continue;
+    const r = k.slice(2);
+    if (!now.has(r)) { delete L.offices[k]; continue; }
+    had.add(r);
+    L.offices[k].title = governorTitle(r);
+  }
+  // 남측(처음부터 지방자치)과, 북측 지방자치를 시행 중이면 북측 단체도
+  const missing = [...now.keys()].filter((r) => !had.has(r) && now.get(r).some((i) => hasAutonomy(state, zoneProps[i])));
+  if (missing.length) holdElection(missing, '광역단체장 선거 (행정구역 정리)');
 }
 
 function annexHTML() {
   const t = annexTargets(), L = state.local;
-  const done = Object.entries(L.annex || {});
-  return `<div class="item"><div class="t">광역시 편입</div>
-    <div class="m">광역시가 맞닿은 시군을 편입합니다 (그 시군은 도에서 빠져 광역시의 시·군이 되고, 두 광역 단체장을 다시 뽑습니다) · 한 곳 ${formatWon(EVENT_COST.annex)}.
-      읍면동 하나씩 편입하려면 지도 범례에서 읍면동 보기(인구 밀도 등)를 고르고 그 읍면동을 누르세요 (${formatWon(EVENT_COST.annexSub)}).</div>
-    ${t == null ? '<p class="m">경계 자료를 읽는 중…</p>' : t.length ? t.map(([r, cs]) => `<div class="m" style="margin-top:6px"><b>${esc(r)}</b></div>
-      <div class="row" style="display:flex;gap:4px;flex-wrap:wrap">${cs.map((c) => `<button class="small" data-annex="${esc(c.key)}" data-annex-to="${esc(r)}" title="${esc(c.region)}에서 ${esc(r)}로">${esc(c.name)} ${fmtPop(c.pop)}</button>`).join('')}</div>`).join('') : '<p class="m">편입할 수 있는 시군이 없습니다.</p>'}
+  const done = Object.keys(L.annex || {}).map((k) => [k, annexRegion(k)]);
+  const group = ([r, cs]) => `<details style="margin-top:4px"><summary class="m"><b>${esc(r)}</b> (${cs.length})</summary>
+      <div class="row" style="display:flex;gap:4px;flex-wrap:wrap">${cs.map((c) => `<button class="small" data-annex="${esc(c.key)}" data-annex-to="${esc(r)}" data-annex-zone="${c.via}" title="${esc(c.region)}에서 ${esc(r)}로">${esc(c.name)} <span class="m">${esc(c.region)}</span> ${fmtPop(c.pop)}</button>`).join('')}</div></details>`;
+  return `<div class="item"><div class="t">광역시·도 편입</div>
+    <div class="m">광역시는 맞닿은 시·군을, 도는 맞닿은 군을 편입합니다. 광역시에 들어간 시는 구가 되고(벽성시 → 벽성구) 군은 군 그대로입니다. 두 광역 단체장을 다시 뽑습니다 · 한 곳 ${formatWon(EVENT_COST.annex)}.
+      읍면동 하나씩 광역시에 편입하려면 지도 범례에서 읍면동 보기(인구 밀도 등)를 고르고 그 읍면동을 누르세요 (${formatWon(EVENT_COST.annexSub)}).</div>
+    ${t == null ? '<p class="m">경계 자료를 읽는 중…</p>' : t.length ? t.map(group).join('') : '<p class="m">편입할 수 있는 시군이 없습니다.</p>'}
     ${done.length ? `<div class="m" style="margin-top:4px">편입한 시군: ${done.map(([k, r]) => `${esc(k.split('|')[1])} → ${esc(r)}`).join(', ')}</div>` : ''}</div>`;
 }
+
+// ---- 분구: 광역시로 승격한 시(한 존), 또는 광역시에 편입한 시를 읍면동 묶음으로 여러 구로 나눈다
+// state.local.bungu[단위] = { n, gu: {읍면동 열쇠: 구} }. 단위는 승격한 도시 이름(해주시) 또는 편입한 시의 열쇠(황해남도|벽성시).
+// 행정 구역 표시만 바뀐다 (계산은 존 하나 그대로). 승격한 도시: 가운데 중구, 나머지 동·서·남·북구.
+// 편입한 시: 광역시의 중구·동구와 겹치지 않게 시 이름을 붙인다 (가운데 벽성구, 나머지 벽성동구·벽성서구…)
+
+const BUNGU_MAX = 5;
+
+/** 승격한 도시의 몸통 존들 (구로 나뉘지 않은 존: 이름이 그 도시) */
+function cityCoreZones(city) {
+  return zoneProps.map((z, i) => i).filter((i) => !zoneProps[i].ext && !zoneProps[i].city && promotedName(state, zoneProps[i]) === city);
+}
+
+/** 분구 단위의 존들 */
+function unitZones(unit) {
+  return unit.includes('|') ? zoneProps.map((z, i) => i).filter((i) => !zoneProps[i].ext && !zoneProps[i].city && countyId(zoneProps[i]) === unit) : cityCoreZones(unit);
+}
+
+/** 편입한 시면 이름 앞머리 (벽성시 → 벽성), 승격한 도시면 '' */
+const unitPrefix = (unit) => (unit.includes('|') ? unit.split('|')[1].replace(/시$/, '') : '');
+
+function makeBungu(unit, n) {
+  const zs = unitZones(unit), pre = unitPrefix(unit);
+  const subs = zs.flatMap((z) => zoneProps[z].subs.map((s, k) => ({ i: zoneProps[z].sub0 + k, x: s[0], y: s[1], w: Math.max(1, result ? result.subs.pop[zoneProps[z].sub0 + k] : s[2] * zoneProps[z].pop) })));
+  if (subs.length < n || n < 2) return false;
+  const W = subs.reduce((t, s) => t + s.w, 0);
+  const cx = subs.reduce((t, s) => t + s.x * s.w, 0) / W, cy = subs.reduce((t, s) => t + s.y * s.w, 0) / W;
+  const kx = Math.cos((cy * Math.PI) / 180);
+  const d2 = (a, b) => ((a.x - b.x) * kx) ** 2 + (a.y - b.y) ** 2;
+  // 시작 중심: 도심(인구 가중 중심에 가장 가까운 읍면동) + 서로 먼 읍면동들
+  const cen = [subs.reduce((b, s) => (d2(s, { x: cx, y: cy }) < d2(b, { x: cx, y: cy }) ? s : b))];
+  while (cen.length < n) cen.push(subs.reduce((b, s) => (Math.min(...cen.map((c) => d2(s, c))) > Math.min(...cen.map((c) => d2(b, c))) ? s : b)));
+  let c = cen.map((s) => ({ x: s.x, y: s.y })), lab = [];
+  for (let it = 0; it < 20; it++) {
+    lab = subs.map((s) => c.reduce((bk, q, k) => (d2(s, q) < d2(s, c[bk]) ? k : bk), 0));
+    c = c.map((q, k) => {
+      const m = subs.filter((_, j) => lab[j] === k);
+      if (!m.length) return q;
+      const w = m.reduce((t, s) => t + s.w, 0);
+      return { x: m.reduce((t, s) => t + s.x * s.w, 0) / w, y: m.reduce((t, s) => t + s.y * s.w, 0) / w };
+    });
+  }
+  // 이름: 도심에 가장 가까운 묶음은 중구 (둘로 나눌 때는 둘 다 방향으로), 나머지는 도심에서 본 방향
+  const core = n >= 3 ? c.reduce((bk, q, k) => (d2(q, { x: cx, y: cy }) < d2(c[bk], { x: cx, y: cy }) ? k : bk), 0) : -1;
+  const dirs = [['동구', 0], ['북구', 90], ['서구', 180], ['남구', 270]];
+  const names = [], used = new Set();
+  const order = c.map((q, k) => k).filter((k) => k !== core)
+    .map((k) => ({ k, a: (Math.atan2(c[k].y - cy, (c[k].x - cx) * kx) * 180) / Math.PI }));
+  for (const o of order) {
+    const best = dirs.filter(([nm]) => !used.has(nm)).sort((p, q) => Math.abs(((o.a - p[1] + 540) % 360) - 180) - Math.abs(((o.a - q[1] + 540) % 360) - 180)).pop();
+    names[o.k] = best ? best[0] : `제${o.k + 1}구`;
+    used.add(names[o.k]);
+  }
+  if (core >= 0) names[core] = '중구';
+  // 편입한 시: 벽성구(가운데)·벽성동구…
+  const shown = names.map((nm) => (pre ? (nm === '중구' ? `${pre}구` : `${pre}${nm}`) : nm));
+  const gu = {};
+  subs.forEach((s, j) => { gu[subKey(s.i)] = shown[lab[j]]; });
+  (state.local.bungu ||= {})[unit] = { n, gu };
+  const where = pre ? `${annexRegion(unit)} ${pre}구` : metroName(unit);
+  state.log.unshift(`${state.year}년 ${where} 분구: ${[...new Set(shown)].join('·')}`);
+  return true;
+}
+
+/** 분구할 수 있는 단위: 승격한 도시, 광역시에 편입한 시 (아직 나누지 않았고 읍면동이 둘 넘는 곳) → [[단위, 보이는 이름]] */
+function bunguUnits() {
+  const L = state.local;
+  const out = L.independent.filter((c) => !L.bungu?.[c] && cityCoreZones(c).some((z) => zoneProps[z].subs.length >= 2)).map((c) => [c, metroName(c)]);
+  for (const k of Object.keys(L.annex || {})) {
+    const to = annexRegion(k);
+    if (L.bungu?.[k] || !isMetroCity(to) || !/시$/.test(k.split('|')[1])) continue;
+    if (unitZones(k).reduce((t, z) => t + zoneProps[z].subs.length, 0) >= 2) out.push([k, `${to} ${unitPrefix(k)}구`]);
+  }
+  return out;
+}
+
+/** 분구한 읍면동의 구 이름 (없으면 null) */
+function guOfSub(i) {
+  const B = state.local?.bungu;
+  if (!B) return null;
+  const k = subKey(i);
+  for (const b of Object.values(B)) if (b.gu[k]) return b.gu[k];
+  return null;
+}
+
+/** 분구한 단위(승격한 도시 몸통, 편입한 시) 존의 구 이름들 */
+function guNamesOfZone(z) {
+  const B = state.local?.bungu?.[promotedName(state, zoneProps[z])] || state.local?.bungu?.[countyId(zoneProps[z])];
+  if (!B || zoneProps[z].city) return null;
+  return [...new Set(Object.values(B.gu))];
+}
+
+/** 분구한 구 경계(서로 다른 구 읍면동이 맞닿은 변)와 구 이름을 지도에 */
+function drawBungu() {
+  if (!map || !subsFC) return;
+  if (!map.getSource('bungu')) {
+    map.addSource('bungu', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'bungu-line', type: 'line', source: 'bungu', filter: ['==', ['geometry-type'], 'LineString'],
+      paint: { 'line-color': '#9a958b', 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 0.6, 11, 1.4], 'line-dasharray': [3, 2] } });
+    map.addLayer({ id: 'bungu-label', type: 'symbol', source: 'bungu', minzoom: 8, filter: ['==', ['geometry-type'], 'Point'],
+      layout: { 'text-field': ['get', 'name'], 'text-size': 11, 'text-font': ['Noto Sans Regular'] },
+      paint: { 'text-color': '#3a3f45', 'text-halo-color': '#ffffff', 'text-halo-width': 1.2 } });
+  }
+  const feats = [];
+  for (const [unit, b] of Object.entries(state.local?.bungu || {})) {
+    const seg = new Map(), pts = new Map();
+    for (const z of unitZones(unit)) {
+      zoneProps[z].subs.forEach((sp, k) => {
+        const i = zoneProps[z].sub0 + k, g = b.gu[subKey(i)];
+        if (!g) return;
+        const w = Math.max(1, result ? result.subs.pop[i] : 1), e = pts.get(g) || { x: 0, y: 0, w: 0 };
+        e.x += sp[0] * w; e.y += sp[1] * w; e.w += w; pts.set(g, e);
+        const geom = subsFC.features[i]?.geometry;
+        const rings = geom?.type === 'Polygon' ? geom.coordinates : geom?.type === 'MultiPolygon' ? geom.coordinates.flat() : [];
+        for (const ring of rings) for (let q = 0; q + 1 < ring.length; q++) {
+          const A = ring[q].map((v) => v.toFixed(4)).join(','), B2 = ring[q + 1].map((v) => v.toFixed(4)).join(',');
+          const key = A < B2 ? `${A}|${B2}` : `${B2}|${A}`;
+          const cur = seg.get(key);
+          if (!cur) seg.set(key, { g, line: [ring[q], ring[q + 1]], other: null });
+          else if (cur.g !== g) cur.other = g;
+        }
+      });
+    }
+    for (const v of seg.values()) if (v.other) feats.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: v.line } });
+    for (const [g, e] of pts) feats.push({ type: 'Feature', properties: { name: g }, geometry: { type: 'Point', coordinates: [e.x / e.w, e.y / e.w] } });
+  }
+  map.getSource('bungu').setData({ type: 'FeatureCollection', features: feats });
+}
+
+const bunguSelect = (id) => `<select id="${id}" class="small">${[1, 2, 3, 4, 5].map((n) => `<option value="${n}">${n === 1 ? '분구 안 함 (시 자리는 중구)' : `${n}개 구로 분구`}</option>`).join('')}</select>`;
 
 /** 건설 탭: 국가 대형 사업 목록 (착공 전·공사 중·완공). 선형 보기·효과 미리보기·착공 */
 function megaHTML() {
@@ -4595,6 +4785,15 @@ function bindLocalSettings(el) {
     if (!r.ok) { alert(r.reason); return; }
     save(state); refreshLinks(); renderAll();
   });
+  el.querySelectorAll('[data-bungu]').forEach((b) => {
+    b.onclick = () => {
+      const c = b.dataset.bungu, n = +(el.querySelector('#bungu-n2')?.value || 1);
+      if (n < 2) { toast('나눌 구 수를 고르세요.'); return; }
+      if (!payEvent(EVENT_COST.cityUp)) return;
+      if (!makeBungu(c, n)) { toast('읍면동이 모자라 그만큼 나눌 수 없습니다.'); return; }
+      drawBungu(); save(state); renderAll();
+    };
+  });
   el.querySelectorAll('[data-city-up]').forEach((b) => {
     b.onclick = () => {
       const k = b.dataset.cityUp, c = counties().get(k);
@@ -4611,10 +4810,11 @@ function bindLocalSettings(el) {
       const k = b.dataset.annex, to = b.dataset.annexTo, c = counties().get(k);
       if (!c || !confirm(`${c.name}(${c.region})을(를) ${to}에 편입할까요? 두 광역 단체장을 다시 뽑습니다. ${formatWon(EVENT_COST.annex)}`)) return;
       if (!payEvent(EVENT_COST.annex)) return;
-      (L.annex ||= {})[k] = to;
+      (L.annex ||= {})[k] = annexBase(to, +b.dataset.annexZone);
       state.log.unshift(`${state.year}년 ${c.name}, ${c.region}에서 ${to}로 편입`);
       holdElection([to, c.region], `${to} 시군 편입 선거`);
-      syncMayors();
+      syncMayors();   // 편입한 시·군은 구: 시장·군수 → 구청장
+      refreshNames(map);
       save(state); renderAll();
     };
   });
@@ -4623,11 +4823,14 @@ function bindLocalSettings(el) {
       const c = b.dataset.evCity;
       if (!payEvent(EVENT_COST.independence)) return;
       // 도시가 빠진 도와 새 광역시의 단체장을 다시 뽑는다
-      const zc = zoneProps.find((z) => z.province === c || z.name === c);
+      const zc = zoneProps.find((z) => z.province === c || promotedName(state, z) === c);   // 군에서 승격한 시도
       const parent = zc ? regionOf(state, zc) : null;
       L.independent.push(c);
+      const nGu = +(el.querySelector('#bungu-n')?.value || 1);
+      if (nGu > 1) { makeBungu(c, nGu); drawBungu(); }
       holdElection([metroName(c), parent].filter(Boolean), `${metroName(c)} ${L.historic ? '독립' : '광역시 승격'} 선거`);
-      syncMayors();   // 승격한 도시 전체가 한 시군이면 그 시군 단체장은 없어진다 (광역시장이 맡는다)
+      syncMayors();   // 승격한 도시 자체(한 존)는 중구가 된다: 시장 → 중구청장
+      refreshNames(map);
       save(state); renderAll();
     };
   });
@@ -5733,6 +5936,34 @@ function housingRoadPlan({ lon, lat, ring, R, name, levy, households = 0 }) {
   return { links, nodes, ang: seed, center: [lon, lat], arms, connKm, connCost: Math.round(connKm * 1.1 * perKm * (isKP(lat, lon) ? KP_COST_FACTOR : 1)) };
 }
 
+/**
+ * 예전 저장: 한때 1기 신도시급을 가운데에서 여덟 방향으로 뻗는 방사형 간선으로 깔았다 → # 모양 격자로 다시 깐다.
+ * 옛 간선·연결도로는 걷어 내고(replaced), 새 도로는 옛 도로가 지어졌으면 지은 채로, 공사 중이면 그 사업에 넣는다. 돈은 들지 않는다
+ */
+function convertRadialHousingRoads() {
+  let n = 0;
+  for (const h of state.housing || []) {
+    const pid = h.phases?.[0]?.id ?? h.id;
+    const p = state.projects.find((x) => x.id === pid);
+    const old = (p?.links || []).filter((id) => id >= base.links.length && !state.newLinks[id - base.links.length]?.replaced);
+    const nl = (id) => state.newLinks[id - base.links.length];
+    const arms = old.filter((id) => /대로$/.test(nl(id)?.name || '') && !/연결도로$/.test(nl(id)?.name || ''));
+    const deg = new Map();
+    for (const id of arms) for (const v of [nl(id).a, nl(id).b]) deg.set(v, (deg.get(v) || 0) + 1);
+    if (Math.max(0, ...deg.values()) < 8) continue;   // 방사형(한 노드에서 여덟 갈래)만
+    const built = old.some((id) => nl(id).built);
+    const rp = housingRoadPlan({ lon: h.lon, lat: h.lat, ring: h.ring, R: housingR(h), name: h.name, levy: (h.levy || 0) > 0, households: Math.max(h.households || 0, HOUSING.bigTown) });
+    for (const id of old) nl(id).replaced = true;
+    const ids = addHousingRoads(rp);
+    if (built) for (const id of ids) nl(id).built = true;
+    p.links = ids;
+    h.ang = rp.ang;
+    n++;
+  }
+  if (n) state.log.unshift(`${state.year}년 1기 신도시급 택지지구 ${n}곳의 방사형 간선도로를 # 모양 격자로 다시 깔았습니다.`);
+  return n;
+}
+
 /** 계획을 망에 넣는다: 새 노드(가운데·교차점·끝)를 만들고 링크를 아직 짓지 않은 상태로 둔다. 링크 id 목록 */
 function addHousingRoads(plan) {
   const node = {};
@@ -6769,6 +7000,8 @@ function drawServicePick() {
 const SVC_COLORS = ['#e4572e', '#2e86de', '#20a35a', '#9b59b6', '#f0a202', '#d6337f', '#0fa3b1', '#7a5c3e', '#596275', '#c0392b', '#6ab04c', '#30336b'];
 let showServices = true;
 try { showServices = localStorage.getItem('ukt-svc-lines') !== '0'; } catch { /* 기본은 켬 */ }
+let showHousing = true;   // 택지지구 면·경계·단지 도로 (범례에서 끌 수 있다)
+try { showHousing = localStorage.getItem('ukt-housing') !== '0'; } catch { /* 기본은 켬 */ }
 
 function svcColor(s, k) {
   // 예전 저장의 기본 계통은 색이 없다: 실제 노선도 색으로
@@ -6972,8 +7205,11 @@ function linkPanel(id) {
   const route = sameRoute(id, true);
   const routeKm = route.reduce((sum, x) => sum + linkAt(base, state, x).len, 0);
   const viaKm = originConnector(l, sameRoute(id)).reduce((sum, x) => sum + linkAt(base, state, x).len, 0);
+  // 신호 고도화·장편성 (선로 수 말고 수송력을 키운 개량)
+  const capRows = l.sig || l.long ? `<tr><td>수송력 개량</td><td>${[l.sig ? '신호 고도화 (운행 +30%)' : '', l.long ? '장편성 (정원 +50%)' : ''].filter(Boolean).join(' · ')}</td></tr>` : '';
   const rows = l.mode === 2
     ? `<tr><td>표정 속도</td><td>${l.speed} km/h</td></tr>
+       ${capRows}
        <tr><td>이용객</td><td>${Math.round(vol).toLocaleString()} 명/일</td></tr>`
     : isRoad
     ? `<tr><td>차로</td><td>${l.lanes}차로${l.paved ? '' : ' (비포장)'}</td></tr>
@@ -6984,6 +7220,7 @@ function linkPanel(id) {
        <tr><td>전력</td><td>${{ AC: '교류 25kV', DC: '직류 3kV', none: '비전철' }[l.power]}</td></tr>
        <tr><td>규격</td><td>${railStd(l) ? '개량 전 북측 철도 (아래 "남측 규격 일괄 개량"으로 한 번에 바꿀 수 있습니다)' : '남측 규격'}</td></tr>
        <tr><td>최고 운행 속도</td><td>${l.speed} km/h</td></tr>
+       ${capRows}
        <tr><td>이용객</td><td>${Math.round(vol).toLocaleString()} 명/일</td></tr>`;
   // 누른 곳이 속한 역–역(IC–IC) 구간
   const sec = selection?.type === 'link' && selection.id === id ? selection.section : null;
@@ -7490,7 +7727,7 @@ function subPanel(i) {
   const change = s.pop[i] / Math.max(subPop0[i], 1) - 1;
   return `${header(name)}
     <table class="kv">
-      <tr><td>소속</td><td>${esc(subRegion(i))} ${esc(zoneName(z))}${state.local?.annexSub?.[subKey(i)] ? ` <span class="m">(${esc(regionOf(state, zoneProps[z]))}에서 편입)</span>` : ''}</td></tr>
+      <tr><td>소속</td><td>${esc(subRegion(i))} ${esc(guOfSub(i) || zoneName(z))}${state.local?.annexSub?.[subKey(i)] ? ` <span class="m">(${esc(regionOf(state, zoneProps[z]))}에서 편입)</span>` : ''}</td></tr>
       <tr><td>인구</td><td>${Math.round(s.pop[i]).toLocaleString()}명 <span class="${change >= 0 ? 'pos' : 'neg'}">(${change >= 0 ? '+' : ''}${pct(change)})</span></td></tr>
       <tr><td>인구 밀도</td><td>${Math.round(s.pop[i] / subArea(i)).toLocaleString()}/km²</td></tr>
       <tr><td>대중교통 접근 (대기 포함)</td><td>${Math.round(s.transit[i])}분</td></tr>

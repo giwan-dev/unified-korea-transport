@@ -38,9 +38,21 @@ export const CITY_UP_MIN_POP = 100_000;   // 군 → 시 승격 인구 (지방�
 /** 군→시 승격·광역시 편입의 열쇠: 자료의 도 + 이름 (자료가 바뀌어 존 번호가 달라져도 그대로, 옛 군 땅 조각도 함께) */
 export const countyId = (z) => `${z.province}|${z.name}`;
 
-/** 시로 승격한 군이면 시 이름 (○○군 → ○○시) */
+/** 시로 승격한 군이면 시 이름 (○○군 → ○○시). 광역 단체를 가리는 데 쓰는 이름 (보이는 이름은 countyDisplayName) */
 export function promotedName(state, z) {
   return state.local?.cityUp?.includes(countyId(z)) ? z.name.replace(/군$/, '시') : z.name;
+}
+
+/**
+ * 지도·창에 보이는 시군 이름: 광역시에 편입한 시는 구로 (벽성시 → 벽성구; 광역시 아래에 군은 있어도 시는 없다. 군은 군 그대로),
+ * 광역시로 승격한 시 자체(구로 나뉘지 않은 한 존)는 중구로 (해주시 → 해주광역시 중구)
+ */
+export function countyDisplayName(state, z) {
+  const L = state.local, own = promotedName(state, z);
+  if (!L || z.ext) return own;
+  if (annexOf(state, z) && isMetroCity(regionOf(state, z)) && /시$/.test(own)) return own.replace(/시$/, '구');
+  if (!z.city && /시$/.test(own) && L.independent?.includes(own) && z.province !== own) return '중구';
+  return own;
 }
 
 /**
@@ -157,17 +169,32 @@ export function initLocal(state) {
   return state.local;
 }
 
-/** 존이 속한 광역 단체 이름 */
+/** 이 시군을 편입한 곳: { prov, side } (편입한 광역 단체의 바탕: 자료의 도·남북, 승격한 도시면 그 도시 이름). 예전 저장은 이름 문자열 */
+export function annexOf(state, z) {
+  const A = state.local?.annex;
+  return (A && (A[countyId(z)] || (z.city && A[`${z.province}|${z.city}`]))) || null;
+}
+
+/** 광역 단체를 가리기 전의 바탕: 자료의 도와 남북 (행정구역 정리·편입 반영) */
+export function regionBase(state, z) {
+  const ax = annexOf(state, z);
+  if (ax && typeof ax === 'object') return { prov: ax.prov, side: ax.side, annexed: true };
+  const o = adminOverride(state, z);
+  return { prov: o?.province || z.province || z.name, side: o?.side || z.country };
+}
+
+/**
+ * 존이 속한 광역 단체 이름. 편입한 시군은 편입한 단체의 바탕으로 같은 규칙(광역시 승격, 1945년 도 복원, 두음법칙)을 거친다:
+ * 철원군을 강원도(북)에 편입한 뒤 도를 복원하면 강원북도를 따라간다
+ */
 export function regionOf(state, z) {
   const L = initLocal(state);
-  const o = adminOverride(state, z);
-  const prov = o?.province || z.province || z.name, side = o?.side || z.country;
-  // 광역시에 편입한 시군
-  const ax = L.annex?.[countyId(z)];
-  if (ax) return ax;
+  const ax = annexOf(state, z);
+  if (typeof ax === 'string') return ax;   // 예전 저장: 편입한 단체 이름 그대로
+  const { prov, side, annexed } = regionBase(state, z);
   // 독립(승격)한 도시는 그 자체가 광역 단체 (함흥시 → 함흥광역시). 군에서 승격한 시도 (○○군 → ○○시 → ○○광역시)
   const own = promotedName(state, z);
-  for (const c of L.independent) if (prov === c || z.city === c || z.name === c || own === c) return metroName(c);
+  for (const c of L.independent) if (prov === c || (!annexed && (z.city === c || z.name === c || own === c))) return metroName(c);
   const A = L.admin || {};
   let r = prov;
   if (L.historic && !(A.jagang === 'keep' && side === 'KP' && ['자강도', '량강도', '양강도'].includes(prov))) {
@@ -184,7 +211,9 @@ export function isMetroCity(name) { return /(특별시|광역시|직할시|특�
 export function governorTitle(region) {
   // 특별시·광역시·특별자치시장은 단체 이름 그대로 (함흥광역시장), 옛 직할시는 ○○시장
   if (isMetroCity(region)) return `${region}장`;
-  return `${region.replace(/(특별자치도|도)$/, '')}도지사`;
+  // 특별자치도는 이름 그대로 (강원특별자치도지사): '특별자치'를 떼면 북측 강원도지사와 직함이 같아졌다
+  if (/특별자치도$/.test(region)) return `${region}지사`;
+  return `${region.replace(/도$/, '')}도지사`;
 }
 
 /** 시군 단체장 직함. 광역시로 승격한 도시 전체가 한 시군(존)이면 따로 뽑는 기초단체장이 없다
@@ -205,7 +234,7 @@ export function mayorTitle(name) {
  *  남북은 지금 소속 광역 단체 쪽으로 가른다: 북측 도로 옮긴 남측 군(장단 → 개성시, 옹진 → 황해남도)은 북측과 같이,
  *  남측 도로 옮긴 북측 군(개성 → 경기도)은 남측과 같이 */
 export function hasAutonomy(state, z) {
-  const side = adminOverride(state, z)?.side || z.country;
+  const side = regionBase(state, z).side;   // 다른 쪽 도에 편입한 군(철원군 → 강원도)도 그 도를 따른다
   return side === 'KR' || initLocal(state).autonomyKP;
 }
 
