@@ -147,6 +147,7 @@ async function init() {
       await keepBackup(JSON.stringify(old), old.dataStamp);   // 옮기기가 잘못됐을 때 되돌릴 수 있게 옮긴 경우에도 남긴다
       state = r.state;
       state.backupStamp = old.dataStamp;
+      await migrateSubKeys(state, old.dataStamp);
       // 운행 계통 경로는 새 망에서 다시 짠다 (못 짜면 그 계통은 없앤다)
       const links = effectiveNetwork(base, state).links;
       const before = (state.services || []).length;
@@ -302,7 +303,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { fixBunguNames: () => fixBunguNames(), convertRadialHousingRoads: () => convertRadialHousingRoads(), reopenPlan: (id) => reopenPlan(id), startReopen: (id) => startReopen(id), planStraighten: () => planStraighten(), openPlan, refreshPoints, openServiceEditor, popNear, effectiveGrid, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { fixBunguNames: () => fixBunguNames(), migrateSubKeys: (st, s) => migrateSubKeys(st, s), convertRadialHousingRoads: () => convertRadialHousingRoads(), reopenPlan: (id) => reopenPlan(id), startReopen: (id) => startReopen(id), planStraighten: () => planStraighten(), openPlan, refreshPoints, openServiceEditor, popNear, effectiveGrid, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
@@ -4986,6 +4987,58 @@ function guNamingDialog(unit) {
     }
     wrap.remove();
   });
+}
+
+/**
+ * 북측 읍면동을 실제 리·동 단위로 다시 나눈 자료(Alpha 0.4)로 옮긴 저장: 읍면동 열쇠(분구한 구 배정, 읍면동 편입)를
+ * 옛 읍면동 자리(data/migrate/kp-subs-*.json)에서 가장 가까운 새 리·동으로 옮긴다. 새 자료에 그대로 있는 열쇠(남측)는 그대로
+ */
+const KP_SUBS_REF = '20261026193426';   // 북측 리·동 자료 바로 앞 판
+async function migrateSubKeys(st, oldStamp) {
+  if (!(oldStamp <= KP_SUBS_REF)) return;
+  // 읍면동 단위 옛 이름 되찾기(김형권읍 → 풍산읍)는 읍면동 번호가 바뀌었다. 행정구역 정리 이름은 새 대상표로 다시 만든다 (김정숙읍·김형직읍도 생김)
+  const U = { 'u:3808': 'u:4355' };
+  const reU = (o) => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [U[k] || k, v]));
+  st.placeNames = reU(st.placeNames);
+  for (const p of st.projects || []) if (p.kind === 'rename' && U[p.key]) p.key = U[p.key];
+  if (st.local?.admin) {
+    const hist = await fetch('data/historic_targets.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (hist) st.adminNames = adminNames(st.local.admin, zoneProps, hist);
+  }
+  const L = st.local;
+  const keys = [...Object.values(L?.bungu || {}).flatMap((b) => Object.keys(b.gu || {})), ...Object.keys(L?.annexSub || {})];
+  if (!keys.length) return;
+  const old = await fetch(`data/migrate/kp-subs-${KP_SUBS_REF}.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const fc = await fetch('data/subzones.geojson').then((r) => r.json()).catch(() => null);
+  if (!old || !fc) return;
+  const now = new Map();   // 새 열쇠 → [x, y]
+  zoneProps.forEach((z) => z.subs.forEach((sp, k) => now.set(`${z.province}|${z.name}|${fc.features[z.sub0 + k]?.properties.name ?? z.sub0 + k}`, [sp[0], sp[1]])));
+  const zoneOf = (k) => k.split('|').slice(0, 2).join('|');
+  const d2 = (a, b) => ((a[0] - b[0]) * 0.8) ** 2 + (a[1] - b[1]) ** 2;
+  const nearestNew = (k) => {
+    const c = old[k];
+    if (!c) return null;
+    let best = null, bd = Infinity;
+    for (const [nk, q] of now) if (zoneOf(nk) === zoneOf(k) && d2(c, q) < bd) { bd = d2(c, q); best = nk; }
+    return best;
+  };
+  if (L.annexSub) L.annexSub = Object.fromEntries(Object.entries(L.annexSub).map(([k, v]) => [now.has(k) ? k : nearestNew(k), v]).filter(([k]) => k));
+  for (const b of Object.values(L.bungu || {})) {
+    const stale = Object.keys(b.gu).filter((k) => !now.has(k) && old[k]);
+    if (!stale.length) continue;
+    // 그 시군의 새 리·동마다 가장 가까운 옛 읍면동의 구를 준다
+    const pts = Object.entries(b.gu).map(([k, g]) => [now.get(k) || old[k], g]).filter(([c]) => c);
+    const zonesHere = new Set(Object.keys(b.gu).map(zoneOf));
+    const gu = {};
+    for (const [nk, q] of now) {
+      if (!zonesHere.has(zoneOf(nk))) continue;
+      let best = null, bd = Infinity;
+      for (const [c, g] of pts) if (d2(c, q) < bd) { bd = d2(c, q); best = g; }
+      if (best) gu[nk] = best;
+    }
+    b.gu = gu;
+  }
+  guUnits.clear();
 }
 
 /** 분구할 수 있는 단위: 승격한 도시, 광역시에 편입한 시 (아직 나누지 않았고 읍면동이 둘 넘는 곳) → [[단위, 보이는 이름]] */

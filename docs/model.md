@@ -7,7 +7,7 @@
 | 항목 | 출처 | 라이선스 | 처리 |
 |---|---|---|---|
 | 행정구역 (남) | 통계청 SGIS 행정동 경계 (vuski/admdongkor 가공) | CC BY 4.0 / 공공누리 1유형 | 행정동 3,559개를 기준 도형으로 쓰고, 시군구(일반구는 시로 합침)·시도는 행정동을 합쳐 만듦 |
-| 행정구역 (북) | OpenStreetMap `admin_level=6` | ODbL | 시·군·구역 안을 인구 격자 묶음 중심의 보로노이로 나눠 읍면동 대신 씀 (1,843개, 가까운 동·리 이름) |
+| 행정구역 (북) | OpenStreetMap `admin_level=6` | ODbL | OSM 리·동·읍·노동자구 지명 점(4,765개)마다 시·군 안을 나누고, 경계는 Copernicus DEM(90m) 비용 거리로 능선·강을 따라 어림 |
 | 배경지도 | Natural Earth 10m | 공공 영역 | 주변국 육지·하천·호수·도시 라벨. 외부 지도 타일은 쓰지 않음 |
 | 공항·항구·국외 도시 | 직접 정리 (`data/air_sea.json`) | – | 좌표는 공개 위치 기반 대략값, 용량·인구·소득은 가정값 |
 | 인구 | WorldPop 2025 (R2025A) 1km constrained UN-adjusted (KOR, PRK) | CC BY 4.0 | 존별 합계, 인구 가중 중심점, 소구역과 1km 격자 (`data/grid.bin`) |
