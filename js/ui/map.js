@@ -372,7 +372,8 @@ export function setHousing(map, list) {
     features.push({ type: 'Feature', properties: { k: 'label', name: h.done ? h.name : built ? `${h.name} (입주 중)` : `${h.name} (공사 중)` }, geometry: { type: 'Point', coordinates: [h.lon, h.lat] } });
     if (!built) continue;
     // 150m 간격 격자 도로 (지구마다 방향이 다르다), 경계 안 조각만
-    const ang = ((seed % 90) * Math.PI) / 180, c = Math.cos(ang), sn = Math.sin(ang);
+    // 간선도로와 같은 방향 (h.ang: 지구 도로망을 짤 때 정한 각도, 예전 저장은 지구 id로)
+    const ang = (((h.ang ?? seed) % 90) * Math.PI) / 180, c = Math.cos(ang), sn = Math.sin(ang);
     const r = R * (h.ring ? 1.8 : 0.92);
     for (let off = -r + 0.075; off < r; off += 0.15) {
       const half = h.ring ? r : Math.sqrt(Math.max(0, r * r - off * off));

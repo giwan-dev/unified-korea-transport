@@ -51,7 +51,7 @@ export function housingPlan({ households, zone, lat, lon, score = 0.5, years }) 
  * 착공. phases 2면 세대를 반씩 나눠 2단계는 phase2Lag년 늦게 끝난다.
  * roads: 함께 놓는 도로 링크 id (단지 안 간선도로·연결도로, 1단계와 함께 완공). roadCost: 그 공사비
  */
-export function startHousing(state, { name, zone, lon, lat, size, ring = null, households, plan, phases = 1, roads = [], roadCost = 0, score = 0.5, railKm = null }) {
+export function startHousing(state, { name, zone, lon, lat, size, ring = null, households, plan, phases = 1, roads = [], roadCost = 0, score = 0.5, railKm = null, ang = null }) {
   const total = plan.cost + plan.levy + roadCost;
   if (!canAfford(state, total, plan.years)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
   const id = crypto.randomUUID();
@@ -59,7 +59,7 @@ export function startHousing(state, { name, zone, lon, lat, size, ring = null, h
   const ph = split.map((hh, k) => ({ id: k ? crypto.randomUUID() : id, households: hh, done: false }));
   (state.housing ||= []).push({
     id, name, zone, lon, lat, size, ring, households, persons: plan.persons, net: plan.persons, revenue: plan.revenue,
-    score, railKm, levy: plan.levy, phases: ph, moving: [], occupied: 0, done: false, built: false, applied: true,
+    score, railKm, levy: plan.levy, ang, phases: ph, moving: [], occupied: 0, done: false, built: false, applied: true,
   });
   ph.forEach((p, k) => {
     const share = p.households / households;
