@@ -312,9 +312,30 @@ export class Model {
     this.S = sx.length;
     this.subX = Float64Array.from(sx); this.subY = Float64Array.from(sy);
     this.subW = Float64Array.from(sw); this.subZone = Int32Array.from(sz);
+    this.subW0 = Float64Array.from(sw);   // 자료의 읍면동 몫 (예전 저장의 입주 인구 되돌리기에 쓴다)
     this.subArea = Float64Array.from(sa);
     this.subAmenity = new Float64Array(this.S);
     this.subAmenityReady = false;
+    this.useGrid(grid);
+  }
+
+  /**
+   * 1km 격자 인구를 바꾼다 (택지지구·역세권 개발에 들어온 인구를 더한 격자).
+   * 격자 인구가 바뀐 소구역은 다음 망 설정 때 역세권(역·도로 접근시간)을 다시 구하고, 도심 도로 용량 보정도 다시 잰다
+   */
+  setGrid(grid) {
+    const sums = (off, pop) => { const out = new Float64Array(this.S); for (let s = 0; s < this.S; s++) for (let k = off[s]; k < off[s + 1]; k++) out[s] += pop[k]; return out; };
+    const before = sums(this.cellOff, this.cellPop), nBefore = Int32Array.from({ length: this.S }, (_, s) => this.cellOff[s + 1] - this.cellOff[s]);
+    this.useGrid(grid);
+    const after = sums(this.cellOff, this.cellPop);
+    this.gridDirty ||= new Set();
+    for (let s = 0; s < this.S; s++) {
+      if (Math.abs(after[s] - before[s]) > 0.5 || this.cellOff[s + 1] - this.cellOff[s] !== nBefore[s]) this.gridDirty.add(s);
+    }
+    this.urbanCapCache = new Map();
+  }
+
+  useGrid(grid) {
     // 소구역별 격자 목록 (CSR)
     const n = grid ? grid.length / 4 : 0;
     const count = new Int32Array(this.S + 1);
@@ -565,7 +586,9 @@ export class Model {
     const metroNodes = new Set();
     for (const l of net.links) if (l.active && l.mode === 2) { metroNodes.add(l.a); metroNodes.add(l.b); }
     const sig = accessSignature(roadNodes, railNodes, hsrNodes, metroNodes, net.stations, nodes.length);
-    if (this.accessSig === sig) {
+    const dirty = this.gridDirty?.size ? this.gridDirty : null;   // 격자 인구가 바뀐 소구역 (택지지구 입주 등)
+    this.gridDirty = null;
+    if (this.accessSig === sig && !dirty) {
       // 역 구성이 같으므로 역 배열·대기시간은 그대로, 해마다 새로 정하던 것만 다시 (승차 인원 0, 출발 묶음)
       this.boardings = new Float64Array(this.stationNode.length);
       this.stationFreshCap?.fill(0);   // 역 구성이 같으면 새로 문을 연 역이 없다
@@ -611,7 +634,7 @@ export class Model {
     let redone = 0;
     for (let s = 0; s < S; s++) {
       // 바뀐 노드가 지금 고른 R개 가운데 가장 먼 것보다 가까우면 (새로 생겼거나 없어졌거나) 다시 고른다
-      if (!full && !near(s, dRoad, this.subRoadFar[s] + 1e-6)) continue;
+      if (!full && !near(s, dRoad, this.subRoadFar[s] + 1e-6) && !dirty?.has(s)) continue;
       redone++;
       const nearK = roadIdx.nearestK(this.subX[s], this.subY[s], R);
       let wsum = 0, far = 0;
@@ -637,7 +660,7 @@ export class Model {
       this.subMetroAcc = new Float64Array(S * M);
     }
     for (let s = 0; s < S; s++) {
-      if (!full && !near(s, dMetro, P.metroRadiusKm)) continue;
+      if (!full && !near(s, dMetro, P.metroRadiusKm) && !dirty?.has(s)) continue;
       for (let k = 0; k < M; k++) { this.subMetro[s * M + k] = -1; this.subMetroAcc[s * M + k] = 0; }
       const scored = this.bestByAccess(s, mIdx.within(this.subX[s], this.subY[s], P.metroRadiusKm), M);
       scored.forEach(([nd, acc], k) => { this.subMetro[s * M + k] = nd; this.subMetroAcc[s * M + k] = acc; });
@@ -679,7 +702,7 @@ export class Model {
     }
     this.stationNodePrev = this.stationNode;
     for (let s = 0; s < S; s++) {
-      if (!full && !near(s, dSt, P.stationRadiusKm)) continue;
+      if (!full && !near(s, dSt, P.stationRadiusKm) && !dirty?.has(s)) continue;
       for (let k = 0; k < K; k++) { this.subSt[s * K + k] = -1; this.subStAcc[s * K + k] = 0; }
       const cands = stIdx.within(this.subX[s], this.subY[s], P.stationRadiusKm);
       const scored = this.bestByAccess(s, cands, K);
@@ -1648,7 +1671,54 @@ export class Model {
       for (let s = s0; s < s0 + n; s++) this.subW[s] *= old / now;
       this.subW[best] += d.persons / now;
       this.pop[z] = now;
+      this.holdSubShare(best);
     }
+  }
+
+  /**
+   * 예전 저장: 이미 입주한 개발 인구가 해마다 같은 존의 다른 소구역으로 흩어져 있다.
+   * 입주한 소구역 인구가 (존 인구 − 입주 인구) × 자료 몫 + 입주 인구에 모자라면 모자란 만큼을 새로 지은 것처럼 순증으로 채우고 붙든다
+   * (흩어진 주민은 옮겨 간 읍면동에 그대로 산다. 이미 그만큼이면 그대로)
+   */
+  anchorDevelopments(list) {
+    for (const d of list) {
+      const z = d.zone;
+      if (!(z >= 0) || this.isExt[z] || !(d.persons > 0)) continue;
+      const s0 = this.zoneSub0[z], n = this.zoneSubN[z], P = this.pop[z];
+      if (n < 2 || !(P > d.persons)) continue;
+      let best = s0, bd = Infinity;
+      for (let s = s0; s < s0 + n; s++) {
+        const dd = (this.subX[s] - d.lon) ** 2 + (this.subY[s] - d.lat) ** 2;
+        if (dd < bd) { bd = dd; best = s; }
+      }
+      const target = (P - d.persons) * this.subW0[best] + d.persons, cur = P * this.subW[best];
+      const add = target - cur;
+      if (add > 1) {
+        const now = P + add;
+        for (let s = s0; s < s0 + n; s++) this.subW[s] *= P / now;
+        this.subW[best] += add / now;
+        this.pop[z] = now;
+        this.anchoredAdd = (this.anchoredAdd || 0) + add;
+      }
+      this.holdSubShare(best);
+    }
+  }
+
+  /**
+   * 소구역이 지금 몫(subW)을 균형 몫으로 갖도록 편의(subAmenity)를 올린다. 해마다 relocateWithinZones가 소구역 몫을
+   * 균형 몫으로 끌어당겨, 택지지구에 들어온 인구가 몇 해 만에 같은 시군구의 다른 읍면동으로 흩어지던 것 (지은 집은 남는다)
+   */
+  holdSubShare(s) {
+    if (!this.subAmenityReady) this.calibrateSubAmenity();
+    const z = this.subZone[s], a = this.zoneSub0[z], n = this.zoneSubN[z];
+    if (n < 2) return;
+    const t = (k) => this.subArea[k] * Math.exp(this.subUtility(k) + this.subAmenity[k]);
+    let sum = 0;
+    for (let k = a; k < a + n; k++) sum += t(k);
+    const ts = t(s), w = this.subW[s];
+    if (!(ts > 0) || !(sum > ts) || !(w > 0) || w >= 0.999) return;
+    const want = (w * (sum - ts)) / (1 - w);
+    if (want > ts) this.subAmenity[s] += Math.log(want / ts);
   }
 
   // ------------------------------------------------------------ 결과

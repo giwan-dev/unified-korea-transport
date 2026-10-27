@@ -72,6 +72,7 @@ const CLASS_LABEL = { motorway: '고속도로', trunk: '간선국도', primary: 
 const POLICY_LABEL = { free: '자유 이주', limited: '이주 제한 (허가제)', closed: '이주 통제' };
 
 let map, base, zonesFC, zoneProps, places, grid, subsFC, subPop0, namer, worker;
+let gridSent = null;   // 시뮬레이션에 마지막으로 넘긴 격자
 let state, result = null, prevSummary = null, requests = [];
 let metric = 'pop';
 let selection = null;      // {type:'link'|'zone'|'node', id}
@@ -254,7 +255,8 @@ async function init() {
   };
   // 해마다 도는 통행배정을 나눠 맡을 보조 워커(ports)는 계산 워커와 포트로 바로 이어진다
   worker.postMessage({
-    type: 'init', zones: zoneProps, grid: grid.buffer.slice(0), net: effectiveNetwork(base, state),
+    // 자료 격자로 모델을 만든 뒤 입주 인구를 더한 격자로 바꾼다 (그 소구역 역세권은 기준선 것을 쓰지 않고 다시 구한다)
+    type: 'init', zones: zoneProps, grid: grid.buffer.slice(0), gridEff: (gridSent = effectiveGrid()) !== grid ? gridSent.buffer.slice(0) : null, net: effectiveNetwork(base, state),
     ctx: ctx(), snapshot: state.snapshot, baseline, saved: savedOk, ports,
   }, [...(baseline ? [baseline.bin] : []), ...(savedOk ? [savedOk.bin] : []), ...ports]);
   dataStamp = meta?.stamp;
@@ -289,7 +291,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { planStraighten: () => planStraighten(), openPlan, refreshPoints, openServiceEditor, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { planStraighten: () => planStraighten(), openPlan, refreshPoints, openServiceEditor, popNear, effectiveGrid, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
@@ -589,7 +591,15 @@ function nextYear() {
       남측과 국외에서 관광객이 찾아오기 시작하고, 통합도가 오를수록 늘어납니다 (많을 때 연 ${s.visitors}백만 명).<br><span class="m">가는 철도·도로를 놓으면 관광 통행이 더 늘어납니다.</span>`);
   }
   const tourKP = unlockedTourKP(state, tourSites, zoneOfSite, zoneProps.length);
-  worker.postMessage({ type: 'step', net: effectiveNetwork(base, state), ctx: { ...ctx(), dev, tourKP }, opened });
+  // 입주로 1km 격자가 바뀌었으면 함께 넘긴다 (시뮬레이션 역세권·도심 밀도)
+  const g = effectiveGrid(), gridMsg = g !== gridSent ? g.buffer.slice(0) : null;
+  gridSent = g;
+  if (map.getLayoutProperty('grid-heat', 'visibility') === 'visible') showDensity(true);
+  // 예전 저장: 이미 입주한 택지지구·역세권 개발의 인구가 해마다 같은 시군구 다른 읍면동으로 흩어졌다. 한 번 제자리로 돌려놓고 붙든다
+  const anchor = state.devAnchored ? null : settledDevelopments().map(({ zone, lon, lat, persons }) => ({ zone, lon, lat, persons }));
+  state.devAnchored = 1;
+  if (anchor?.length) state.log.unshift(`${state.year}년: 이미 입주한 택지지구·역세권 개발 ${anchor.length}곳의 인구를 지구 안으로 다시 맞췄습니다 (다른 읍면동으로 흩어진 만큼은 새로 채움, 인구 순증)`);
+  worker.postMessage({ type: 'step', net: effectiveNetwork(base, state), ctx: { ...ctx(), dev, tourKP, grid: gridMsg, anchor }, opened });
   mark('y: posted');
 }
 
@@ -1038,14 +1048,15 @@ function refreshPoints() {
 /** 인구 밀도 격자 레이어 (처음 켤 때 한 번 만든다) */
 function showDensity(on) {
   map.setLayoutProperty('grid-heat', 'visibility', on ? 'visible' : 'none');
-  if (!on || map.__gridLoaded) return;
+  const grid = effectiveGrid();
+  if (!on || map.__gridLoaded === grid) return;
   const features = [];
   for (let k = 0; k < grid.length; k += 4) {
     if (grid[k + 2] < 200) continue;
     features.push({ type: 'Feature', properties: { p: grid[k + 2] }, geometry: { type: 'Point', coordinates: [grid[k], grid[k + 1]] } });
   }
   map.getSource('grid').setData({ type: 'FeatureCollection', features });
-  map.__gridLoaded = true;
+  map.__gridLoaded = grid;   // 입주로 격자가 바뀌면 다시 그린다
 }
 
 function paintZones() {
@@ -1266,11 +1277,72 @@ function endDraftView() {
   paintZones(); renderLegend();
 }
 
+/**
+ * 1km 인구 격자 + 택지지구·역세권 개발에 들어온 인구. 지도 밀도, 역 반경 인구, 택지지구 입지 점수, 시뮬레이션의 역세권이 이것을 쓴다.
+ * (예전에는 자료 격자를 그대로 써서, 입주한 사람이 시군구·읍면동 인구에는 들지만 지도와 역세권에는 보이지 않았다)
+ * 택지지구는 그린 경계(없으면 면적만큼의 원) 안 30″ 칸 자리마다 고르게 나눈 새 칸으로 넣는다
+ * (자료 칸은 30″ 눈금에 꼭 맞지 않아, 가까운 자료 칸에 얹으면 인구가 지구 경계 밖에 보이기도 했다: 상세 인구에서도 지구 안에 산다)
+ */
+const GRID_STEP = 1 / 120;   // 자료 격자 간격 30″ (약 0.9km)
+let gridEff = null;
+/** 지금까지 입주한 택지지구·역세권 개발 (자리, 입주 인구, 면적) */
+function settledDevelopments() {
+  const adds = [];
+  for (const h of state?.housing || []) {
+    const persons = h.phases ? h.occupied || 0 : h.done ? h.persons : 0;
+    if (persons > 0) adds.push({ persons, lon: h.lon, lat: h.lat, ring: h.ring, km2: Math.max(0.5, (h.households || 0) / HOUSING.density), zone: h.zone });
+  }
+  for (const d of state?.devels || []) if (d.done && d.persons > 0) adds.push({ persons: d.persons, lon: d.lon, lat: d.lat, km2: 1, zone: d.zone });
+  return adds;
+}
+
+function effectiveGrid() {
+  const adds = settledDevelopments();
+  const sig = adds.map((a) => `${a.lon.toFixed(4)},${a.lat.toFixed(4)},${Math.round(a.persons)}`).join(';');
+  if (gridEff?.sig === sig) return gridEff.grid;
+  if (!adds.length) { gridEff = { sig, grid }; return grid; }
+  const extra = [];
+  for (const a of adds) {
+    // 지구 안 칸 자리
+    const r = Math.sqrt(a.km2 / Math.PI) / 111;
+    const ring = a.ring?.length > 2 ? a.ring : null;
+    const xs = ring ? ring.map((q) => q[0]) : [a.lon - r / Math.cos((a.lat * Math.PI) / 180), a.lon + r / Math.cos((a.lat * Math.PI) / 180)];
+    const ys = ring ? ring.map((q) => q[1]) : [a.lat - r, a.lat + r];
+    const cells = [];
+    // 반 칸(약 450m) 간격으로 짚어 작은 지구도 경계 모양대로 채운다
+    const st = GRID_STEP / 2;
+    for (let i = Math.round(Math.min(...xs) / st); i <= Math.round(Math.max(...xs) / st); i++) {
+      for (let j = Math.round(Math.min(...ys) / st); j <= Math.round(Math.max(...ys) / st); j++) {
+        const x = i * st, y = j * st;
+        if (ring ? inRing(x, y, ring) : kmBetween(x, y, a.lon, a.lat) <= r * 111) cells.push([x, y]);
+      }
+    }
+    if (!cells.length) cells.push([a.lon, a.lat]);
+    // 새 칸이 속할 읍면동: 시뮬레이션이 입주 인구를 넣은 소구역(지구 가운데에서 가장 가까운 읍면동)
+    const zp = zoneProps[a.zone];
+    let sub = -1;
+    if (zp) {
+      let bd = Infinity;
+      zp.subs.forEach(([x, y], k) => { const d = (x - a.lon) ** 2 + (y - a.lat) ** 2; if (d < bd) { bd = d; sub = zp.sub0 + k; } });
+    }
+    if (sub < 0) continue;
+    const each = a.persons / cells.length;
+    for (const [x, y] of cells) extra.push(x, y, each, sub);
+  }
+  const g = new Float32Array(grid.length + extra.length);
+  g.set(grid);
+  g.set(extra, grid.length);
+  gridEff = { sig, grid: g };
+  return g;
+}
+
 /** 역 반경(도시철도 1km, 철도 3km) 인구: 1km 격자를 0.05° 칸으로 묶어 둔 색인으로 빨리 센다 */
-let popBins = null;
+let popBins = null, popBinsGrid = null;
 function popNear(lon, lat, km) {
-  if (!popBins) {
+  const grid = effectiveGrid();
+  if (!popBins || popBinsGrid !== grid) {
     popBins = new Map();
+    popBinsGrid = grid;
     for (let c = 0; c < grid.length; c += 4) {
       const k = `${Math.floor(grid[c] / 0.05)}:${Math.floor(grid[c + 1] / 0.05)}`;
       if (!popBins.has(k)) popBins.set(k, []);
@@ -4963,7 +5035,7 @@ function recommendRoute(text) {
   let points, title, why;
   if (mode === 'metro') {
     const subs = new Set(city.zones.flatMap((i) => zoneProps[i].subs.map((_, k) => zoneProps[i].sub0 + k)));
-    const plan = metroPlan(grid, subs, stationXY);
+    const plan = metroPlan(effectiveGrid(), subs, stationXY);
     if (!plan) { say(`${city.name}에서 역이 없는 인구 밀집지를 충분히 찾지 못했습니다 (이미 역이 촘촘합니다).`); return; }
     const used = new Set(allLinks().filter((l) => l.mode === 2 && l.name?.startsWith(city.name)).map((l) => l.name));
     const no = req.number || (used.size + 1);
@@ -5114,7 +5186,7 @@ function drawHousingSites() {
   if (!map.getSource('housing-sites')) {
     map.addSource('housing-sites', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     map.addLayer({ id: 'housing-sites', type: 'fill', source: 'housing-sites',
-      paint: { 'fill-color': ['interpolate', ['linear'], ['get', 'sc'], 0, '#e9e4a6', 0.35, '#a6d68a', 0.6, '#4daf4a', 0.85, '#1b6b2f'], 'fill-opacity': 0.6, 'fill-outline-color': 'rgba(0,0,0,0)' } },
+      paint: { 'fill-color': ['interpolate', ['linear'], ['get', 'sc'], 0, '#e9e4a6', 0.35, '#a6d68a', 0.6, '#4daf4a', 0.85, '#1b6b2f'], 'fill-opacity': 0.4, 'fill-outline-color': 'rgba(0,0,0,0)' } },
     map.getLayer('points') ? 'points' : undefined);
   }
   const z = map.getZoom();
@@ -5238,7 +5310,7 @@ function housingName(lon, lat, zi) {
 function drawHousingOutline() {
   if (!map.getSource('housing-draw')) {
     map.addSource('housing-draw', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-    map.addLayer({ id: 'housing-draw-fill', type: 'fill', source: 'housing-draw', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#e07b1a', 'fill-opacity': 0.25 } });
+    map.addLayer({ id: 'housing-draw-fill', type: 'fill', source: 'housing-draw', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#e07b1a', 'fill-opacity': 0.15 } });
     map.addLayer({ id: 'housing-draw-line', type: 'line', source: 'housing-draw', paint: { 'line-color': '#c0561a', 'line-width': 2, 'line-dasharray': [2, 1] } });
     map.addLayer({ id: 'housing-draw-pts', type: 'circle', source: 'housing-draw', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 4, 'circle-color': '#fff', 'circle-stroke-color': '#c0561a', 'circle-stroke-width': 2 } });
   }
@@ -7488,6 +7560,7 @@ function stationNameHints(lon, lat) {
 
 /** 반경 km 안의 인구 (1km 인구 격자) */
 function popWithin(lon, lat, km) {
+  const grid = effectiveGrid();
   const kx = 111.32 * Math.cos((lat * Math.PI) / 180), ky = 110.57, r2 = km * km;
   let s = 0;
   for (let c = 0; c < grid.length; c += 4) {

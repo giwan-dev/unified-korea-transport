@@ -20,6 +20,7 @@ export function newGame(difficulty = 'normal') {
     version: 1,
     difficulty,
     year: START_YEAR,
+    devAnchored: 1,     // 새 게임은 입주 인구를 처음부터 제자리에 붙든다 (예전 저장만 한 번 되돌린다)
     budget: d.annualBudget,
     debt: 0,
     approval: 60,

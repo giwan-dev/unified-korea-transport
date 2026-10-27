@@ -20,6 +20,7 @@ function handle(m) {
       model = new Model(m.zones, new Float32Array(m.grid));
       out.postMessage({ ok: true });
     } else if (m.type === 'sync') {
+      if (m.grid) model.setGrid(new Float32Array(m.grid));
       if (m.net) {
         model.useAccessPack(m.access);   // 주 워커가 이 망으로 구한 역세권 결과를 그대로 쓴다
         model.setNetwork(m.net);

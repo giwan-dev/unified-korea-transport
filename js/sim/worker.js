@@ -21,14 +21,17 @@ async function makePool() {
   try {
     await Promise.all(ports.map((p) => call(p, { type: 'init', zones: inputs.zones, grid: inputs.grid }, 120000)));
     return {
-      size: ports.length, netSent: null,
+      size: ports.length, netSent: null, gridSent: inputs.grid,
       // 망을 보낼 때는 주 워커가 그 망으로 구한 역세권 결과도 함께 보낸다 (보조 워커가 다시 계산하지 않게).
       // 그래서 sync·preNet은 늘 주 워커가 같은 망을 setNetwork한 뒤에 부른다
       async sync(net, snapshot, groups) {
         const send = this.netSent !== net;
         const access = send ? model.accessPack() : null;
-        await Promise.all(ports.map((p) => call(p, { type: 'sync', net: send ? net : null, access, snapshot, groups }, 60000)));
+        // 격자가 바뀌었으면(택지지구 입주 등) 보조 워커 모델도 같은 격자로
+        const grid = this.gridSent !== inputs.grid ? inputs.grid : null;
+        await Promise.all(ports.map((p) => call(p, { type: 'sync', net: send ? net : null, access, snapshot, groups, grid }, 60000)));
         this.netSent = net;
+        this.gridSent = inputs.grid;
       },
       // 망만 먼저 보내 보조 워커가 망을 짜게 한다 (주 워커가 경제·인구를 갱신하는 동안 함께)
       async preNet(net) {
@@ -115,10 +118,11 @@ async function handle(msg) {
       model = new Model(msg.zones, new Float32Array(msg.grid));
       wmark('model built');
       if (msg.baseline?.json.access) model.preloadAccess(msg.baseline.json, msg.baseline.bin);
+      if (msg.gridEff) model.setGrid(new Float32Array(msg.gridEff));   // 택지지구 등 입주 인구를 더한 격자
       model.setNetwork(msg.net);
       wmark('network set');
       lastNet = msg.net;
-      inputs = { zones: msg.zones, grid: msg.grid, ports: msg.ports };
+      inputs = { zones: msg.zones, grid: msg.gridEff || msg.grid, ports: msg.ports };
       const bl = msg.baseline;
       if (!msg.snapshot) {
         // 새 게임: 미리 계산한 기준 연도가 있으면 그대로 쓴다
@@ -149,12 +153,15 @@ async function handle(msg) {
       }
     } else if (msg.type === 'step') {
       wmark('step received');
+      // 택지지구·역세권 개발 입주로 바뀐 1km 격자 (망을 짜기 전에: 바뀐 소구역의 역세권을 다시 구한다)
+      if (msg.ctx.grid) { model.setGrid(new Float32Array(msg.ctx.grid)); inputs.grid = msg.ctx.grid; }
       model.setNetwork(msg.net);
       wmark(model.netRebuilt ? 'network set (full rebuild)' : 'network set');
       const pre = pool ? pool.preNet(msg.net).catch(() => {}) : null;   // 보조 워커 망 짜기(역세권은 받아 씀)를 경제·인구 갱신과 함께
       lastNet = msg.net;
       // 지난 1년의 교통 조건으로 경제·인구를 갱신한 뒤 새 해의 통행을 배정한다 (완공된 역세권 개발 인구를 먼저 옮긴다)
       if (msg.ctx.dev?.length) model.applyDevelopments(msg.ctx.dev);
+      if (msg.ctx.anchor?.length) model.anchorDevelopments(msg.ctx.anchor);   // 예전 저장의 입주 인구를 제자리로 (한 번)
       // 열린 북측 관광지만 관광 수요를 끈다 (해금)
       if (msg.ctx.tourKP?.length === model.tourKP.length) model.tourKP.set(msg.ctx.tourKP);
       model.advanceYear(msg.ctx.integration, msg.ctx.policy, msg.ctx.sez || []);

@@ -467,11 +467,12 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addSource('housing', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   const dark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
   map.addLayer({ id: 'housing-fill', type: 'fill', source: 'housing', filter: ['==', ['get', 'k'], 'area'],
-    paint: { 'fill-color': dark ? '#4a4540' : '#e9dfcf', 'fill-opacity': ['case', ['get', 'done'], 0.92, 0.25] } }, below);
+    // 밑의 인구 분포(시군구·읍면동 색)가 비쳐 보이게 옅게: 경계선과 단지 안 도로로 지구를 알아본다
+    paint: { 'fill-color': dark ? '#4a4540' : '#e9dfcf', 'fill-opacity': ['case', ['get', 'done'], 0.35, 0.15] } }, below);
   map.addLayer({ id: 'housing-street', type: 'line', source: 'housing', filter: ['==', ['get', 'k'], 'street'], minzoom: 11,
-    paint: { 'line-color': dark ? '#6b6560' : '#ffffff', 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 0.6, 14, 2.2] } }, below);
+    paint: { 'line-color': dark ? '#6b6560' : '#ffffff', 'line-opacity': 0.75, 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 0.6, 14, 2.2] } }, below);
   map.addLayer({ id: 'housing-edge', type: 'line', source: 'housing', filter: ['all', ['==', ['get', 'k'], 'area'], ['get', 'done']],
-    paint: { 'line-color': dark ? '#a39a8c' : '#b8a888', 'line-width': 1.2 } }, below);
+    paint: { 'line-color': dark ? '#a39a8c' : '#8a7550', 'line-width': 1.6 } }, below);
   map.addLayer({ id: 'housing-edge-building', type: 'line', source: 'housing', filter: ['all', ['==', ['get', 'k'], 'area'], ['!', ['get', 'done']]],
     paint: { 'line-color': dark ? '#a39a8c' : '#a08a60', 'line-width': 1.4, 'line-dasharray': [3, 2] } }, below);
   map.addLayer({ id: 'housing-label', type: 'symbol', source: 'housing', filter: ['==', ['get', 'k'], 'label'], minzoom: 10,
