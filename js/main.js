@@ -136,6 +136,7 @@ async function init() {
   fetch('data/plans.json').then((r) => (r.ok ? r.json() : { plans: [] })).then((p) => { plans = p.plans || []; migratePlanLines(); if (map) renderBuild(); }).catch(() => {});
   fetch('data/historic_targets.json').then((r) => (r.ok ? r.json() : [])).then((h) => { historic = h; }).catch(() => {});
   fetch('data/halls.json').then((r) => (r.ok ? r.json() : [])).then((h) => { halls = h; if (map) drawHalls(); }).catch(() => {});
+  fetch('data/universities.json').then((r) => (r.ok ? r.json() : [])).then((u) => { univs = u; if (map) drawUnivs(); }).catch(() => {});
   rememberNetwork(meta?.stamp, base, zoneProps);
   subPop0 = zoneProps.flatMap((zp) => zp.subs.map((s) => s[2] * zp.pop));
   state = await load();
@@ -305,7 +306,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { fixBunguNames: () => fixBunguNames(), housingPointProblem: (...a) => housingPointProblem(...a), terrainAt: (...a) => terrainAt(...a), loadTerrain: () => loadTerrain(), growHousingSite: (...a) => growHousingSite(...a), riverInfo: (...a) => riverInfo(...a), loadWater: () => loadWater(), onLand: (...a) => onLand(...a), startHousingPick: () => startHousingPick(), housingDraw: () => housingDraw, holdElection: (o, r) => holdElection(o, r), hallList: () => hallList(), migrateSubKeys: (st, s) => migrateSubKeys(st, s), convertRadialHousingRoads: () => convertRadialHousingRoads(), reopenPlan: (id) => reopenPlan(id), startReopen: (id) => startReopen(id), planStraighten: () => planStraighten(), openPlan, refreshPoints, openServiceEditor, popNear, effectiveGrid, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { fixBunguNames: () => fixBunguNames(), get busy() { return busy; }, get errLog() { return errLog; }, housingPointProblem: (...a) => housingPointProblem(...a), terrainAt: (...a) => terrainAt(...a), loadTerrain: () => loadTerrain(), growHousingSite: (...a) => growHousingSite(...a), riverInfo: (...a) => riverInfo(...a), loadWater: () => loadWater(), onLand: (...a) => onLand(...a), startHousingPick: () => startHousingPick(), housingDraw: () => housingDraw, holdElection: (o, r) => holdElection(o, r), hallList: () => hallList(), migrateSubKeys: (st, s) => migrateSubKeys(st, s), convertRadialHousingRoads: () => convertRadialHousingRoads(), reopenPlan: (id) => reopenPlan(id), startReopen: (id) => startReopen(id), planStraighten: () => planStraighten(), openPlan, refreshPoints, openServiceEditor, popNear, effectiveGrid, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
@@ -416,7 +417,8 @@ const loading = {
 };
 
 function ctx() {
-  return { integration: state.integration, policy: state.policy, sez: (state.sez || []).filter((z) => z.done).map((z) => z.zone) };
+  return { integration: state.integration, policy: state.policy, sez: (state.sez || []).filter((z) => z.done).map((z) => z.zone),
+    univ: univList().filter((u) => u.built).map((u) => [u.zone, u.seats, u.isNew ? 1 : 0]) };
 }
 
 // ------------------------------------------------------------ 경제특구
@@ -640,6 +642,7 @@ function nextYear() {
   const dev = [...settleDevels(state, done), ...settleHousing(state, done)];
   housingComplaints();
   settleSEZ(done);
+  settleUniv(done);
   // 남북 통합도가 오르면 북측 관광지가 하나씩 열린다
   for (const s of newlyUnlocked(state, tourSites)) {
     const z = zoneOfSite(s);
@@ -1292,6 +1295,167 @@ function drawHalls() {
   map.getSource('halls').setData({ type: 'FeatureCollection', features: showHalls ? hallList().map((h) => ({ type: 'Feature', properties: { name: h.name, kind: h.kind }, geometry: { type: 'Point', coordinates: [h.lon, h.lat] } })) : [] });
 }
 
+// ------------------------------------------------------------ 대학 (data/universities.json, 게임에서 세운 대학)
+
+let univs = [];
+let showUnivs = true;
+try { showUnivs = localStorage.getItem('ukt-univs') !== '0'; } catch { /* 기본은 켬 */ }
+const UNIV_SEATS = { univ: 10000, college: 4000 };   // 정원 어림 (OSM에 없다): 4년제 1만, 전문대·단과대 4천
+/** 기존 대학 정원 어림: 북측은 종합대학만 1만, 나머지 단과대학(교원·사범·농업대학 등)은 3천 */
+const univSeats = (u) => (u.c === 'KP' ? (/종합대학/.test(u.n) ? 10000 : 3000) : UNIV_SEATS[u.k] || UNIV_SEATS.univ);
+const UNIV_TYPES = {
+  comp: { label: '종합대학', seats: 20000, cost: 8000, years: 6 },
+  kaist: { label: '과학기술원', seats: 5000, cost: 5000, years: 5 },
+  branch: { label: '국립대 분교·캠퍼스', seats: 5000, cost: 2000, years: 3 },
+};
+// 북측 대학 이름의 인물 (지도자·가족·혁명가): 개칭 사업으로 지명 이름으로 바꾼다
+const UNIV_PERSONS = ['김일성', '김정일', '김정은', '김정숙', '김형직', '김형권', '김철주', '김보현', '강반석', '김책', '김원균', '리수덕', '조군실', '차광수', '김종태', '최현', '오중흡', '리계순', '한덕수'];
+const UNIV_RENAME = { cost: 100, years: 1, bonus: 2 };
+
+/** 모든 대학: [{key, name, lon, lat, zone, kind, seats, built, isNew, idx}] */
+function univList() {
+  const out = univs.map((u, i) => ({ key: `b${i}`, idx: i, name: state.univNames?.[i] || u.n, lon: u.x, lat: u.y, zone: u.z, kind: u.k,
+    seats: univSeats(u), built: true, isNew: false, country: u.c }));
+  for (const u of state.univNew || []) out.push({ key: `n${u.id}`, name: u.name, lon: u.lon, lat: u.lat, zone: u.zone, kind: u.type, seats: u.seats, built: !!u.done, isNew: true });
+  return out;
+}
+
+/** 인물 이름이 든 북측 대학의 바꿀 이름: 인물 이름을 빼고, 지명이 없으면 소재 도시 이름을 앞에 (김일성종합대학 → 평양종합대학) */
+function univPersonRename(u) {
+  const p = UNIV_PERSONS.find((x) => u.name.includes(x));
+  if (!p || u.country !== 'KP') return null;
+  let rest = u.name.replace(p, '');
+  const city = stem(zoneProps[u.zone]?.province?.match(/시$/) ? zoneProps[u.zone].province : zoneProps[u.zone]?.name || '');
+  if (!rest.startsWith(city) && !/^(평양|남포|원산|함흥|청진|신의주|해주|사리원|개성|강계|혜산|평성|순천|라선|김책|단천|송림|안주)/.test(rest)) rest = city + rest;
+  return rest;
+}
+
+function drawUnivs() {
+  if (!map?.getSource('links')) return;
+  if (!map.getSource('univs')) {
+    map.addSource('univs', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'univs-dot', type: 'circle', source: 'univs', minzoom: 7.5,
+      paint: { 'circle-radius': ['case', ['==', ['get', 'kind'], 'college'], 3, 4], 'circle-color': ['case', ['get', 'built'], '#2e7d4f', '#ffffff'], 'circle-stroke-color': '#1b5e20', 'circle-stroke-width': 1.5 } });
+    map.addLayer({ id: 'univs-label', type: 'symbol', source: 'univs', minzoom: 10,
+      layout: { 'text-field': ['get', 'name'], 'text-font': ['Noto Sans Regular'], 'text-size': 10.5, 'text-offset': [0, 0.9], 'text-anchor': 'top', 'text-optional': true },
+      paint: { 'text-color': '#1b5e20', 'text-halo-color': '#ffffff', 'text-halo-width': 1.2 } });
+    for (const l of ['univs-dot']) {
+      map.on('mouseenter', l, () => { if (!draft) map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', l, () => { if (!draft) map.getCanvas().style.cursor = ''; });
+    }
+  }
+  for (const l of ['univs-dot', 'univs-label']) map.setLayoutProperty(l, 'visibility', showUnivs ? 'visible' : 'none');
+  map.getSource('univs').setData({ type: 'FeatureCollection', features: univList().map((u) => ({ type: 'Feature',
+    properties: { key: u.key, name: u.built ? u.name : `${u.name} (설립 중)`, kind: u.kind, built: u.built }, geometry: { type: 'Point', coordinates: [u.lon, u.lat] } })) });
+}
+
+function univPanel(key) {
+  const u = univList().find((x) => x.key === key);
+  if (!u) return header('대학');
+  const kindLabel = u.isNew ? UNIV_TYPES[u.kind]?.label : u.kind === 'college' ? '전문대·단과대학' : '대학교';
+  const to = !u.isNew ? univPersonRename(u) : null;
+  const proj = state.projects.find((p) => p.kind === 'univRename' && p.univ === u.idx && p.status === 'building');
+  const edu = result?.zones?.edu?.[u.zone];
+  return `${header(u.name)}
+    <table class="kv">
+      <tr><td>소재</td><td>${esc(regionOf(state, zoneProps[u.zone]))} ${esc(zoneName(u.zone))}</td></tr>
+      <tr><td>종류</td><td>${esc(kindLabel || '')}${u.isNew ? ' · 게임에서 세움' : ''}</td></tr>
+      <tr><td>정원 (어림)</td><td>${u.seats.toLocaleString()}명</td></tr>
+      ${u.built ? '' : '<tr><td>상태</td><td>설립 중</td></tr>'}
+      ${edu ? `<tr><td>새 대학 효과 (이 시군)</td><td>기대 교육연수 목표 +${edu.toFixed(2)}년</td></tr>` : ''}
+    </table>
+    ${to ? `<h4>이름 되돌리기</h4><p class="hint">인물 이름이 든 대학을 지명 이름으로 바꿉니다. 교표·문서·간판을 바꾸는 데 예산이 들고, 끝나면 그 시군 주민 행복도가 오릅니다.</p>
+      ${proj ? `<p class="hint">${proj.doneYear}년 완료 예정</p>` : `<button class="small primary" data-univ-restore="${u.idx}">${esc(u.name)} → ${esc(to)} · ${formatWon(UNIV_RENAME.cost)} · ${UNIV_RENAME.years}년 · 행복도 +${UNIV_RENAME.bonus}</button>`}` : ''}
+    <h4>이름 바꾸기</h4>
+    <div class="name-row"><input type="text" id="univ-name" value="${esc(u.name)}"><button class="small" id="univ-rename">바꾸기</button></div>
+    <p class="hint">새 대학을 세우면 90분 안팎에 닿는 시군의 교육 수준(기대·평균 교육연수, HDI)이 오르고 청년이 조금 모입니다. 건설 탭의 '대학 설립'으로 세웁니다.</p>`;
+}
+
+function bindUnivPanel(el) {
+  el.querySelector('#univ-rename')?.addEventListener('click', () => {
+    const key = selection.id, v = el.querySelector('#univ-name').value.trim();
+    if (!v) return;
+    if (key.startsWith('b')) (state.univNames ||= {})[+key.slice(1)] = v;
+    else { const u = (state.univNew || []).find((x) => `n${x.id}` === key); if (u) u.name = v; }
+    save(state); drawUnivs(); renderSelection();
+  });
+  el.querySelector('[data-univ-restore]')?.addEventListener('click', (e) => {
+    const i = +e.currentTarget.dataset.univRestore, u = univList().find((x) => x.idx === i), to = univPersonRename(u);
+    if (!to || !canAfford(state, UNIV_RENAME.cost, UNIV_RENAME.years)) { alert('예산과 차입 한도가 부족합니다.'); return; }
+    startProject(state, { id: crypto.randomUUID(), kind: 'univRename', univ: i, to, links: [], stations: [], cost: UNIV_RENAME.cost, years: UNIV_RENAME.years, label: `${u.name} → ${to} 개칭` });
+    save(state); renderAll();
+  });
+}
+
+/** 완공: 새 대학 개교, 대학 개칭 */
+function settleUniv(done) {
+  for (const p of done) {
+    if (p.kind === 'univ') {
+      const u = (state.univNew || []).find((x) => x.id === p.id);
+      if (!u || u.done) continue;
+      u.done = true;
+      state.happyBonus[u.zone] = (state.happyBonus[u.zone] || 0) + 2;
+      state.log.unshift(`${state.year}년 ${u.name} 개교 (정원 ${u.seats.toLocaleString()}명): 둘레 시군의 교육 수준이 오릅니다`);
+    } else if (p.kind === 'univRename') {
+      (state.univNames ||= {})[p.univ] = p.to;
+      const z = univs[p.univ]?.z;
+      if (z != null) state.happyBonus[z] = (state.happyBonus[z] || 0) + UNIV_RENAME.bonus;
+      state.log.unshift(`${state.year}년 대학 개칭 완료: ${p.label.replace(/ 개칭$/, '')}`);
+    }
+  }
+  if (done.some((p) => p.kind === 'univ' || p.kind === 'univRename')) drawUnivs();
+}
+
+// 대학 설립: 지도에서 자리를 누르면 종류를 고르는 창
+let univPick = false;
+function startUnivPick() {
+  cancelDraft();
+  univPick = true;
+  map.getCanvas().style.cursor = 'crosshair';
+  toast('대학을 세울 자리를 지도에서 누르세요 (Esc: 취소).');
+  const esc_ = (e) => { if (e.key === 'Escape') { univPick = false; map.getCanvas().style.cursor = ''; document.removeEventListener('keydown', esc_); } };
+  document.addEventListener('keydown', esc_);
+}
+function univPickClick(ll) {
+  univPick = false;
+  map.getCanvas().style.cursor = '';
+  const zi = onLand(ll.lng, ll.lat) ? zoneAtPoint(ll.lng, ll.lat) : -1;
+  if (!(zi >= 0) || zoneProps[zi].ext) { toast('남북 땅 안을 누르세요.'); return; }
+  const place = namer?.nearbyPlaces(ll.lng, ll.lat, 8, 1)[0];
+  const base0 = place ? stem(place[0]) : stem(zoneName(zi));
+  const used = new Set(univList().map((u) => u.name));
+  let nm = `${base0}대학교`;
+  for (const pre of ['', '국립', '제2']) { if (!used.has(`${pre}${base0}대학교`)) { nm = `${pre}${base0}대학교`; break; } }
+  const kp = isKP(ll.lat, ll.lng);
+  const wrap = document.createElement('div');
+  wrap.className = 'setup-wrap';
+  wrap.innerHTML = `<div class="setup" role="dialog" aria-modal="true"><h2>대학 설립 · <input type="text" id="u-name" value="${esc(nm)}" style="font:inherit;width:11em"></h2>
+    <p class="setup-intro hint">${esc(regionOf(state, zoneProps[zi]))} ${esc(zoneName(zi))}. 개교하면 이 시군과 90분 안팎에 닿는 시군의 기대 교육연수가 오르고(최대 +1.5년, 정원이 모자란 곳일수록 크게), 평균 교육연수·HDI가 수십 년에 걸쳐 따라 오릅니다. 교통망이 좋을수록 효과가 멀리 퍼집니다.</p>
+    <div class="setup-body"><div class="list">${Object.entries(UNIV_TYPES).map(([k, t]) => {
+      const cost = Math.round(t.cost * (kp ? KP_COST_FACTOR : 1));
+      return `<div class="item"><div class="t">${t.label} · 정원 ${t.seats.toLocaleString()}명</div><div class="m">${formatWon(cost)} · ${t.years}년</div>
+        <button class="small primary" data-univ-type="${k}">설립</button></div>`;
+    }).join('')}</div></div>
+    <div class="setup-btns"><span style="flex:1"></span><button class="small" data-univ-type="cancel">닫기</button></div></div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-univ-type]');
+    if (!b) return;
+    const k = b.dataset.univType;
+    if (k !== 'cancel') {
+      const t = UNIV_TYPES[k], cost = Math.round(t.cost * (kp ? KP_COST_FACTOR : 1));
+      if (!canAfford(state, cost, t.years)) { alert('예산과 차입 한도가 부족합니다.'); return; }
+      const name = wrap.querySelector('#u-name').value.trim() || nm;
+      const id = crypto.randomUUID();
+      (state.univNew ||= []).push({ id, name, lon: ll.lng, lat: ll.lat, zone: zi, type: k, seats: t.seats, done: false });
+      startProject(state, { id, kind: 'univ', links: [], stations: [], cost, years: t.years, label: `${name} 설립 (${t.label})` });
+      save(state); drawUnivs(); renderAll();
+      startedNotice(state.projects[state.projects.length - 1]);
+    }
+    wrap.remove();
+  });
+}
+
 /** 이 자리 가까이(km)의 청사 이름: 새 역 이름 '○○시청역'용 */
 function hallsNear(lon, lat, km = 0.6) {
   return hallList().map((h) => ({ h, d: kmBetween(lon, lat, h.lon, h.lat) })).filter((x) => x.d < km).sort((a, b) => a.d - b.d).map((x) => x.h.name);
@@ -1388,11 +1552,14 @@ function bindMap() {
     if (svcEdit && selection?.type === 'service') { serviceEditClick(e.lngLat); return; }
     if (pointAdd) { pointAddClick(e.lngLat); return; }
     if (housingPick) { housingClick(e); return; }
+    if (univPick) { univPickClick(e.lngLat); return; }
     if (draft?.type === 'airport') { placeAirport(e.lngLat); return; }
     if (draft) { if (performance.now() - draftPress < 700) return; addDraftPoint(e.lngLat, { pass: !!e.originalEvent?.shiftKey }); return; }
     const box = [[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]];
     const pl = shownPlan ? map.queryRenderedFeatures(box, { layers: ['plans-line'] })[0] : null;
     if (pl) { openPlan(pl.properties.id); return; }
+    const uv = map.getLayer('univs-dot') ? map.queryRenderedFeatures(box, { layers: ['univs-dot'] })[0] : null;
+    if (uv) return select({ type: 'univ', id: uv.properties.key });
     const ap = map.queryRenderedFeatures(box, { layers: ['airports'] })[0];
     if (ap) return select({ type: 'airport', id: ap.properties.id });
     const pt = map.queryRenderedFeatures(box, { layers: ['points'] })[0];
@@ -2391,6 +2558,11 @@ function bindUI() {
       try { localStorage.setItem('ukt-svc-lines', showServices ? '1' : '0'); } catch { /* 저장 못 해도 이번에는 적용 */ }
       drawServices();
     }
+    if (e.target.id === 'univs-toggle') {
+      showUnivs = e.target.checked;
+      try { localStorage.setItem('ukt-univs', showUnivs ? '1' : '0'); } catch { /* 저장 못 해도 이번에는 적용 */ }
+      drawUnivs();
+    }
     if (e.target.id === 'halls-toggle') {
       showHalls = e.target.checked;
       try { localStorage.setItem('ukt-halls', showHalls ? '1' : '0'); } catch { /* 저장 못 해도 이번에는 적용 */ }
@@ -2635,6 +2807,7 @@ function renderAllPanels() {
   renderTop(); renderLegend(); renderStatus(); renderBuild(); renderProjects(); renderRequests(); renderOps(); renderSettings(); renderStats(); renderSelection();
   drawServices();
   drawHalls();
+  drawUnivs();
 }
 
 /** 지도의 광역 단체 경계·이름: 북측 도 복원, 광역시 승격(독립)이 바로 보이게 */
@@ -2664,7 +2837,8 @@ function renderLegend() {
   $('#legend').innerHTML = legendHTML(metric, layerView, basemap) + `<div class="lg-extra">${railKindLegend()}${trainsLegend()}
     <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:4px"><input type="checkbox" id="svc-lines-toggle" ${showServices ? 'checked' : ''}> 운행 계통 노선 보기</label>
     <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:2px"><input type="checkbox" id="housing-toggle" ${showHousing ? 'checked' : ''}> 택지지구 경계·단지 보기</label>
-    <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:2px"><input type="checkbox" id="halls-toggle" ${showHalls ? 'checked' : ''}> 시청·군청·구청 보기</label></div>`
+    <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:2px"><input type="checkbox" id="halls-toggle" ${showHalls ? 'checked' : ''}> 시청·군청·구청 보기</label>
+    <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:2px"><input type="checkbox" id="univs-toggle" ${showUnivs ? 'checked' : ''}> 대학 보기</label></div>`
     + `<button type="button" class="small lg-toggle">${$('#legend').classList.contains('open') ? '범례 접기' : '범례 더 보기'}</button>`;
 }
 
@@ -2736,7 +2910,7 @@ function renderBuild() {
   const tools = Object.entries(NEW_BUILDS).map(([k, v]) =>
     `<button data-build="${k}" class="${draft?.type === k ? 'on' : ''}">${v.label}<span class="c">${formatWon(v.perKm)}/km · ${v.years}년</span></button>`).join('')
     + `<button data-build="airport" class="${draft?.type === 'airport' ? 'on' : ''}">${AIRPORT.build.label}<span class="c">${formatWon(AIRPORT.build.cost)} · ${AIRPORT.build.years}년</span></button>`;
-  let body = `${compareHTML()}<div class="tool-row"><button class="small" data-padd="station">역 신설 (노선 위 한 점)</button><button class="small" data-padd="ic">IC·JCT 신설 (고속도로 위 한 점)</button><button class="small" data-padd="rest">휴게소 신설</button>
+  let body = `${compareHTML()}<div class="tool-row"><button class="small" data-padd="station">역 신설 (노선 위 한 점)</button><button class="small" data-padd="ic">IC·JCT 신설 (고속도로 위 한 점)</button><button class="small" data-padd="rest">휴게소 신설</button><button class="small" id="univ-start">대학 설립</button>
     <button class="small svc-pick-b">역 골라 특급·급행 짜기</button><button class="small" id="housing-pick" title="지도에서 고른 곳에 주택 단지를 조성합니다 (인구 순증)">택지지구 개발</button></div>
     <div class="name-row" style="margin-bottom:4px"><input type="text" id="rec-text" placeholder="예: 평양에 도시철도 3호선을 짓고 싶어, 노선을 추천해줘" style="flex:1">
       <button class="small primary" id="rec-go">노선 추천</button></div>
@@ -2803,6 +2977,7 @@ function renderBuild() {
   el.querySelectorAll('[data-plan]').forEach((b) => { b.onclick = () => openPlan(b.dataset.plan); });
   el.querySelectorAll('.svc-pick-b').forEach((b) => { b.onclick = startServicePick; });
   el.querySelectorAll('[data-padd]').forEach((b) => { b.onclick = () => startPointAdd(b.dataset.padd); });
+  el.querySelector('#univ-start')?.addEventListener('click', startUnivPick);
   const hp = el.querySelector('#housing-pick');
   if (hp) hp.onclick = startHousingPick;
   const py = el.querySelector('#prev-years');
@@ -3403,6 +3578,7 @@ function renderSelection() {
     });
   }
   else if (selection.type === 'airport') el.innerHTML = airportPanel(selection.id);
+  else if (selection.type === 'univ') { el.innerHTML = univPanel(selection.id); bindUnivPanel(el); }
   else if (selection.type === 'multi') el.innerHTML = multiPanel(selection.ids);
   else if (selection.type === 'service') el.innerHTML = servicePanel();
   else if (selection.type === 'straighten') { el.innerHTML = straightenPanel(); bindStraighten(el); return; }

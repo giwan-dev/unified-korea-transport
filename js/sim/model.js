@@ -1590,7 +1590,8 @@ export class Model {
   utility(i) {
     const dens = this.pop[i] / this.area[i];
     return Math.log(this.income[i]) + P.migAccessWeight * Math.log(this.access[i] / this.accessRef + 1e-6)
-      - P.migDensityElasticity * Math.log(dens + 1) + this.amenity[i] - this.amenExcess[i] * this.catchUp(i);
+      - P.migDensityElasticity * Math.log(dens + 1) + this.amenity[i] - this.amenExcess[i] * this.catchUp(i)
+      + 0.1 * (this.edu?.[i] || 0);   // 새 대학 가까이로 청년이 조금 모인다
   }
 
   /** 존별 인구이동 흐름. 반환: 존별 순유입 */
@@ -1648,10 +1649,35 @@ export class Model {
     }
   }
 
+  /**
+   * 대학 효과: 시군마다 90분 안팎에 닿는 대학 정원(거리에 따라 줄어듦, e^(−분/45))을 청년 수요(인구의 2% + 2만)에 견준 충족도 f.
+   * 게임에서 새로 세운 대학이 더한 몫(지금 대학 전체의 f − 처음부터 있던 대학만의 f)의 2.5배만큼 기대 교육연수 목표를 올린다 (최대 1.5년)
+   * (처음부터 있던 대학의 효과는 기준 연도 교육 수준에 이미 들어 있다). univ: [[존, 정원, 새 대학이면 1]]
+   */
+  eduBoost(univ) {
+    const { Z, ccomp } = this;
+    const out = new Float64Array(Z);
+    if (!univ?.some((u) => u[2])) return out;
+    for (let i = 0; i < Z; i++) {
+      if (this.isExt[i]) continue;
+      let all = 0, old = 0;
+      for (const [z, seats, isNew] of univ) {
+        const v = seats * Math.exp(-(i === z ? 10 : ccomp[i * Z + z]) / 45);
+        all += v;
+        if (!isNew) old += v;
+      }
+      const need = this.pop[i] * 0.02 + 20000;
+      out[i] = Math.min(1.5, 2.5 * ((1 - Math.exp(-all / need)) - (1 - Math.exp(-old / need))));
+    }
+    return out;
+  }
+
   /** 1년 진행: 소득 수렴, 건강·교육, 인구이동, 자연증감 */
-  advanceYear(integration, policy, sez = []) {
+  advanceYear(integration, policy, sez = [], univ = []) {
     const { Z } = this;
     this.computeAccess();
+    const edu = this.eduBoost(univ);
+    this.edu = edu;
     this.frontier *= 1 + P.frontierGrowth;
     // 경제특구: 투자가 몰려 소득이 빨리 따라잡고(수렴 속도 ×1.8, 목표 +15%), 일자리를 찾아 사람이 모인다(편의 +)
     const special = new Set(sez);
@@ -1666,8 +1692,8 @@ export class Model {
       this.income[i] = Math.exp(Math.log(this.income[i]) + r * (Math.log(target) - Math.log(this.income[i])));
       this.le[i] += 0.08 * (this.leTarget(i) - this.le[i]);
       const ii = incomeIndex(this.income[i]);
-      this.eys[i] += 0.05 * (6 + 10.5 * ii - this.eys[i]);
-      this.mys[i] += 0.02 * (7 + 6 * ii - this.mys[i]);
+      this.eys[i] += 0.05 * (6 + 10.5 * ii + edu[i] - this.eys[i]);   // 새 대학: 기대 교육연수 목표 +최대 1.5년
+      this.mys[i] += 0.02 * (7 + 6 * ii + edu[i] * 0.6 - this.mys[i]);   // 평균 교육연수는 수십 년에 걸쳐 따라간다
       this.hdi[i] = hdiOf(this.le[i], this.mys[i], this.eys[i], this.income[i]);
     }
     const mig = this.migrationFlows(integration, policy);
@@ -1781,6 +1807,7 @@ export class Model {
       hdi: Float64Array.from(this.hdi), le: Float64Array.from(this.le),
       access: Float64Array.from(this.access), station: this.primaryStations(),
       netMig: this.lastMigration.net ? Float64Array.from(this.lastMigration.net) : new Float64Array(this.Z),
+      edu: this.edu ? Float64Array.from(this.edu) : new Float64Array(this.Z),   // 새 대학이 올린 기대 교육연수 목표 (년)
     };
   }
 

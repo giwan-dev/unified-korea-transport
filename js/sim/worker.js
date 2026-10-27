@@ -164,7 +164,7 @@ async function handle(msg) {
       if (msg.ctx.anchor?.length) model.anchorDevelopments(msg.ctx.anchor);   // 예전 저장의 입주 인구를 제자리로 (한 번)
       // 열린 북측 관광지만 관광 수요를 끈다 (해금)
       if (msg.ctx.tourKP?.length === model.tourKP.length) model.tourKP.set(msg.ctx.tourKP);
-      model.advanceYear(msg.ctx.integration, msg.ctx.policy, msg.ctx.sez || []);
+      model.advanceYear(msg.ctx.integration, msg.ctx.policy, msg.ctx.sez || [], msg.ctx.univ || []);
       wmark('advanced');
       if (pre) await pre;
       beforeCache = null;
