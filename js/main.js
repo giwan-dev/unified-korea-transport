@@ -4502,38 +4502,7 @@ function localSettingsHTML() {
     ${state.linesRenamed ? '<p class="hint">북측 노선 이름을 남측 기준으로 바꿨습니다.</p>' : `<div class="item"><div class="t">북측 노선 이름을 남측 기준으로</div>
       <div class="m">${Object.entries(KP_LINE_RENAME).map(([a, b]) => `${esc(a)}→${esc(b)}`).join(', ')}. 남북을 잇는 노선이 한 이름이 되어 직통 계통·노선도·수익성이 한 노선으로 묶입니다 · ${formatWon(LINE_RENAME_COST)}</div>
       <button class="small primary" id="ev-rename">바꾸기</button></div>`}
-    ${adminChangesHTML()}`;
-}
-
-/**
- * 민원·정책 탭의 행정구역 조정: 조정 자체는 지도에서 시군을 눌러 그 창에서 한다 (zoneAdminHTML).
- * 여기는 할 수 있는 곳 목록(누르면 그 시군으로 간다)과 지금까지 바꾼 것만
- */
-function adminChangesHTML() {
-  const L = state.local;
-  const go = (i, label, title = '') => (i >= 0 ? `<button class="small" data-admin-go="${i}" title="${esc(title)}">${label}</button>` : '');
-  const at = annexTargets();
-  const groups = [
-    ['광역시 승격', promotableCities().map((c) => go(zoneProps.findIndex((z) => !z.ext && cityZoneMatch(c, z)), esc(c)))],
-    ['군 → 시 승격', cityUpTargets().map((c) => go(c.zones[0], `${esc(c.name)} <span class="m">${fmtPop(c.pop)}</span>`))],
-    ['분구', bunguUnits().map(([u, nm]) => go(unitZones(u)[0] ?? -1, esc(nm)))],
-    ['편입', at == null ? null : at.flatMap(([r, cs]) => cs.map((c) => go(c.zones[0], `${esc(c.name)} → ${esc(r)}`, `${c.region}에서 ${r}로`)))],
-  ];
-  const done = [
-    ...L.independent.map((c) => `${esc(metroName(c))} 승격`),
-    ...(L.cityUp || []).map((k) => `${esc(k.split('|')[1].replace(/군$/, '시'))} 승격`),
-    ...Object.keys(L.annex || {}).map((k) => `${esc(k.split('|')[1])} → ${esc(annexRegion(k))}`),
-    ...Object.entries(L.bungu || {}).map(([u, b]) => `${esc(u.includes('|') ? u.split('|')[1] : metroName(u))} ${new Set(Object.values(b.gu)).size}개 구${b.general ? '(일반구)' : ''}`),
-  ];
-  const nSub = Object.keys(L.annexSub || {}).length;
-  if (nSub) done.push(`읍면동 ${nSub}곳 편입`);
-  return `<div class="item"><div class="t">행정구역 조정</div>
-    <div class="m">지도에서 시·군을 누르면 그곳에서 할 수 있는 광역시 승격·군→시 승격·분구·편입이 그 창에 나옵니다.
-      읍면동 하나만 광역시에 옮기려면 범례에서 읍면동 보기(인구 밀도 등)를 고르고 그 읍면동을 누르세요. 아래 이름을 누르면 그 시군으로 갑니다.</div>
-    ${groups.map(([t, bs]) => (bs == null ? `<p class="m" style="margin-top:4px">${t}: 경계 자료를 읽는 중…</p>`
-      : bs.length ? `<details style="margin-top:4px"><summary class="m">${t} 할 수 있는 곳 (${bs.length})</summary>
-        <div class="row" style="display:flex;gap:4px;flex-wrap:wrap">${bs.join('')}</div></details>` : '')).join('')}
-    ${done.length ? `<details style="margin-top:4px"><summary class="m">지금까지 바꾼 행정구역 (${done.length})</summary><div class="m">${done.join(', ')}</div></details>` : ''}</div>`;
+    <p class="hint">광역시 승격·군→시 승격·분구·편입은 지도에서 그 시·군을 누르면 나오는 창에서 합니다. 읍면동 하나만 옮기려면 읍면동 보기에서 그 읍면동을 누르세요.</p>`;
 }
 
 /** 시군 창: 이 시군에서 할 수 있는 행정구역 조정만 (광역시 승격, 군→시 승격, 분구, 다른 광역 단체로 편입, 맞닿은 시군 편입) */
@@ -4560,13 +4529,23 @@ function zoneAdminHTML(id) {
     `${bunguSelect('bungu-n2', null, 2)} <button class="small primary" data-bungu="${esc(bu[0])}">분구</button>`));
   const at = annexTargets();
   const out = (at || []).flatMap(([r, cs]) => cs.filter((c) => inMine(c.zones)).map((c) => ({ r, c })));
-  if (out.length) rows.push(item(`다른 광역 단체로 편입 (지금 ${esc(out[0].c.region)})`,
-    `광역시에 들어가면 시는 구가 되고 군은 군 그대로입니다. 두 광역 단체장을 다시 뽑습니다 · ${formatWon(EVENT_COST.annex)}`,
-    out.map(({ r, c }) => `<button class="small" data-annex="${esc(c.key)}" data-annex-to="${esc(r)}" data-annex-zone="${c.via}">${esc(r)}에 편입</button>`).join('')));
+  const annexBtn = ({ r, c }, gu = '') => `<button class="small primary" data-annex="${esc(c.key)}" data-annex-to="${esc(r)}" data-annex-zone="${c.via}"${gu ? ` data-annex-gu="${gu}"` : ''}>${esc(r)}에 편입</button>`;
+  const toMetro = out.filter((o) => isMetroCity(o.r)), toProv = out.filter((o) => !isMetroCity(o.r));
+  if (toMetro.length) {
+    const isCity = /시$/.test(toMetro[0].c.name), pre = toMetro[0].c.name.replace(/시$/, '');
+    rows.push(item(`광역시로 편입 (지금 ${esc(toMetro[0].c.region)})`,
+      isCity ? `${esc(toMetro[0].c.name)}는 광역시의 자치구가 됩니다(${esc(pre)}구). 여러 자치구로 나누면(${esc(pre)}구·${esc(pre)}동구…) 구마다 구청장을 뽑습니다. 두 광역 단체장을 다시 뽑습니다 · ${formatWon(EVENT_COST.annex)} (분구하면 + ${formatWon(EVENT_COST.cityUp)})`
+        : `군은 광역시의 군 그대로 들어갑니다. 두 광역 단체장을 다시 뽑습니다 · ${formatWon(EVENT_COST.annex)}`,
+      `${isCity ? bunguSelect('annex-gu', '한 자치구로') : ''} ${toMetro.map((o) => annexBtn(o, isCity ? 'annex-gu' : '')).join('')}`));
+  }
+  if (toProv.length) rows.push(item(`다른 도로 편입 (지금 ${esc(toProv[0].c.region)})`,
+    `맞닿은 도의 군이 됩니다. 두 광역 단체장을 다시 뽑습니다 · ${formatWon(EVENT_COST.annex)}`,
+    toProv.map((o) => annexBtn(o)).join('')));
   const r = regionOf(state, z), inn = (at || []).find(([g]) => g === r)?.[1] || [];
   if (inn.length) rows.push(`<details class="item"><summary class="t">맞닿은 시군을 ${esc(r)}에 편입 (${inn.length}곳)</summary>
     <div class="m">${isMetroCity(r) ? '광역시는 맞닿은 시·군을' : '도는 맞닿은 군을'} 편입합니다 · 한 곳 ${formatWon(EVENT_COST.annex)}</div>
-    <div class="row" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${inn.map((c) => `<button class="small" data-annex="${esc(c.key)}" data-annex-to="${esc(r)}" data-annex-zone="${c.via}" title="${esc(c.region)}에서 ${esc(r)}로">${esc(c.name)} <span class="m">${esc(c.region)} ${fmtPop(c.pop)}</span></button>`).join('')}</div></details>`);
+    ${isMetroCity(r) && inn.some((c) => /시$/.test(c.name)) ? `<div class="m" style="margin-top:4px">시를 편입할 때 ${bunguSelect('annex-gu-in', '한 자치구로')}</div>` : ''}
+    <div class="row" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${inn.map((c) => `<button class="small" data-annex="${esc(c.key)}" data-annex-to="${esc(r)}" data-annex-zone="${c.via}"${isMetroCity(r) && /시$/.test(c.name) ? ' data-annex-gu="annex-gu-in"' : ''} title="${esc(c.region)}에서 ${esc(r)}로">${esc(c.name)} <span class="m">${esc(c.region)} ${fmtPop(c.pop)}</span></button>`).join('')}</div></details>`);
   if (!rows.length && at == null) return '<h4>행정구역 조정</h4><p class="hint">경계 자료를 읽는 중…</p>';
   if (!rows.length) return '';
   return `<h4>행정구역 조정</h4>${rows.join('')}`;
@@ -5069,9 +5048,6 @@ function bindLocalSettings(el) {
     save(state); renderAll();
   });
   el.querySelector('#ev-admin')?.addEventListener('click', () => adminSetup(false));
-  el.querySelectorAll('[data-admin-go]').forEach((b) => {
-    b.onclick = () => { const i = +b.dataset.adminGo, z = zoneProps[i]; map.flyTo({ center: [z.cx, z.cy], zoom: 9.5 }); select({ type: 'zone', id: i }); };
-  });
   el.querySelector('#ev-rename')?.addEventListener('click', () => {
     const r = renameKPLines(base, state);
     if (!r.ok) { alert(r.reason); return; }
@@ -5103,10 +5079,13 @@ function bindLocalSettings(el) {
   el.querySelectorAll('[data-annex]').forEach((b) => {
     b.onclick = () => {
       const k = b.dataset.annex, to = b.dataset.annexTo, c = counties().get(k);
-      if (!c || !confirm(`${c.name}(${c.region})을(를) ${to}에 편입할까요? 두 광역 단체장을 다시 뽑습니다. ${formatWon(EVENT_COST.annex)}`)) return;
-      if (!payEvent(EVENT_COST.annex)) return;
+      const nGu = b.dataset.annexGu ? +(el.querySelector(`#${b.dataset.annexGu}`)?.value || 1) : 1;
+      const cost = EVENT_COST.annex + (nGu > 1 ? EVENT_COST.cityUp : 0);
+      if (!c || !confirm(`${c.name}(${c.region})을(를) ${to}에 편입할까요?${nGu > 1 ? ` ${nGu}개 자치구로 나눕니다.` : ''} 두 광역 단체장을 다시 뽑습니다. ${formatWon(cost)}`)) return;
+      if (!payEvent(cost)) return;
       (L.annex ||= {})[k] = annexBase(to, +b.dataset.annexZone);
       state.log.unshift(`${state.year}년 ${c.name}, ${c.region}에서 ${to}로 편입`);
+      if (nGu > 1) { makeBungu(k, nGu); drawBungu(); }
       holdElection([to, c.region], `${to} 시군 편입 선거`);
       syncMayors();   // 편입한 시·군은 구: 시장·군수 → 구청장
       refreshNames(map);
