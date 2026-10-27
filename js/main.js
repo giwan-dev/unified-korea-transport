@@ -287,7 +287,11 @@ async function init() {
     setNameResolver((level, id, original) => (level === 'zone' && zoneProps[id] && guNamesOfZone(id) && !isGeneralGu(id) ? '' : placeName(state, level, id, level === 'zone' && zoneProps[id] ? countyDisplayName(state, zoneProps[id]) : original)));
     setLabelGroup((z) => ({ key: countyKey(z), weight: zoneProps[z]?.area || 0 }));
     refreshNames(map);
-    subsReady.then(() => { map.getSource('subs').setData(subsFC); drawAnnexedSubs(); drawBungu(); });
+    subsReady.then(() => {
+      map.getSource('subs').setData(subsFC);
+      if (fixBunguNames()) { syncMayors(); refreshNames(map); save(state); renderAll(); }   // 예전 저장: 거꾸로 붙은 구 이름
+      drawAnnexedSubs(); drawBungu();
+    });
     refreshPoints();
     placesReady.then(resetNamer);
     bindMap();
@@ -298,7 +302,7 @@ async function init() {
   });
   await mapReady;
   // 콘솔 디버깅용
-  window.ukt = { convertRadialHousingRoads: () => convertRadialHousingRoads(), reopenPlan: (id) => reopenPlan(id), startReopen: (id) => startReopen(id), planStraighten: () => planStraighten(), openPlan, refreshPoints, openServiceEditor, popNear, effectiveGrid, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
+  window.ukt = { fixBunguNames: () => fixBunguNames(), convertRadialHousingRoads: () => convertRadialHousingRoads(), reopenPlan: (id) => reopenPlan(id), startReopen: (id) => startReopen(id), planStraighten: () => planStraighten(), openPlan, refreshPoints, openServiceEditor, popNear, effectiveGrid, commitDraft, startServicePick, previewDraft, get lastPreview() { return lastPreview; }, namerSuggest: (x, y) => namer.suggest(x, y, 'station'), perf, map, base, worker: () => worker, packState: () => packState(), countyKey: (i) => countyKey(i), countyRep: (i) => countyRep(i), select, selectBox, renderAll, refreshLinks, startDraft, addDraftPoint, cancelDraft, startStraighten, straightenClick, startPointAdd, pointAddClick, openLineDiagram, recommendRoute, probe: () => worker.postMessage({ type: 'probe' }), get gains() { return gains; }, get zoneProps() { return zoneProps; }, get grid() { return grid; }, net: () => effectiveNetwork(base, state), ctx: () => ctx(), get draft() { return draft; }, get straight() { return straight; }, get state() { return state; }, get result() { return result; }, get requests() { return requests; } };
 }
 
 let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
@@ -4674,25 +4678,87 @@ function makeBungu(unit, n, opts = {}) {
   }
   // 이름: 도심에 가장 가까운 묶음은 중구 (둘로 나눌 때는 둘 다 방향으로), 나머지는 도심에서 본 방향
   const core = n >= 3 ? c.reduce((bk, q, k) => (d2(q, { x: cx, y: cy }) < d2(c[bk], { x: cx, y: cy }) ? k : bk), 0) : -1;
-  const dirs = [['동구', 0], ['북구', 90], ['서구', 180], ['남구', 270]];
-  const names = [], used = new Set();
-  const order = c.map((q, k) => k).filter((k) => k !== core)
-    .map((k) => ({ k, a: (Math.atan2(c[k].y - cy, (c[k].x - cx) * kx) * 180) / Math.PI }));
-  for (const o of order) {
-    const best = dirs.filter(([nm]) => !used.has(nm)).sort((p, q) => Math.abs(((o.a - p[1] + 540) % 360) - 180) - Math.abs(((o.a - q[1] + 540) % 360) - 180)).pop();
-    names[o.k] = best ? best[0] : `제${o.k + 1}구`;
-    used.add(names[o.k]);
-  }
+  const names = [];
+  const order = c.map((q, k) => k).filter((k) => k !== core);
+  const dn = dirNames(order.map((k) => (Math.atan2(c[k].y - cy, (c[k].x - cx) * kx) * 180) / Math.PI));
+  order.forEach((k, j) => { names[k] = dn[j] || `제${k + 1}구`; });
   if (core >= 0) names[core] = '중구';
   // 편입한 시: 벽성구(가운데)·벽성동구…
   const shown = names.map((nm) => (pre ? (nm === '중구' ? `${pre}구` : `${pre}${nm}`) : nm));
   const gu = {};
   subs.forEach((s, j) => { gu[subKey(s.i)] = shown[lab[j]]; });
-  (state.local.bungu ||= {})[unit] = { n, gu, core: core >= 0 ? shown[core] : null, ...(general ? { general: true } : {}) };
+  (state.local.bungu ||= {})[unit] = { n, gu, core: core >= 0 ? shown[core] : null, dirV: 2, ...(general ? { general: true } : {}) };
   guUnits.clear();   // 자세한 경계의 구 배정을 다시 한다
   const where = general ? `${zoneName(zs[0])} 일반구` : pre ? `${annexRegion(unit)} ${pre}구` : metroName(unit);
   state.log.unshift(`${state.year}년 ${where} 분구: ${[...new Set(shown)].join('·')}`);
   return true;
+}
+
+/**
+ * 묶음들의 방향(도: 동쪽 0, 북쪽 90)에 동·북·서·남구를 겹치지 않게 붙인다: 각도 차이 합이 가장 작은 짝 (묶음은 넷까지).
+ * (예전에는 가까운 방향을 고른다면서 정렬한 목록의 맨 끝, 곧 가장 먼 방향을 골라 서쪽 묶음이 동구가 됐다)
+ */
+function dirNames(angles) {
+  const dirs = [['동구', 0], ['북구', 90], ['서구', 180], ['남구', 270]];
+  const dist = (a, b) => { const d = (((a - b) % 360) + 360) % 360; return Math.min(d, 360 - d); };
+  let best = null, bestCost = Infinity;
+  const perm = (left, picked) => {
+    if (picked.length === Math.min(angles.length, dirs.length)) {
+      const cost = picked.reduce((t, d, k) => t + dist(angles[k], dirs[d][1]), 0);
+      if (cost < bestCost) { bestCost = cost; best = picked.slice(); }
+      return;
+    }
+    for (const d of left) perm(left.filter((x) => x !== d), [...picked, d]);
+  };
+  perm([0, 1, 2, 3], []);
+  return (best || []).map((d) => dirs[d][0]);
+}
+
+/**
+ * 예전 저장의 분구 이름을 바로잡는다 (방향이 거꾸로 붙던 것): 구마다 인구 중심의 방향으로 다시 붙이고, 구청장 자리도 새 이름으로 옮긴다.
+ * 고친 단위에는 dirV를 남겨 한 번만 한다. 바뀐 것이 있으면 true
+ */
+function fixBunguNames() {
+  const L = state.local;
+  let changed = false;
+  for (const [unit, b] of Object.entries(L?.bungu || {})) {
+    if (b.dirV >= 2) continue;
+    b.dirV = 2;
+    const zs = unitZones(unit);
+    if (!zs.length) continue;
+    const pre = b.general ? '' : unitPrefix(unit);
+    const cen = new Map();
+    let X = 0, Y = 0, Wt = 0;
+    for (const z of zs) zoneProps[z].subs.forEach((sp, k) => {
+      const i = zoneProps[z].sub0 + k, g = b.gu[subKey(i)];
+      if (!g) return;
+      const w = Math.max(1, result ? result.subs.pop[i] : sp[2] * zoneProps[z].pop);
+      const e = cen.get(g) || { x: 0, y: 0, w: 0 };
+      e.x += sp[0] * w; e.y += sp[1] * w; e.w += w; cen.set(g, e);
+      X += sp[0] * w; Y += sp[1] * w; Wt += w;
+    });
+    if (!Wt) continue;
+    const cx = X / Wt, cy = Y / Wt, kx = Math.cos((cy * Math.PI) / 180);
+    const core = b.core || (cen.has('중구') ? '중구' : cen.has(`${pre}구`) ? `${pre}구` : null);
+    const others = [...cen.keys()].filter((g) => g !== core);
+    const dn = dirNames(others.map((g) => { const e = cen.get(g); return (Math.atan2(e.y / e.w - cy, (e.x / e.w - cx) * kx) * 180) / Math.PI; }));
+    const rename = new Map();
+    others.forEach((g, j) => { const nw = dn[j] ? `${pre}${dn[j]}` : g; if (nw !== g) rename.set(g, nw); });
+    if (!rename.size) continue;
+    for (const k of Object.keys(b.gu)) if (rename.has(b.gu[k])) b.gu[k] = rename.get(b.gu[k]);
+    // 구청장 자리: m:존#옛이름 → m:존#새이름 (서로 맞바뀌는 경우가 있어 한꺼번에 옮긴다)
+    const moved = [];
+    for (const r of new Set(zs.map((z) => countyRep(z)))) {
+      for (const [old, nw] of rename) {
+        const k = `m:${r}#${old}`;
+        if (L.offices[k]) { moved.push([`m:${r}#${nw}`, { ...L.offices[k], gu: nw, title: `${nw}청장` }]); delete L.offices[k]; }
+      }
+    }
+    for (const [k, off] of moved) L.offices[k] = off;
+    changed = true;
+  }
+  if (changed) { guUnits.clear(); state.log.unshift(`${state.year}년 분구한 구의 이름을 방향에 맞게 바로잡았습니다.`); }
+  return changed;
 }
 
 /** 분구할 수 있는 단위: 승격한 도시, 광역시에 편입한 시 (아직 나누지 않았고 읍면동이 둘 넘는 곳) → [[단위, 보이는 이름]] */
