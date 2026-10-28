@@ -267,13 +267,15 @@ export function subAnnexAll(i, one = false) {
   // 북측은 지방자치를 들이기 전에도 리·면을 옮길 수 있다 (단체장·의회 협의가 없어 오히려 싸다: annexSubCost)
   if (zp.ext) return { metro: [], si: [] };
   const own = subRegion(i), ownU = subUnit(i), metro = new Set(), si = new Map();
+  const dong = annexGroup(i, one).some((s) => /동$/.test(subName(s)));
   for (const s of annexGroup(i, one)) for (const j of subNeighbors(s)) {
     const r = subRegion(j), u = subUnit(j);
     if (u === ownU) continue;
-    if (r !== own && isMetroCity(r) && !/세종/.test(r)) { metro.add(r); continue; }
+    if (r !== own && isMetroCity(r)) { metro.add(r); continue; }   // 세종도 받는다
     if (isMetroCity(r)) continue;
     const nm = unitName(u);
-    if (/시$/.test(nm)) si.set(u, nm);   // 군으로 옮기는 편입은 받지 않는다
+    // 시·군 모두 받는다. 군에는 읍·면만 둘 수 있어 동은 군으로 들이지 않는다
+    if (/시$/.test(nm) || (/군$/.test(nm) && !dong)) si.set(u, nm);
   }
   return { metro: [...metro], si: [...si] };
 }

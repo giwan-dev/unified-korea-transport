@@ -9,13 +9,13 @@ import { decodeNetwork } from './data/netpack.js';
 import { seedInterKoreaAir } from './game/airlines.js';
 import { makeForeignTest } from './game/lines.js';
 import { governorTitle, initLocal, metroName, normalizeUnitKeys, regionOf } from './game/local.js';
-import { migrateState, rememberNetwork } from './game/migrate.js';
+import { migrateState, refFromBase, rememberNetwork } from './game/migrate.js';
 import { initRail } from './game/operators.js';
 import { initPPP } from './game/ppp.js';
 import { keepBackup } from './game/savestore.js';
 import { planService, refreshExistingServices, seedServices, tripsPerDay } from './game/services.js';
 import { clearSim, loadSim } from './game/simstore.js';
-import { colourNewMetro, effectiveNetwork, initAirRoutes, initOngoing, load, migrateAir, newGame, placeName, save } from './game/state.js';
+import { colourNewMetro, dropOrphanNames, effectiveNetwork, initAirRoutes, initOngoing, load, migrateAir, newGame, placeName, save } from './game/state.js';
 import { loadTerrain, terrainAt } from './game/terrain.js';
 import { extendWorld, urbanLanes } from './game/world.js';
 import { t } from './i18n.js';
@@ -114,9 +114,13 @@ async function init() {
   setState(await load());
   // 데이터가 바뀌면(노선망·존 구성 변경) 예전 저장 게임의 번호(노드·링크·시군)를 새 자료에 맞춰 옮긴다.
   // 옮기지 못하면 예전 저장은 따로 남겨 두고(설정 탭에서 파일로 받을 수 있다) 새로 시작한다
-  if (state && meta && state.dataStamp && state.dataStamp !== meta.stamp) {
+  // 자료 판 표시는 같은데 기본 노드·구간 수가 다르면(예전 파일 일부를 캐시에서 쓴 판에서 저장한 경우) 새로 만든 노드·구간 번호가
+  // 판 옮기기 없이 밀려, 번호로 묶인 IC·역 이름이 엉뚱한 노드에 붙었다: 저장할 때의 수로 옮긴다
+  const sizeOff = state?.netSize && (state.netSize[0] !== base.nodes.length || state.netSize[1] !== base.links.length);
+  if (state && meta && state.dataStamp && (state.dataStamp !== meta.stamp || sizeOff)) {
     const old = state;
-    const r = await migrateState(old, { base, zones: zoneProps, stamp: meta.stamp });
+    const ref = state.dataStamp === meta.stamp ? refFromBase(base, zoneProps, old.netSize[0], old.netSize[1]) : null;
+    const r = await migrateState(old, { base, zones: zoneProps, stamp: meta.stamp, ref });
     if (r.ok) {
       await keepBackup(JSON.stringify(old), old.dataStamp);   // 옮기기가 잘못됐을 때 되돌릴 수 있게 옮긴 경우에도 남긴다
       setState(r.state);
@@ -145,6 +149,10 @@ async function init() {
   }
   (state || setState(newGame('normal')));
   if (meta) state.dataStamp = meta.stamp;
+  state.netSize = [base.nodes.length, base.links.length];   // 저장할 때의 기본 노드·구간 수 (위의 판 옮기기 판단)
+  // 짓다 만 노선이 남긴 IC·역 이름 (예전 판은 사업을 취소해도 이름을 지우지 않았다)
+  const orphan = dropOrphanNames(base, state);
+  if (orphan.length) state.log.unshift(`${state.year}년 취소한 사업이 남긴 이름 ${orphan.length}곳을 지웠습니다: ${orphan.slice(0, 5).map((v) => v.name).join(', ')}${orphan.length > 5 ? ' 등' : ''}`);
   // 예전 저장: 새로 놓은 선로를 남측 규격으로 (기존 북측 선로를 갈라 생긴 조각은 그대로)
   for (const nl of state.newLinks || []) if (nl.mode >= 1 && !nl.sstd && (nl.split == null || nl.split >= base.links.length)) { nl.sstd = 1; nl.std = 1; }
   if (convertRadialHousingRoads()) save(state);   // 예전 1기 신도시급 방사형 간선 → # 격자
@@ -285,7 +293,9 @@ async function init() {
     refreshNames(map);
     subsReady.then(() => {
       map.getSource('subs').setData(subsMapData());   // 국외 존 자리 채움은 빼고, 떼어 낸 남측 법정리는 넣어서
-      if (fixBunguNames()) { syncMayors(); refreshNames(map); save(state); renderAll(); }   // 예전 저장: 거꾸로 붙은 구 이름
+      if (fixBunguNames()) { syncMayors(); save(state); renderAll(); }   // 예전 저장: 거꾸로 붙은 구 이름
+      // 읍면동 이름을 받은 뒤 이름표·경계를 다시 그린다: 그 전에 그리면 북측의 지금 읍(○○읍)을 가리지 못해 1945년 면에 묶여 읍이 사라져 보였다
+      refreshNames(map);
       drawAnnexedSubs(); drawBungu();
     });
     refreshPoints();

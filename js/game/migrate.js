@@ -28,6 +28,19 @@ export function rememberNetwork(stamp, base, zones) {
   });
 }
 
+/**
+ * 지금 망에서 앞의 N개 노드·L개 구간만 있던 것으로 친 좌표표: 자료 판 표시는 같은데 기본 노드·구간 수가 다른 저장
+ * (판을 올린 뒤 브라우저가 예전 파일 일부를 캐시에서 써서 구간 고치기가 빠진 채 저장한 경우 등)을 옮길 때 쓴다
+ */
+export function refFromBase(base, zones, N, L) {
+  const xy = new Float64Array(N * 2).fill(NaN);
+  for (let i = 0; i < Math.min(N, base.nodes.length); i++) { xy[2 * i] = base.nodes[i][0]; xy[2 * i + 1] = base.nodes[i][1]; }
+  const ab = new Int32Array(L * 3).fill(-1);
+  for (let i = 0; i < Math.min(L, base.links.length); i++) { const l = base.links[i]; ab[3 * i] = l.a; ab[3 * i + 1] = l.b; ab[3 * i + 2] = l.mode; }
+  const modes = modesOf(N, base.links.filter((l) => l.a < N && l.b < N));
+  return { N, L, xy, ab, modes, zones: zones.map((z) => [z.name, z.country, z.cx, z.cy, (z.subs || [1]).length]) };
+}
+
 /** 좌표 격자 색인 */
 function grid(xy, n, cell) {
   const m = new Map();
@@ -54,8 +67,8 @@ function grid(xy, n, cell) {
  * @returns {Promise<{ok:true, state:object, note:string} | {ok:false, reason:string}>}
  * state는 고친 사본. 운행 계통 경로(segs)는 main이 새 망에서 다시 짠다 (replanServices 표시).
  */
-export async function migrateState(old, { base, zones }) {
-  const ref = await getRef(old.dataStamp);
+export async function migrateState(old, { base, zones, ref: given = null }) {
+  const ref = given || await getRef(old.dataStamp);
   if (!ref) return { ok: false, reason: '예전 자료의 좌표표가 없습니다' };
   const s = JSON.parse(JSON.stringify(old));
   const N0 = ref.N, L0 = ref.L, N1 = base.nodes.length, L1 = base.links.length;

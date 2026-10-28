@@ -3,16 +3,13 @@ import { DIFFICULTY, formatWon } from '../game/catalog.js';
 import { flushSave } from '../game/savestore.js';
 import { SERVICE_KINDS } from '../game/services.js';
 import { clearSim } from '../game/simstore.js';
-import {
-  clearSave, CLOSE_APPROVAL, closeLine, closeRoute, designateIntl, effectiveNetwork, FREQ_STEPS, linkAt, newGame, renameLine, REOPEN_PER_KM, reopenLine, save,
-  setLineFreq, setPlaceName, startAirportExpand, startOpenRoute, startRestoreName, startUpgrade, UPGRADES,
-} from '../game/state.js';
+import { clearSave, CLOSE_APPROVAL, closeLine, closeRoute, designateIntl, effectiveNetwork, FREQ_STEPS, IC_REMOVE_COST, linkAt, newGame, removeIC, renameLine, REOPEN_PER_KM, reopenLine, save, setLineFreq, setPlaceName, startAirportExpand, startOpenRoute, startRestoreName, startUpgrade, UPGRADES } from '../game/state.js';
 import { LANG, setLang, t } from '../i18n.js';
 import { getGuideMode, GUIDE_MODES, guideOnNewGame, setGuideMode } from '../ui/guide.js';
 import { refreshNames } from '../ui/map.js';
 import { openPalette } from '../ui/palette.js';
 import { toast } from '../ui/panel.js';
-import { $, APP_VERSION, autoRenameNode, base, BUG_MAIL, esc, historic, map, POLICY_LABEL, result, selection, setState, setWholeRoute, state, wholeRoute } from './core.js';
+import { $, APP_VERSION, autoRenameNode, base, BUG_MAIL, esc, historic, map, namer, POLICY_LABEL, result, selection, setState, setWholeRoute, state, wholeRoute } from './core.js';
 import { startSEZ } from './sez.js';
 import { allLinks, nodeNames, refreshLinks, refreshPoints, setHighlight } from './mapdata.js';
 import { admin, adminInvalidate } from './region.js';
@@ -23,7 +20,7 @@ import { bindHousingRename, housingRowHTML } from './budget.js';
 import { bindService, econCache, fmtRatio, lineEconomics, openServiceEditor, servicePanel, setEconCache, svcStats } from './svc.js';
 import { bindFund, bindRailStats, openLineDiagram, railStatsHTML } from './operators.js';
 import { countyZones, localSettingsHTML } from './election.js';
-import { bindLocalSettings, bunguUnitOf, drawBungu, endGuEdit, guEdit, guPanel, normGu, payEvent, renameGus, startGuEdit } from './bungu.js';
+import { bindLocalSettings, bunguUnitOf, drawBungu, endGuEdit, guEdit, guPanel, guSubs, moveGuTo, normGu, payEvent, renameGus, startGuEdit } from './bungu.js';
 import { bindStraighten, startStraighten, straightenPanel } from './straighten.js';
 import { bindPointAdd, pointAddPanel, REST_REMOVE_COST, startPointAdd } from './housing.js';
 import { previewUpgrade } from './compare.js';
@@ -39,6 +36,7 @@ import { showGazette } from './gazette.js';
 import { commitDevel, flyToNode, renameNode, startTransfer } from './transfer.js';
 import { splitSubOf } from './risplit.js';
 import { bindRiAnnex } from './selpanel.js';
+import { EVENT_COST } from '../game/local.js';
 
 // ---- 영업계수 패널: 노선별 수지를 나쁜 순으로 보고 감편·폐선·재개통한다
 export let econView = { filter: 'all', sort: 'ratio', all: false };
@@ -244,6 +242,10 @@ export function renderSelection() {
     el.innerHTML = guPanel(selection.id, selection.gu);
     el.querySelector('[data-gu-county]')?.addEventListener('click', () => select({ type: 'zone', id: selection.id }));
     el.querySelector('#gu-edit')?.addEventListener('click', () => { if (guEdit) endGuEdit(); else startGuEdit(selection.id); });
+    el.querySelectorAll('[data-gu-move]').forEach((b) => b.addEventListener('click', () => {
+      const { id, gu } = selection, to = b.dataset.guMove;
+      if (confirm(`${gu}를 통째로 ${to}의 자치구로 옮길까요? 두 광역 단체장과 구청장을 다시 뽑습니다. ${formatWon(EVENT_COST.annex)}`)) moveGuTo(guSubs(id, gu), gu, to);
+    }));
     el.querySelector('#gu-rename')?.addEventListener('click', () => {
       const { id, gu } = selection, unit = bunguUnitOf(id), v = el.querySelector('#gu-name').value;
       const err = unit ? renameGus(unit, new Map([[gu, v]])) : '분구하지 않은 곳입니다.';
@@ -439,6 +441,14 @@ export function renderSelection() {
       save(state); refreshNames(map); renderAll();
     };
   }
+  el.querySelector('#ic-del')?.addEventListener('click', () => {
+    const id = selection.id, n = nodeNames().get(id);
+    if (!n || !confirm(`${n.name}을(를) 철거할까요? 연결도로를 걷어 내고 이름을 지웁니다. ${formatWon(IC_REMOVE_COST)}`)) return;
+    const r = removeIC(base, state, id);
+    if (!r.ok) { alert(r.reason); return; }
+    namer?.release(r.name.name, r.name.kind);
+    save(state); select(null); refreshLinks(); refreshPoints(); renderAll();
+  });
   el.querySelector('#rest-del')?.addEventListener('click', () => {
     const id = selection.id, n = nodeNames().get(id);
     if (!n || !confirm(`${n.name}을(를) 철거할까요? ${formatWon(REST_REMOVE_COST)}`)) return;

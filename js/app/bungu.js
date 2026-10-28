@@ -12,16 +12,13 @@ import { fetchEdges, refreshNames, unitFeaturesIn } from '../ui/map.js';
 import { toast } from '../ui/panel.js';
 import { base, esc, grid, map, median, result, selection, state, subPop0, subsFC, zoneProps } from './core.js';
 import { officeName, zoneName } from './year.js';
-import { bunguLabels, nodeNames, paintZones, provincePops, pushExtraLabels, refreshLinks, setBunguLabels, subInfo, subMetric } from './mapdata.js';
-import { admin, adminInvalidate, countyNameOf, kpMyeon, mergeSplitUnit, myeonDongDialog, startUnitPick, subKey, subName } from './region.js';
+import { bunguLabels, drawAdmin, nodeNames, paintZones, provincePops, pushExtraLabels, refreshLinks, setBunguLabels, subInfo, subMetric } from './mapdata.js';
+import { admin, adminInvalidate, countyNameOf, kpMyeon, mergeSplitUnit, myeonDongDialog, setSubUnit, startUnitPick, subKey, subName, subNeighbors, subRegion, unitName } from './region.js';
 import { select } from './interact.js';
 import { fmtPop, pct, renderAll } from './panels.js';
 import { renderRequests } from './budget.js';
 import { renderSelection } from './econ.js';
-import {
-  bunguElectionNotice, countyRep, countyZones, guKey, holdElection, mayorKey, mayorTitleOf, officeLine, regions, supportHTML, syncAppointed, syncMayors, zoneAdminHTML,
-  zoneGus, zonePop,
-} from './election.js';
+import { bunguElectionNotice, countyRep, countyZones, guKey, holdElection, mayorKey, mayorTitleOf, officeLine, regions, supportHTML, syncAppointed, syncMayors, zoneAdminHTML, zoneGus, zonePop } from './election.js';
 import { adminSetup, drawGuMetric, setAdmin } from './firstyear.js';
 import { inRing } from './housing.js';
 import { runPreview } from './preview.js';
@@ -81,14 +78,14 @@ export function annexTargets() {
   const out = new Map();
   zoneProps.forEach((z, i) => {
     const r = regionAt(i);
-    // 지방자치가 없는 단체(북측 지방자치 전의 북측 도)로는 옮기지 않는다: 남측 군이 단체장을 잃는다
-    if (!r || /세종/.test(r) || !hasAutonomy(state, z)) return;
+    // 세종도, 북측 지방자치 전의 북측 도·시군도 옮길 수 있다 (지방자치 전 북측으로 옮긴 시군의 단체장은 관선이 된다)
+    if (!r) return;
     const metro = isMetroCity(r);
     for (const j of adj.get(i) || []) {
       const d = byZone.get(j);
-      if (!d || d.region === r || /세종/.test(d.region) || (d.z.country === 'KP' && !L.autonomyKP) || L.independent.includes(d.name)) continue;
-      // 광역시는 도의 시·군을, 도는 군만 (다른 도·광역시의 군)
-      if (metro ? isMetroCity(d.region) || !/[시군]$/.test(d.name) : !/군$/.test(d.name)) continue;
+      if (!d || d.region === r || L.independent.includes(d.name)) continue;
+      // 광역시는 군·구만 받는다 (도의 군, 다른 광역시의 군·구 통째): 시는 광역시 밑에 둘 수 없다. 도는 군만 (다른 도·광역시의 군)
+      if (metro ? !/[군구]$/.test(d.name) : !/군$/.test(d.name)) continue;
       if (!out.has(r)) out.set(r, new Map());
       out.get(r).set(d.key, { ...d, via: i });
     }
@@ -708,6 +705,36 @@ export function guSubs(z, gu) {
   return out;
 }
 
+/** 구 통째 편입 대상: 이 구의 읍면동과 맞닿은 다른 광역시 (구는 광역시 밑에 자치구로만 둔다) */
+export function guMoveTargets(subs) {
+  const own = new Set(subs.map((i) => subRegion(i))), out = new Set();
+  for (const s of subs) for (const j of subNeighbors(s)) { const r = subRegion(j); if (!own.has(r) && isMetroCity(r)) out.add(r); }
+  return [...out];
+}
+
+/**
+ * 구를 통째로 다른 광역시로 옮긴다: 그 구의 읍면동으로 대상 광역시 안에 같은 이름의 자치구를 세운다 (시군구 신설과 같은 장치).
+ * 일반구였으면 자치구가 되어 구청장을 뽑는다
+ */
+export function moveGuTo(subs, gu, to) {
+  const a = admin();
+  if (!a || !subs.length) return false;
+  if ([...a.units.values()].some((u) => u.name === gu && u.region === to)) { alert(`${to}에 이미 ${gu}가 있습니다. 구 이름을 먼저 바꾸세요.`); return false; }
+  const from = subRegion(subs[0]), fromUnit = a.unitOfSub[subs[0]];
+  if (!payEvent(EVENT_COST.annex)) return false;
+  const home = fromUnit.startsWith('z:') ? unitId(state, zoneProps[+fromUnit.slice(2)]) : state.local.splitUnit[fromUnit]?.home || fromUnit;
+  const key = `split:${Date.now().toString(36)}`;
+  (state.local.splitUnit ||= {})[key] = { name: gu, home, region: to, year: state.year };
+  adminInvalidate();
+  for (const i of subs) setSubUnit(i, key);
+  state.log.unshift(`${state.year}년 ${from} ${unitName(fromUnit)} ${gu}, ${to}로 통째 편입`);
+  holdElection([to, from], `${to} 구 편입 선거`);
+  syncMayors();
+  save(state); drawAdmin(); drawBungu(); refreshNames(map); renderAll();
+  select({ type: 'unit', id: key });
+  return true;
+}
+
 export function guPanel(z, gu) {
   const zp = zoneProps[z], r = regionOf(state, zp), L = state.local, general = isGeneralGu(z);
   const name = general ? `${zoneName(z)} ${gu}` : gu;
@@ -745,6 +772,11 @@ export function guPanel(z, gu) {
     <div class="m" style="margin:2px 0">${officeLine(L.offices[general ? mayorKey(z) : guKey(z, gu)])}</div>
     ${supportHTML(z)}
     ${zoneAdminHTML(z)}
+    ${(() => {
+      const t = guMoveTargets(subs);
+      return t.length ? `<h4>구 통째 편입</h4><p class="hint">${esc(gu)}를 통째로 맞닿은 광역시의 자치구로 옮깁니다 (같은 이름, 구청장 선거) · ${formatWon(EVENT_COST.annex)}</p>
+        <div class="actions">${t.map((r) => `<button class="small" data-gu-move="${esc(r)}">${esc(r)}에 편입</button>`).join('')}</div>` : '';
+    })()}
     <h4>구 경계 조정</h4>
     <p class="hint">${guEdit ? '지도에서 동을 누르면 그 자리에 구 목록이 뜹니다. 옮길 구를 고르세요 (한 구의 마지막 동은 옮길 수 없습니다). Esc로 끝냅니다.' : '단추를 누른 뒤 지도에서 동을 눌러, 그 동이 속할 구를 고릅니다.'}</p>
     <button class="small ${guEdit ? '' : 'primary'}" id="gu-edit">${guEdit ? '경계 조정 끝내기' : '동을 눌러 경계 조정'}</button>

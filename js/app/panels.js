@@ -589,6 +589,7 @@ export function renderBuild() {
         renderBuild();
       };
     });
+    el.querySelectorAll('[data-pdel]').forEach((b) => { b.onclick = () => removeDraftPoint(+b.dataset.pdel); });
     el.querySelectorAll('[data-ptoggle]').forEach((b) => {
       b.onclick = () => {
         const p = draft.points[+b.dataset.ptoggle];
@@ -603,16 +604,31 @@ export function renderBuild() {
 export function pointRow(p, i) {
   const spec = NEW_BUILDS[draft.type];
   const tag = p.node != null ? '연결' : '신규';
+  // 잘못 놓았거나 필요 없어진 역·경유점을 하나씩 뺀다 (마지막 점만 지우던 것)
+  const del = `<button class="small" data-pdel="${i}" title="이 점 빼기">✕</button>`;
   if (!p.name) {
     const toggle = spec.mode >= 1 ? `<button class="small" data-ptoggle="${i}">역 설치</button>` : '';
-    return `<div class="name-row" data-prow="${i}"><span class="kind">${tag}</span><span style="flex:1;color:var(--muted)">경유점 ${i + 1}</span>${toggle}</div>`;
+    return `<div class="name-row" data-prow="${i}"><span class="kind">${tag}</span><span style="flex:1;color:var(--muted)">경유점 ${i + 1}</span>${toggle}${del}</div>`;
   }
   const catchment = spec.mode >= 1 ? `<span class="m" title="역 반경 ${catchKm(draft.type)}km 인구">${fmtPeople(popNear(p.lon, p.lat, catchKm(draft.type)))}</span>` : '';
-  if (p.existing) return `<div class="name-row" data-prow="${i}"><span class="kind">${tag}</span><span style="flex:1">${esc(p.name)}</span>${catchment}</div>`;
+  if (p.existing) return `<div class="name-row" data-prow="${i}"><span class="kind">${tag}</span><span style="flex:1">${esc(p.name)}</span>${catchment}${del}</div>`;
   const toggle = spec.mode >= 1 && i > 0 && i < draft.points.length - 1 ? `<button class="small" data-ptoggle="${i}">통과</button>` : '';
   return `<div class="name-row" data-prow="${i}"><span class="kind">${p.kind === 'station' ? '역' : p.kind}</span>
     <input type="text" data-pname="${i}" value="${esc(p.name)}">
-    <button class="small" data-pauto="${i}" title="자동 이름">↻</button>${catchment}${toggle}</div>`;
+    <button class="small" data-pauto="${i}" title="자동 이름">↻</button>${catchment}${toggle}${del}</div>`;
+}
+
+/** 그리는 노선에서 점 하나를 뺀다. 그 점을 지나려고 앞뒤에 깐 선형 점(지형·접선)도 함께 빼, 앞뒤 역·경유점을 곧게 잇는다 */
+export function removeDraftPoint(i) {
+  const pts = draft?.points, p = pts?.[i];
+  if (!p) return;
+  if (p.reserved) namer.release(p.name, p.kind);
+  let a = i, b = i;
+  while (a > 0 && pts[a - 1].via) a--;
+  while (b < pts.length - 1 && pts[b + 1].via) b++;
+  pts.splice(a, b - a + 1);
+  setHighlight();
+  drawDraft(); renderBuild();
 }
 
 export function renameDraftPoint(i, name) {

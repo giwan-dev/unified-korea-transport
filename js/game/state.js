@@ -318,7 +318,58 @@ export function cancelProject(base, state, id) {
   const hit = p.cost >= 50000 ? 2 : p.cost >= 10000 ? 1 : 0;
   state.approval = Math.max(0, state.approval - hit);
   state.log.unshift(`${state.year}년 사업 취소: ${p.label} (투입한 ${formatWon(p.paid)}은 돌려받지 못합니다, 남은 ${formatWon(Math.max(0, p.cost - p.paid))} 절감${hit ? `, 지지율 −${hit}` : ''})`);
-  return { ok: true, hit };
+  // 짓다 만 노선의 IC·역 이름은 착공할 때 붙어, 취소해도 지도에 남았다 (잔여 IC): 이 사업이 붙인 이름은 그 전 이름으로 되돌리고,
+  // 지나는 구간이 없어진 새 노드의 이름은 지운다
+  const dropped = [];
+  for (const [n, prev] of p.named || []) {
+    if (state.projects.some((q) => q !== p && q.status !== 'cancelled' && (q.named || []).some(([m]) => m === n))) continue;   // 다른 사업도 이 노드에 이름을 붙였다
+    const cur = state.names[n];
+    if (!cur) continue;
+    dropped.push(cur);
+    if (prev) state.names[n] = prev; else delete state.names[n];
+  }
+  dropped.push(...dropOrphanNames(base, state));
+  return { ok: true, hit, dropped };
+}
+
+/**
+ * 지나는 구간이 없는 새 노드의 이름(취소한 사업이 남긴 IC·역)을 지운다. 지운 이름 [{name, kind}]
+ * 자료 노드(기존 IC·역의 이름 바꾸기)는 그대로 둔다
+ */
+export function dropOrphanNames(base, state) {
+  const used = new Set();
+  base.links.forEach((l, i) => { if (!state.replaced?.[i]) { used.add(l.a); used.add(l.b); } });
+  for (const nl of state.newLinks) if (!nl.replaced) { used.add(nl.a); used.add(nl.b); }
+  const out = [];
+  for (const [k, v] of Object.entries(state.names || {})) {
+    if (+k < base.nodes.length || used.has(+k)) continue;
+    out.push(v);
+    delete state.names[k];
+  }
+  return out;
+}
+
+export const IC_REMOVE_COST = 20;   // 새로 놓은 IC·JCT 철거 (억원)
+
+/**
+ * 게임에서 놓은 IC·JCT를 철거한다: 이름을 지우고 그 노드에서 나가는 연결도로·연결로를 걷어 낸다
+ * (짓는 중인 IC 사업이면 취소한다). 고속도로 본선은 그대로 둔다.
+ * 예전 판에서 사업을 취소해 기존 도로 노드에 이름만 남은 IC도 이것으로 걷는다 (연결도로가 없으면 이름만)
+ */
+export function removeIC(base, state, node) {
+  const nm = state.names[node];
+  if (!nm || !/^(IC|JCT)$/.test(nm.kind)) return { ok: false, reason: '게임에서 놓은 IC·JCT만 철거할 수 있습니다.' };
+  if (state.budget < IC_REMOVE_COST) return { ok: false, reason: '예산이 부족합니다.' };
+  const ramps = [];
+  state.newLinks.forEach((nl, k) => { if (!nl.replaced && (nl.a === node || nl.b === node) && nl.mode === 0 && /연결(도로|로)$/.test(nl.name || '')) ramps.push(base.links.length + k); });
+  for (const p of state.projects) {
+    if (p.status === 'building' && (p.type === 'ic' || p.type === 'jct') && (p.links || []).some((id) => ramps.includes(id))) { p.status = 'cancelled'; p.cancelYear = state.year; }
+  }
+  for (const id of ramps) { const nl = state.newLinks[id - base.links.length]; nl.replaced = true; nl.removed = true; }
+  delete state.names[node];
+  state.budget -= IC_REMOVE_COST;
+  state.log.unshift(`${state.year}년 ${nm.name} 철거 (연결도로 ${ramps.length}곳, ${formatWon(IC_REMOVE_COST)})`);
+  return { ok: true, name: nm, ramps: ramps.length };
 }
 
 /**
@@ -802,9 +853,13 @@ export function startNewBuild(base, state, plan) {
   }
   if (spec.mode === 2) { const c = metroColour(base, state, plan.lineName || '', plan.points); if (c) for (const l of links) l.colour = c; }
   state.newLinks.push(...links);
+  // 이 사업이 이름을 붙인 노드와 그 전 이름: 사업을 취소하면 되돌린다 (기존 도로 노드를 IC·JCT로 쓴 곳도)
+  const named = [];
   plan.points.forEach((pt, i) => {
     const nm = plan.names[i];
-    if (nm && nodeIds[i] != null) state.names[nodeIds[i]] = { name: nm.name, kind: nm.kind, auto: nm.auto !== false };
+    if (!nm || nodeIds[i] == null) return;
+    named.push([nodeIds[i], state.names[nodeIds[i]] || null]);
+    state.names[nodeIds[i]] = { name: nm.name, kind: nm.kind, auto: nm.auto !== false };
   });
   for (const r of plan.restAreas || []) (state.restAreas ||= []).push({ ...r, built: false, links: links.map((l) => l.id) });
   const endName = (i) => plan.points[i].name || nameOf(state, nodeIds[i]) || '';
@@ -816,7 +871,7 @@ export function startNewBuild(base, state, plan) {
   startProject(state, {
     id: crypto.randomUUID(), kind: 'new', type: plan.type, links: links.map((l) => l.id), extension: !!plan.extendOf,
     stations: spec.mode >= 1 ? nodeIds.filter((n, i) => n != null && plan.names[i]?.kind === 'station') : [],
-    cost: total, years: spec.years, label, fund, plan: plan.plan, govShare: plan.ppp ? plan.ppp.subsidy : undefined,
+    cost: total, years: spec.years, label, fund, plan: plan.plan, govShare: plan.ppp ? plan.ppp.subsidy : undefined, named,
   });
   return { ok: true };
 }

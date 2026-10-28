@@ -3,7 +3,7 @@ import { airlinesHTML } from '../game/airlines.js';
 import { AIRPORT, formatWon, KP_COST_FACTOR } from '../game/catalog.js';
 import { placeIntroHTML } from '../game/cities.js';
 import { dueum, EVENT_COST, governorTitle, hasAutonomy, isMetroCity, KP_DIRECT_CITIES, PARTIES, partySupport, regionOf } from '../game/local.js';
-import { AIR, effectiveNetwork, load, RENAME, save, START_YEAR } from '../game/state.js';
+import { AIR, effectiveNetwork, IC_REMOVE_COST, load, RENAME, save, START_YEAR } from '../game/state.js';
 import { t } from '../i18n.js';
 import { routeKey } from '../sim/model.js';
 import { refreshNames } from '../ui/map.js';
@@ -594,6 +594,8 @@ export function nodePanel(id) {
     ${n.kind === 'city' ? placeIntroHTML(n.name, abroad || 'KR') : ''}
     ${n.kind === 'station' ? stationPanel(id, n) : ''}
     ${n.kind === 'rest' ? `<div class="actions"><button class="small" id="rest-del">휴게소 철거 (${formatWon(REST_REMOVE_COST)})</button></div>` : ''}
+    ${(n.kind === 'IC' || n.kind === 'JCT') && n.isNew ? `<div class="actions"><button class="small" id="ic-del">${n.kind} 철거 (${formatWon(IC_REMOVE_COST)})</button></div>
+      <p class="hint">게임에서 놓은 ${n.kind}입니다. 철거하면 이름을 지우고 연결도로를 걷어 냅니다(고속도로 본선은 그대로). 짓는 중이면 그 사업을 접습니다.</p>` : ''}
     <h4>이름</h4>
     <div class="name-row"><input type="text" id="node-name" value="${esc(n.name)}">
       <button class="small" id="node-save">바꾸기</button>

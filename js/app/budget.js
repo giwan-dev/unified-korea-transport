@@ -7,9 +7,9 @@ import {
 } from '../game/state.js';
 import { t } from '../i18n.js';
 import { toast } from '../ui/panel.js';
-import { $, base, CLASS_LABEL, esc, map, requests, result, selection, setRequests, state, zoneProps } from './core.js';
+import { $, base, CLASS_LABEL, esc, map, namer, requests, result, selection, setRequests, state, zoneProps } from './core.js';
 import { zoneName } from './year.js';
-import { allLinks, linkTwins, nodeCoord, nodeNames, provincePops, refreshLinks, setHighlight, shownTraffic } from './mapdata.js';
+import { allLinks, linkTwins, nodeCoord, nodeNames, provincePops, refreshLinks, refreshPoints, setHighlight, shownTraffic } from './mapdata.js';
 import { setUnivPickAmt, setUnivRankAll, univEntries, univList, univMaxFund, univPickAmt, univPicked, univRankAll, univRankTable } from './univ.js';
 import { select } from './interact.js';
 import { fmtPeople } from './draw.js';
@@ -108,7 +108,8 @@ export function renderProjects() {
 사업을 취소할까요? 지금까지 낸 ${formatWon(p.paid)}은 돌려받지 못하고, 남은 ${formatWon(left)}을 아낍니다.${hit ? ` 짓다 만 사업이라 지지율이 ${hit} 내려갑니다.` : ''}`)) return;
       const r = cancelProject(base, state, p.id);
       if (!r.ok) { alert(r.reason); return; }
-      save(state); refreshLinks(); refreshClosed(); renderAll();
+      for (const nm of r.dropped || []) namer?.release(nm.name, nm.kind);   // 짓다 만 노선의 IC·역 이름을 다시 쓸 수 있게
+      save(state); refreshLinks(); refreshPoints(); refreshClosed(); renderAll();
     };
   });
 }
