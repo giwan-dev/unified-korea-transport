@@ -156,6 +156,35 @@ export function easeCurves(pts, kind, rMinKm, mk, ok = null) {
   return out;
 }
 
+/**
+ * 선 위 가장 급한 곡선의 반경(km): 이웃한 세 점을 지나는 원으로 잰다 (양 끝 점은 역·IC라 빼고, 0.2km보다 가까운 점은 건너뛴다)
+ * @param {number[][]} line [[경도, 위도], ...]
+ */
+export function minRadiusKm(line) {
+  const k = Math.cos(((line[0]?.[1] ?? 37) * Math.PI) / 180) * 111.32;
+  const P = [];
+  for (const [x, y] of line) {
+    const q = [x * k, y * 110.95];
+    if (!P.length || Math.hypot(q[0] - P[P.length - 1][0], q[1] - P[P.length - 1][1]) >= 0.2) P.push(q);
+  }
+  let r = Infinity;
+  for (let i = 2; i + 1 < P.length; i++) {
+    const a = P[i - 2], b = P[i - 1], c = P[i];
+    if (i - 2 === 0) continue;   // 첫 점(역·IC)을 낀 셋은 뺀다. 마지막 점은 i + 1 < P.length로 빠진다
+    const ab = Math.hypot(b[0] - a[0], b[1] - a[1]), bc = Math.hypot(c[0] - b[0], c[1] - b[1]), ca = Math.hypot(a[0] - c[0], a[1] - c[1]);
+    const area2 = Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]));
+    if (area2 > 1e-9) r = Math.min(r, (ab * bc * ca) / (2 * area2));
+  }
+  return r;
+}
+
+/** 곡선 반경(km)이 허락하는 최고 속도(km/h): 철도는 캔트를 둔 V ≈ 4.2√R(m) (R 7km → 350), 도로는 편경사+횡마찰 0.2로 V ≈ √(25R(m)) (R 0.4km → 100) */
+export function curveSpeed(rKm, mode) {
+  if (!Number.isFinite(rKm)) return Infinity;
+  const r = rKm * 1000;
+  return Math.floor((mode === 0 ? Math.sqrt(25 * r) : 4.2 * Math.sqrt(r)) / 5) * 5;
+}
+
 export function polylineKm(line) {
   let d = 0;
   for (let i = 0; i + 1 < line.length; i++) d += kmBetween(line[i][0], line[i][1], line[i + 1][0], line[i + 1][1]);

@@ -82,7 +82,9 @@ def main():
     for zi, z in enumerate(zones):
         for k in range(len(z["subs"])):
             sub_zone[z["sub0"] + k] = zi
-    kr = [i for i, f in enumerate(subs) if zones[sub_zone[i]]["country"] == "KR" and not zones[sub_zone[i]].get("ext")]
+    # 리는 읍·면에만 둔다 (동 밑에는 리가 없다: 경계가 조금 어긋나 동에 붙던 리는 가장 많이 겹치는 읍·면으로)
+    kr = [i for i, f in enumerate(subs) if zones[sub_zone[i]]["country"] == "KR" and not zones[sub_zone[i]].get("ext")
+          and str(f["properties"].get("name", "")).endswith(("읍", "면"))]
     geoms = [shape(subs[i]["geometry"]) for i in kr]
     tree = shapely.STRtree(geoms)
 

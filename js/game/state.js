@@ -2,7 +2,7 @@
 import { DIFFICULTY, UPGRADES, NEW_BUILDS, KP_COST_FACTOR, AIRPORT, upgradeCost, upgradeAttrs, resolve, formatWon } from './catalog.js';
 import { P } from '../sim/params.js';
 import { routeKey } from '../sim/model.js';
-import { smoothSegments, polylineKm } from './curve.js';
+import { smoothSegments, polylineKm, minRadiusKm, curveSpeed } from './curve.js';
 import { serviceLinks } from './services.js';
 import { initRail, operatorOf, OPERATORS, OP_FACTORS, MERGE_MIN_INTEGRATION, EQUITY_STEP } from './operators.js';
 import { MEGA, applyMega, TSR_FREIGHT, kpACYear } from './mega.js';
@@ -751,11 +751,14 @@ export function startNewBuild(base, state, plan) {
     const a = plan.points[i0], b = plan.points[i1];
     const kp = isKP(a.lat, a.lon) && isKP(b.lat, b.lon) ? 1 : 0;
     total += Math.round(cost); kmTotal += len;
+    // 선형이 급하게 굽은 구간은 설계 속도를 곡선 반경에 맞춰 낮춘다 (도시철도는 표정 속도라 그대로)
+    const lim = spec.mode === 2 ? Infinity : curveSpeed(minRadiusKm(geom), spec.mode);
     links.push({
       id: firstId + links.length, a: nodeIds[i0], b: nodeIds[i1], mode: spec.mode, len: Math.round(len * 100) / 100,
       kp, name: plan.lineName || '', built: false, geom: geom.flat().map((v) => Math.round(v * 1e5) / 1e5), ...spec.attrs,
       // 새로 놓는 선로는 북측 땅이라도 남측 규격(표준궤·남측 설계 기준)으로 짓는다: '남측 규격 일괄 개량' 대상이 아니고 북측 규격 표시도 없다
       ...(spec.mode >= 1 ? { sstd: 1, std: 1 } : {}),
+      ...(lim < spec.attrs.speed ? { speed: Math.max(lim, 30) } : {}),
     });
   }
   total += plan.extraCost || 0;   // 중간 IC·역·휴게소 설치비

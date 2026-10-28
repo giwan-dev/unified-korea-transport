@@ -1889,7 +1889,9 @@ export class Model {
     for (let i = 0; i < n; i++) {
       vol[i] = this.volume[i] + (this.metroLocal?.[i] || 0);
       vc[i] = this.capacity[i] > 0 ? vol[i] / this.capacity[i] : 0;
-      speed[i] = this.cost[i] > 0 ? this.net.links[i].len / (this.cost[i] / 60) : 0;
+      // 도로의 실제 속도는 경로 선택용 체감 비용(고속도로 ×0.85 등)을 빼고 잰다: 그러지 않으면 설계 속도보다 빠르게 나왔다
+      const l = this.net.links[i], road = l.mode === 0, t = road ? this.cost[i] / (P.roadPerceived[l.cls] ?? 1) : this.cost[i];
+      speed[i] = t > 0 ? (road ? Math.min(l.len / (t / 60), l.speed) : l.len / (t / 60)) : 0;
     }
     // 운행 계통 구간별 이용객 (가상 링크 순서 그대로)
     const svcVol = Float32Array.from(this.virtual || [], (i) => this.volume[i]);

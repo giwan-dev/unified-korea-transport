@@ -106,8 +106,80 @@ function chaikin(pts, n = 3) {
   return out;
 }
 
-export function fixNetwork(base, nodeFix = {}, roadFix = {}) {
+/**
+ * 구간 자료 고치기 (data/link_fix.json): 메일 제보 등으로 찾은 OSM 자료의 틀린 차로·속도·선로, 빠진 다리·연결로, 겹친 역.
+ *  nodes: [[경도, 위도], ...]  새 노드 (add에서 "n0", "n1"처럼 순번으로 부른다)
+ *  set:   [{id, a, b, ...속성}]  양 끝(a·b)이 맞는 구간의 속성(차로·속도·선로 수·전철·이름·도형 등)을 바꾼다 (자료가 바뀌어 끝이 다르면 건너뛴다).
+ *         to: [새 a, 새 b]를 주면 구간 끝을 다른 노드로 옮긴다 (역을 새로 끼워 구간을 둘로 나눌 때: 앞 구간은 to로 줄이고 뒤 구간은 add)
+ *  add:   [{a, b, mode, cls, ..., geom: [경도, 위도, ...]}]  빠진 구간 (도형 양 끝은 노드 자리로 맞춘다)
+ *  off:   [{id, a, b}]  있어서는 안 될 구간: 번호는 남기고(저장 게임 번호가 밀리지 않게) 길이 없는 자기 고리로 만든다
+ *  stations: {merge: [[없앨 역 노드, 남길 역 노드]], add: [[역 이름, 노드]], metro: [[역 이름, 노드]], rename: [[노드, 새 이름]]}
+ *         merge: 같은 역이 두 번 들어간 곳 (없앨 역에 닿던 구간을 남길 역으로 옮긴다), add·metro: 빠진 철도역·도시철도역
+ * 구조(노드·구간 수)가 바뀌므로 v를 올리면 자료 판(stamp)도 바뀌어 저장 게임 번호를 옮긴다 (main.js)
+ */
+export function applyLinkFix(base, fix) {
+  const out = { set: 0, add: 0, off: 0, merged: 0 };
+  if (!fix?.v) return out;
+  const N0 = base.nodes.length;
+  for (const p of fix.nodes || []) base.nodes.push(p);
+  const node = (x) => (typeof x === 'string' ? N0 + +x.slice(1) : x);
+  const same = (l, r) => r.a == null || [l.a, l.b].sort((p, q) => p - q).join() === [node(r.a), node(r.b)].sort((p, q) => p - q).join();
+  const pl = (g) => { let s = 0; for (let k = 2; k + 1 < g.length; k += 2) s += km([g[k - 2], g[k - 1]], [g[k], g[k + 1]]); return s; };
+  // 도형 양 끝을 a·b 노드 자리로 (도형이 b 쪽에서 시작하면 뒤집는다)
+  const fit = (g, a, b) => {
+    const na = base.nodes[a], nb = base.nodes[b];
+    let pts = [];
+    for (let k = 0; k + 1 < g.length; k += 2) pts.push([g[k], g[k + 1]]);
+    if (km(pts[0], nb) < km(pts[0], na)) pts = pts.reverse();
+    pts[0] = na; pts[pts.length - 1] = nb;
+    return pts.flat();
+  };
+  for (const r of fix.set || []) {
+    const l = base.links[r.id];
+    if (!l || !same(l, r)) continue;
+    const { id, a, b, geom, to, ...attrs } = r;
+    Object.assign(l, attrs);
+    if (to) { l.a = node(to[0]); l.b = node(to[1]); if (!geom) { l.geom = fit(l.geom, l.a, l.b); l.len = Math.round(pl(l.geom) * 100) / 100; } }
+    if (geom) { l.geom = fit(geom, l.a, l.b); l.len = Math.round(pl(l.geom) * 100) / 100; }
+    out.set++;
+  }
+  for (const r of fix.off || []) {
+    const l = base.links[r.id];
+    if (!l || !same(l, r)) continue;
+    l.b = l.a; l.geom = [...base.nodes[l.a], ...base.nodes[l.a]]; l.len = 0.01; l.off = 1;   // 빈 도형이면 지도(geojson) 처리에서 오류가 난다
+    out.off++;
+  }
+  for (const r of fix.add || []) {
+    const { geom, a: ra, b: rb, ...attrs } = r;
+    const a = node(ra), b = node(rb);
+    if (!base.nodes[a] || !base.nodes[b]) continue;
+    const g = fit(geom || [...base.nodes[a], ...base.nodes[b]], a, b);
+    base.links.push({ kp: 0, ...attrs, a, b, geom: g, len: attrs.len ?? Math.round(pl(g) * 100) / 100 });
+    out.add++;
+  }
+  for (const [drop, keep] of fix.stations?.merge || []) {
+    if (!base.nodes[drop] || !base.nodes[keep]) continue;
+    for (const list of [base.stations, base.metro_stations || []]) {
+      for (let k = list.length - 1; k >= 0; k--) if (list[k][1] === drop) list.splice(k, 1);
+    }
+    for (const l of base.links) {
+      if (l.a !== drop && l.b !== drop) continue;
+      if (l.a === drop) l.a = keep;
+      if (l.b === drop) l.b = keep;
+      if (l.geom.length >= 4 && !l.geom.some((v) => Number.isNaN(v))) { l.geom = fit(l.geom, l.a, l.b); l.len = Math.max(0.01, Math.round(pl(l.geom) * 100) / 100); }
+    }
+    out.merged++;
+  }
+  // rename: [[노드, 새 이름]] 자료에 임시 이름(예: '동탄인덕원111')으로 들어간 역
+  for (const [n, name] of fix.stations?.rename || []) for (const list of [base.stations, base.metro_stations || []]) for (const e of list) if (e[1] === node(n)) e[0] = name;
+  for (const [name, n] of fix.stations?.add || []) if (base.nodes[node(n)]) base.stations.push([name, node(n)]);
+  for (const [name, n] of fix.stations?.metro || []) if (base.nodes[node(n)]) (base.metro_stations ||= []).push([name, node(n)]);
+  return out;
+}
+
+export function fixNetwork(base, nodeFix = {}, roadFix = {}, linkFix = null) {
   incident = null;
+  const lf = applyLinkFix(base, linkFix);
   // 대심도 광역급행철도(GTX): 지도 자료 선형이 역 어귀에서 기존 노선을 따라 구불거린다(대곡 등). 지하 깊이 거의 곧게 가므로
   // 250m 안의 잔굴곡을 없애고 매끈한 곡선으로 (양 끝 역 자리는 그대로)
   for (const l of base.links) {
@@ -192,5 +264,5 @@ export function fixNetwork(base, nodeFix = {}, roadFix = {}) {
       break;
     }
   }
-  return { moved, hooks };
+  return { moved, hooks, ...lf };
 }

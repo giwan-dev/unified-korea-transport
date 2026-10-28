@@ -36,6 +36,8 @@ function baseStyle() {
       { id: 'bg-world', type: 'fill', source: 'world', paint: { 'fill-color': c.world } },
       // 육지 면은 시군구 도형으로: 해안선(시군구 경계선 조각)과 같은 도형이라 어긋나지 않는다
       { id: 'bg-land', type: 'fill', source: 'sgg', paint: { 'fill-color': c.land, 'fill-antialias': false } },
+      // 시군구 면 사이 틈(hairline)으로 바다 색이 비쳐 육지 안에 파란 점·선이 보였다: 같은 도형의 테두리를 육지 색 선으로 덮는다
+      { id: 'bg-land-seam', type: 'line', source: 'sgg', paint: { 'line-color': c.land, 'line-width': 1.2 } },
       // 비무장지대: 어느 시군구에도 속하지 않는 땅이라 따로 육지 색으로 채운다 (경계선은 군사분계선 하나만)
       { id: 'bg-dmz', type: 'fill', source: 'dmz', paint: { 'fill-color': c.land, 'fill-antialias': false } },
       { id: 'bg-lake', type: 'fill', source: 'water', filter: ['==', ['get', 'kind'], 'lake'], paint: { 'fill-color': c.water } },

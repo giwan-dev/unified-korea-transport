@@ -15,6 +15,7 @@
     import { seedServices } from '../js/game/services.js';
     import { seedInterKoreaAir } from '../js/game/airlines.js';
     import { loadNetwork } from '../js/data/netpack.js';
+    import { fixNetwork } from '../js/data/netfix.js';
     import { extendWorld, urbanLanes } from '../js/game/world.js';
     const log = (s) => { document.querySelector('#log').textContent += s + '\n'; };
     const [zones, net, meta, grid] = await Promise.all([
@@ -23,6 +24,11 @@
       fetch('../data/meta.json').then((r) => r.json()),
       fetch('../data/grid.bin').then((r) => r.arrayBuffer()),
     ]);
+    // 게임(main.js)과 같은 자료 손질: 노드 자리·분기점·구간 고치기. 구간 고치기 판은 자료 판(stamp)에 붙인다
+    const jsonOr = (u) => fetch(u).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+    const linkFix = await jsonOr('../data/link_fix.json');
+    log(`자료 손질 ${JSON.stringify(fixNetwork(net, await jsonOr('../data/node_fix.json'), await jsonOr('../data/road_geom_fix.json'), linkFix))}`);
+    if (linkFix.v) meta.stamp = `${meta.stamp}+f${linkFix.v}`;
     const world = await fetch('../data/air_sea.json').then((r) => r.json());
     extendWorld(net, zones, world);
     log(`도심 간선도로 차로 보정 ${urbanLanes(net, grid)}개 구간`);

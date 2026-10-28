@@ -7,6 +7,37 @@
   <meta name="description" content="통일 한반도의 고속도로·고속철도를 계획하고 수요와 인구 이동을 시뮬레이션하는 게임">
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
   <link rel="icon" href="assets/brand/mark.svg" type="image/svg+xml">
+  <script>
+  // 새 판을 올려도 iPad Safari 등이 예전 JS·데이터를 캐시에서 계속 써서 웹사이트 데이터를 지워야 했다.
+  // version.json(캐시 없이 받음)의 판 번호가 지난번과 다르면 목록의 파일을 새로 받아 캐시를 바꾸고 한 번 다시 연다.
+  // 목록에 없는 data/ 파일은 받을 때마다 서버에 바뀌었는지 묻는다 (안 바뀌었으면 304로 캐시를 그대로 쓴다)
+  (function () {
+    var K = 'ukt-ver', old = null, pre = null;
+    try { old = localStorage.getItem(K); } catch (e) {}
+    var f0 = window.fetch.bind(window);
+    window.fetch = function (u, o) {
+      if (typeof u === 'string' && pre && u.indexOf('data/') === 0 && !pre[u] && !(o && o.cache)) o = Object.assign({}, o, { cache: 'no-cache' });
+      return f0(u, o);
+    };
+    function refresh(j, force) {
+      return Promise.all(j.files.map(function (f) { return f0(f, { cache: 'reload' }).catch(function () {}); })).then(function () {
+        try { localStorage.setItem(K, j.v); } catch (e) {}
+        if (old || force) { location.reload(); return new Promise(function () {}); }
+      });
+    }
+    window.uktVersion = f0('version.json', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }).then(function (j) {
+      if (!j || !j.v) return null;
+      pre = {}; j.files.forEach(function (f) { if (f.indexOf('data/') === 0) pre[f] = 1; });
+      window.uktRefresh = function () { return refresh(j, true); };
+      if (old === j.v) return j.v;
+      // 캐시에 든 main.js가 이미 이 판이면 (처음 온 사람 등) 다시 받을 것이 없다
+      return f0('js/main.js').then(function (r) { return r.text(); }).catch(function () { return ''; }).then(function (t) {
+        if (t.indexOf("APP_VERSION = '" + j.v + "'") >= 0) { try { localStorage.setItem(K, j.v); } catch (e) {} return j.v; }
+        return refresh(j, true).then(function () { return j.v; });
+      });
+    });
+  })();
+  </script>
   <!-- 로딩 시간 줄이기: JS 모듈은 import를 차례로 따라가지 않고 한꺼번에, 시작에 꼭 필요한 데이터는 JS를 기다리지 않고 바로 받는다 -->
   <link rel="modulepreload" href="js/main.js">
   <link rel="modulepreload" href="js/data/netpack.js">
@@ -48,7 +79,7 @@
   <div id="loading" role="status" aria-live="polite">
     <div class="ld-card">
       <div class="ld-logo"><img src="assets/brand/mark.svg" alt="" width="56" height="56">
-        <div class="ld-title">통일 한반도 교통망<small>UNIFIED KOREA TRANSPORT</small><span class="ld-ver">Version Alpha 0.4.12</span></div></div>
+        <div class="ld-title">통일 한반도 교통망<small>UNIFIED KOREA TRANSPORT</small><span class="ld-ver">Version Alpha 0.4.13</span></div></div>
       <p class="ld-sub">2026년, 남북이 오늘 통일되었습니다. 한정된 SOC 예산으로 고속도로·철도·도시철도를 놓고 국토를 다시 짜 보세요.</p>
       <ol class="ld-steps">
         <li data-stage="data"><span class="t">데이터 내려받기</span><span class="s">도로·철도·인구 격자</span><div class="bar"><div class="p"></div></div></li>
@@ -106,6 +137,7 @@
   </main>
 
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-  <script type="module" src="js/main.js"></script>
+  <!-- 판 번호 확인(맨 앞 스크립트)이 끝난 뒤에 시작한다: 새 판이면 캐시를 바꾸고 다시 열기 때문 -->
+  <script type="module">await window.uktVersion; import('./js/main.js');</script>
 </body>
 </html>
