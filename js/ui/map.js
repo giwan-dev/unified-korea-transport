@@ -346,9 +346,9 @@ export const METRICS = {
   pop: { label: '시군구 인구 (합계)', ramp: ['#f7f4ea', '#f2c48d', '#d9682e', '#8f2318'], stops: [0, 100000, 400000, 1000000], fmt: (v) => `${Math.round(v / 1000).toLocaleString()}천` },
   popSido: { label: '광역지자체 인구 (합계)', ramp: ['#f7f4ea', '#f2c48d', '#d9682e', '#8f2318', '#4a0c0a'], stops: [0, 1500000, 3000000, 6000000, 13000000],
     fmt: (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(1)}백만` : `${Math.round(v / 1e4).toLocaleString()}만`) },
-  subDensity: { label: '읍면동 인구 밀도 (노선 놓을 곳 찾기)', sub: true, ramp: ['#f7f4ea', '#f6c27a', '#e0662c', '#9b1d14', '#4a0c0a'], stops: [100, 1000, 5000, 15000, 30000], fmt: (v) => `${Math.round(v).toLocaleString()}/km²` },
-  subChange: { label: '읍면동 인구 변화 (시작 대비)', sub: true, ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-0.2, -0.05, 0, 0.05, 0.2], fmt: (v) => `${(v * 100).toFixed(0)}%` },
-  subTransit: { label: '읍면동 대중교통 접근 (분)', sub: true, ramp: ['#1d5c3a', '#5aa36b', '#f5e08a', '#e88a3c', '#8f2318'], stops: [5, 10, 20, 35, 60], fmt: (v) => `${Math.round(v)}분` },
+  subDensity: { label: '리 인구 밀도 (노선 놓을 곳 찾기)', sub: true, ramp: ['#f7f4ea', '#f6c27a', '#e0662c', '#9b1d14', '#4a0c0a'], stops: [100, 1000, 5000, 15000, 30000], fmt: (v) => `${Math.round(v).toLocaleString()}/km²` },
+  subChange: { label: '리 인구 변화 (시작 대비)', sub: true, ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-0.2, -0.05, 0, 0.05, 0.2], fmt: (v) => `${(v * 100).toFixed(0)}%` },
+  subTransit: { label: '리 대중교통 접근 (분)', sub: true, ramp: ['#1d5c3a', '#5aa36b', '#f5e08a', '#e88a3c', '#8f2318'], stops: [5, 10, 20, 35, 60], fmt: (v) => `${Math.round(v)}분` },
   popChange: { label: '인구 변화 (시작 대비)', ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-0.3, -0.1, 0, 0.1, 0.3], fmt: (v) => `${(v * 100).toFixed(0)}%` },
   hdi: { label: '인간개발지수 (HDI)', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [0.55, 0.65, 0.75, 0.85, 0.95], fmt: (v) => v.toFixed(2) },
   income: { label: '1인당 소득 (PPP $)', ramp: ['#f7f4ea', '#c7d9ee', '#5b8fd1', '#1d3f8f'], stops: [2000, 10000, 30000, 60000], fmt: (v) => `$${Math.round(v / 1000)}k` },
@@ -357,7 +357,40 @@ export const METRICS = {
   partyMayor: { label: '지자체장 소속 정당 (시군구청장)', ...PARTY_MAP },
   partyGov: { label: '지자체장 소속 정당 (광역단체장)', ...PARTY_MAP },
   access: { label: '접근성 (상대)', ramp: ['#f7f4ea', '#c8e0b4', '#5aa36b', '#1d5c3a'], stops: [0.2, 0.6, 1.2, 2.5], fmt: (v) => v.toFixed(1) },
+  // 광역 단체 단위
+  sidoChange: { label: '인구 변화 (시작 대비)', ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-0.2, -0.05, 0, 0.05, 0.2], fmt: (v) => `${(v * 100).toFixed(0)}%` },
+  sidoDensity: { label: '인구 밀도 (명/km²)', ramp: ['#f7f4ea', '#f6c27a', '#e0662c', '#9b1d14', '#4a0c0a'], stops: [50, 150, 400, 2000, 16000], fmt: (v) => Math.round(v).toLocaleString() },
+  sidoHdi: { label: '인간개발지수 (HDI)', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [0.55, 0.65, 0.75, 0.85, 0.95], fmt: (v) => v.toFixed(2) },
+  sidoIncome: { label: '1인당 소득 (PPP $)', ramp: ['#f7f4ea', '#c7d9ee', '#5b8fd1', '#1d3f8f'], stops: [2000, 10000, 30000, 60000], fmt: (v) => `$${Math.round(v / 1000)}k` },
+  sidoHappy: { label: '주민 행복도', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [40, 50, 60, 70, 80], fmt: (v) => v.toFixed(0) },
+  // 읍면동 단위 (북측은 1945년 면: 그 리들을 합친 값)
+  emdPop: { label: '읍면동 인구', sub: true, ramp: ['#f7f4ea', '#f2c48d', '#d9682e', '#8f2318'], stops: [0, 5000, 20000, 60000], fmt: (v) => `${Math.round(v / 1000)}천` },
+  emdDensity: { label: '읍면동 인구 밀도', sub: true, ramp: ['#f7f4ea', '#f6c27a', '#e0662c', '#9b1d14', '#4a0c0a'], stops: [100, 1000, 5000, 15000, 30000], fmt: (v) => Math.round(v).toLocaleString() },
+  emdChange: { label: '읍면동 인구 변화 (시작 대비)', sub: true, ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-0.2, -0.05, 0, 0.05, 0.2], fmt: (v) => `${(v * 100).toFixed(0)}%` },
+  emdTransit: { label: '읍면동 대중교통 접근 (분)', sub: true, ramp: ['#1d5c3a', '#5aa36b', '#f5e08a', '#e88a3c', '#8f2318'], stops: [5, 10, 20, 35, 60], fmt: (v) => `${Math.round(v)}분` },
+  emdHappy: { label: '읍면동 주민 행복도', sub: true, ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [40, 50, 60, 70, 80], fmt: (v) => v.toFixed(0) },
+  // 리 단위 (남측은 읍면동과 같다)
+  subPop: { label: '리 인구', sub: true, ramp: ['#f7f4ea', '#f2c48d', '#d9682e', '#8f2318'], stops: [0, 1000, 5000, 20000], fmt: (v) => `${Math.round(v / 1000)}천` },
 };
+
+/** 지도 층위: 광역 > 기초 > 읍면동 > 리. 지표마다 층위(lv)와 같은 뜻의 다른 층위 지표를 찾는 바탕 이름(base) */
+export const MAP_LEVELS = { sido: '광역', sgg: '기초', emd: '읍면동', ri: '리' };
+const LV = {
+  none: ['all'], density: ['all'],
+  popSido: ['sido', 'pop'], sidoChange: ['sido', 'change'], sidoDensity: ['sido', 'dens'], sidoHdi: ['sido', 'hdi'], sidoIncome: ['sido', 'income'], sidoHappy: ['sido', 'happy'], partyGov: ['sido', 'party'],
+  pop: ['sgg', 'pop'], popChange: ['sgg', 'change'], hdi: ['sgg', 'hdi'], income: ['sgg', 'income'], happiness: ['sgg', 'happy'], partyMayor: ['sgg', 'party'], access: ['sgg', 'access'],
+  emdPop: ['emd', 'pop'], emdDensity: ['emd', 'dens'], emdChange: ['emd', 'change'], emdTransit: ['emd', 'transit'], emdHappy: ['emd', 'happy'],
+  subPop: ['ri', 'pop'], subDensity: ['ri', 'dens'], subChange: ['ri', 'change'], subTransit: ['ri', 'transit'],
+  voteGov: ['sido', 'vote'], voteMayor: ['sgg', 'vote'], mayorApproval: ['sgg', 'approval'], subHappy: ['ri', 'happy'], subApproval: ['ri', 'approval'], subGain: ['ri', 'gain'],
+};
+export function metricLevel(k) { return LV[k]?.[0] || 'sgg'; }
+/** 다른 층위로 바꿀 때 같은 뜻의 지표 (없으면 그 층위의 첫 지표) */
+export function metricForLevel(k, lv) {
+  if (metricLevel(k) === 'all') return k;
+  const base = LV[k]?.[1];
+  const keys = Object.keys(METRICS).filter((m) => metricLevel(m) === lv);
+  return keys.find((m) => LV[m]?.[1] === base) || keys[0] || k;
+}
 
 export async function createMap(container) {
   const map = new maplibregl.Map({
@@ -832,9 +865,10 @@ export function setLayerView(map, view) {
 
 const sw = (color, kind = 'line', extra = '') => `<i class="sw ${kind}" style="--c:${color};${extra}"></i>`;
 
-export function legendHTML(metric, view = 'all', basemap = 'plain') {
+export function legendHTML(metric, view = 'all', basemap = 'plain', level = 'sgg') {
   const m = METRICS[metric];
-  const opts = Object.entries(METRICS).map(([k, v]) => `<option value="${k}" ${k === metric ? 'selected' : ''}>${v.label}</option>`).join('');
+  // 지금 층위의 지표만 (밀도 격자·표시 안 함은 어느 층위에나)
+  const opts = Object.entries(METRICS).filter(([k]) => [level, 'all'].includes(metricLevel(k))).map(([k, v]) => `<option value="${k}" ${k === metric ? 'selected' : ''}>${v.label}</option>`).join('');
   let ramp = '';
   if (m.categorical) {
     // 정당처럼 나뉘는 값은 색 띠 대신 색 칸
@@ -858,6 +892,7 @@ export function legendHTML(metric, view = 'all', basemap = 'plain') {
   if (view === 'none') rows.push('교통망을 숨기고 지표 색칠만 봅니다.');
   if (view !== 'air' && view !== 'none') rows.push(`<i class="sw warn"></i> 혼잡 주의 (V/C &gt; ${HOT_VC})`);
   return `<select id="layerview" title="지도에 그릴 교통망">${Object.entries(LAYER_VIEWS).map(([k, v]) => `<option value="${k}" ${k === view ? 'selected' : ''}>${v}</option>`).join('')}</select>
+    <div class="lv-tabs" role="tablist" title="지도 층위">${Object.entries(MAP_LEVELS).map(([k, v]) => `<button type="button" class="small ${k === level ? 'on' : ''}" data-maplevel="${k}">${v}</button>`).join('')}</div>
     <select id="metric">${opts}</select>
     <select id="basemap" title="배경 지도">${Object.entries(BASEMAPS).map(([k, v]) => `<option value="${k}" ${k === basemap ? 'selected' : ''}>배경: ${v}</option>`).join('')}</select>${ramp}
     <div class="lg-more">${(road || view === 'rail') ? vcRamp(view === 'rail' ? '철도 혼잡도 (V/C, 0~10)' : '도로 혼잡도 (V/C, 0~10)') : ''}

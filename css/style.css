@@ -188,6 +188,9 @@ table.cmp th.asc, table.cmp th.desc { color: var(--ink); }
 #legend .ticks span:last-child { transform: translateX(-100%); }
 #legend select { width: 100%; margin-bottom: 6px; font-size: 12px; }
 #legend .lg-t { margin-top: 6px; font-weight: 600; }
+#legend .lv-tabs { display: flex; gap: 2px; margin: 4px 0; }
+#legend .lv-tabs button { flex: 1; padding: 2px 0; }
+#legend .lv-tabs button.on { background: #1d4e89; color: #fff; border-color: transparent; }
 #legend .lg-rows { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; color: var(--ink); }
 #legend .lg-rows > div { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 4px; }
 .sw { display: inline-block; width: 18px; height: 4px; background: var(--c); border-radius: 2px; flex: none; }

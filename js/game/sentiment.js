@@ -72,9 +72,9 @@ export function registerSentimentMetrics(METRICS) {
     voteMayor: { label: '득표율 지도 (시군구청장, 국민의힘)', ramp: party, stops: [0.3, 0.42, 0.5, 0.58, 0.7], fmt: (v) => `${Math.round(v * 100)}%` },
     voteGov: { label: '득표율 지도 (광역단체장, 국민의힘)', ramp: party, stops: [0.3, 0.42, 0.5, 0.58, 0.7], fmt: (v) => `${Math.round(v * 100)}%` },
     mayorApproval: { label: '지자체장 지지율 (시군구청장)', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [30, 40, 50, 60, 70], fmt: (v) => `${Math.round(v)}%` },
-    subHappy: { label: '읍면동 주민 행복도', sub: true, ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [40, 50, 60, 70, 80], fmt: (v) => v.toFixed(0) },
-    subApproval: { label: '읍면동 지지율', sub: true, ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [35, 45, 55, 65, 75], fmt: (v) => `${Math.round(v)}%` },
-    subGain: { label: '읍면동 교통 체감 개선 (시작 대비)', sub: true, ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-5, -1, 0, 3, 10], fmt: (v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}점` },
+    subHappy: { label: '리 주민 행복도', sub: true, ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [40, 50, 60, 70, 80], fmt: (v) => v.toFixed(0) },
+    subApproval: { label: '리 지지율', sub: true, ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [35, 45, 55, 65, 75], fmt: (v) => `${Math.round(v)}%` },
+    subGain: { label: '리 교통 체감 개선 (시작 대비)', sub: true, ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-5, -1, 0, 3, 10], fmt: (v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}점` },
   });
 }
 
