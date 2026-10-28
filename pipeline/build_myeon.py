@@ -17,6 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 SRC = DATA / "raw" / "hgis_1945" / "19100510-19450814역사적행정구역.txt"
+SOUTH_ONLY = {"강화", "김포", "파주", "고양"}
 NORTH = ("황해도", "평안남도", "평안북도", "함경남도", "함경북도", "강원도", "경기도")
 
 
@@ -110,16 +111,18 @@ def main():
             nb[a].add(b)
             nb[b].add(a)
     old = load_1945()
-    out, single, stats = {}, {}, collections.Counter()
+    out, single, gun, stats = {}, {}, {}, collections.Counter()
     for zi, z in enumerate(zones):
         if z.get("ext") or z["country"] != "KP":
             continue
         idxs = [z["sub0"] + k for k in range(len(z["subs"]))]
         # 이 시군·옛 군(hist)·이웃 시군 이름의 옛 부군 (가까운 쪽부터)
         # 1952년에 새로 생긴 군(피현군 등)은 옛 군이 이웃의 이웃일 수 있어 두 겹까지 (두음법칙도: 룡천 = 용천)
-        ring2 = sorted({k for j in nb[zi] for k in nb[j]} - nb[zi] - {zi})
+        # 이웃의 이웃은 북측 존을 거친 것만 (남측 파주를 거쳐 강화까지 닿아, 판문구역 리가 강화군 송해면으로 묶였다)
+        ring2 = sorted({k for j in nb[zi] if zones[j]["country"] == "KP" for k in nb[j] if zones[k]["country"] == "KP"} - nb[zi] - {zi})
         cands = [stem(dueum(z["name"]))] + ([stem(dueum(z["hist"]))] if z.get("hist") else [])             + [stem(dueum(zones[j]["name"])) for j in sorted(nb[zi])] + [stem(dueum(zones[j]["name"])) for j in ring2]
-        cands = [c for c in dict.fromkeys(cands) if c in old]
+        # 1945년에도 모두 남측 땅이던 군(강화·김포·파주·고양)은 북측 리의 옛 군이 될 수 없다 (한강 하구 건너 이웃이라 강화 송해면·김포 월곶면으로 잘못 묶였다)
+        cands = [c for c in dict.fromkeys(cands) if c in old and c not in SOUTH_ONLY]
         got, hits = {}, {}
         for i in idxs:
             raw = feats[i]["properties"].get("name", "")
@@ -134,7 +137,7 @@ def main():
         votes = collections.Counter((c, m) for opts in hits.values() for (c, m) in {(c, m) for _, c, m in opts})
         for i, opts in hits.items():
             k, c, m = max(opts, key=lambda o: (votes[(o[1], o[2])], -o[0]))
-            got[i] = m
+            got[i] = (c, m)
             stats["matched"] += 1
         if not got:
             stats["zones_without_match"] += 1
@@ -169,17 +172,18 @@ def main():
                     if j in got and got[j] != got[i] and cnt[got[j]] > 1:
                         votes[got[j]] += c
                 if votes:
-                    single[str(i)] = got[i]
+                    single[str(i)] = got[i][1]
                     got[i] = votes.most_common(1)[0][0]
                     stats["single_merged"] += 1
         for i in idxs:
             if i in got:
-                out[str(i)] = got[i]
+                out[str(i)] = got[i][1]
+                gun[str(i)] = got[i][0]
             else:
                 stats["left"] += 1
         stats["zones"] += 1
     res = {"source": "국사편찬위원회 역사지리정보DB 행정구역 데이터(1910~1945년), 1945-08-14 기준 (공공누리 제1유형)",
-           "subs": out, "single": single, "stats": dict(stats)}
+           "subs": out, "gun": gun, "single": single, "stats": dict(stats)}
     (DATA / "kp_myeon.json").write_text(json.dumps(res, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(json.dumps(dict(stats), ensure_ascii=False), len(out), file=sys.stderr)
 
