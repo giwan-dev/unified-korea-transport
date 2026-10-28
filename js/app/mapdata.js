@@ -20,6 +20,7 @@ import { countyRep, countyZones, mayorKey } from './election.js';
 import { edgeLines, guUnits, unitZones } from './bungu.js';
 import { drawGuMetric, GU_METRIC, GU_POP, officeParty, partyValue } from './firstyear.js';
 import { effectiveGrid, inRing } from './housing.js';
+import { extraOf, extraSubs, extrasOfParent, riPopOf, subXY } from './risplit.js';
 
 // ------------------------------------------------------------ 지도 데이터
 
@@ -495,13 +496,19 @@ export async function drawAdmin() {
     adminFine = new Map();
     for (const it of items) { if (!adminFine.has(it.sub)) adminFine.set(it.sub, []); adminFine.get(it.sub).push(...it.polys); }
     const lines = items.length ? edgeLines(items, 'between').map((line) => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } })) : [];
+    // 떼어 낸 리는 원래 읍면동과 경계 꼭짓점을 같이 쓰지 않아 위에서 잡히지 않는다: 소속 시군이 다르면 리 경계를 긋는다
+    for (const e of extraSubs) {
+      if (a.unitOfSub[e.g] === a.unitOfSub[e.parent]) continue;
+      const g = e.feature.geometry, polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+      for (const pg of polys) lines.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: pg[0] } });
+    }
     adminLineCache = { sig, lines };
   }
   map.getSource('admin-lines').setData({ type: 'FeatureCollection', features: adminLineCache.lines });
   // 새 시군 이름 (시군 이름과 같은 모양): 그 읍면동들 가운데 (인구 가중)
   adminLabels = splitUnits().map((u) => {
     const w = u.subs.map((i) => Math.max(1, result ? result.subs.pop[i] : 1)), W = w.reduce((x, y) => x + y, 0);
-    const c = u.subs.map((i) => zoneProps[subInfo(i)[0]].subs[subInfo(i)[1]]);
+    const c = u.subs.map((i) => subXY(i));
     return { type: 'Feature', properties: { name: u.name }, geometry: { type: 'Point', coordinates: [c.reduce((t, q, n) => t + q[0] * w[n], 0) / W, c.reduce((t, q, n) => t + q[1] * w[n], 0) / W] } };
   });
   // 새 시군 이름은 따로 맨 위 층에 (역·IC 이름에 밀려 안 보이지 않게, 시군 이름 모양으로)
@@ -551,7 +558,8 @@ export var krRi = null;          // {읍면동 번호: [[리 이름, 몫, 법정
 export var riCodeMap = null;     // 법정리 코드 → {name, share, sub, file}
 export let riIndex = null;
 export const riFiles = new Map(), riFeat = new Map();   // 받은 시도 파일, 코드 → 경계 (properties.area: km²)
-fetch('data/kr_ri.json').then((r) => (r.ok ? r.json() : null)).then((d) => {
+/** kr_ri.json을 받으면 풀리는 약속 (리 편입을 저장한 게임은 계산 워커를 띄우기 전에 기다린다) */
+export const krRiReady = fetch('data/kr_ri.json').then((r) => (r.ok ? r.json() : null)).then((d) => {
   krRi = d?.subs || null;
   riCodeMap = new Map();
   for (const [sub, rows] of Object.entries(krRi || {})) for (const [name, share, code, file] of rows) riCodeMap.set(code, { name, share, sub: +sub, file });
@@ -585,7 +593,7 @@ export async function loadRiFiles(x0, y0, x1, y1) {
 }
 
 /** 리 추정 인구 */
-export function riPop(code) { const r = riCodeMap?.get(code); return r && result ? result.subs.pop[r.sub] * r.share : 0; }
+export function riPop(code) { return riPopOf(code); }
 
 /** 누른 자리의 법정리 코드 (그 읍면동 안, 경계를 받은 뒤) */
 export async function riAt(ll, sub) {
@@ -617,7 +625,7 @@ export async function drawRiLayer() {
   for (const fs of riFiles.values()) for (const f of fs) {
     const { code, sub, area } = f.properties, r = riCodeMap.get(code);
     if (!r) continue;
-    const p = s0.pop[sub] * r.share;
+    const p = riPopOf(code, s0.pop);
     const v = metric === 'subPop' ? p : metric === 'subDensity' ? p / Math.max(area, 0.01) : metric === 'subChange' ? s0.pop[sub] / Math.max(subPop0[sub], 1) - 1
       : metric === 'subTransit' ? s0.transit[sub] : subMetric(metric, sub);
     feats.push({ type: 'Feature', properties: { code, color: v == null ? 'rgba(0,0,0,0)' : colorFor(metric, v) }, geometry: f.geometry });
@@ -782,10 +790,14 @@ export function subInfo(i) {
     subIndex = [];
     zoneProps.forEach((zp, z) => zp.subs.forEach((_, k) => subIndex.push([z, k])));
   }
+  if (i >= subIndex.length) { const e = extraOf(i); return e ? [e.zone, -1] : undefined; }   // 떼어 낸 남측 법정리 (risplit.js)
   return subIndex[i];
 }
 
 export function subArea(i) {
-  const [z, k] = subInfo(i);
-  return Math.max(zoneProps[z].subs[k][3] ?? 1, 0.05);
+  // 떼어 낸 남측 법정리는 리 경계 넓이, 원래 읍면동은 뗀 리 넓이를 뺀다 (risplit.js)
+  const e = extraOf(i);
+  if (e) return Math.max(e.area, 0.05);
+  const [z, k] = subInfo(i), cut = extraSubs.length ? extrasOfParent(i).reduce((t, x) => t + x.area, 0) : 0;
+  return Math.max((zoneProps[z].subs[k][3] ?? 1) - cut, 0.05);
 }

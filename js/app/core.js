@@ -11,7 +11,7 @@ import { renderSelection } from './econ.js';
 startI18n();
 { const ll = document.querySelector('#ld-lang'); if (ll) { ll.textContent = LANG === 'en' ? '한국어' : 'English'; ll.addEventListener('click', (e) => { e.preventDefault(); setLang(LANG === 'en' ? 'ko' : 'en'); }); } }
 
-export const APP_VERSION = 'Alpha 0.5.0';
+export const APP_VERSION = 'Alpha 0.5.1';
 export const BUG_MAIL = 'evrgrn0528@gmail.com';
 // 오류 제보에 함께 보낼 최근 오류 (화면에 안 보이는 것도)
 export const errLog = [];

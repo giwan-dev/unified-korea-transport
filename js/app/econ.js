@@ -37,6 +37,8 @@ import {
 } from './selpanel.js';
 import { showGazette } from './gazette.js';
 import { commitDevel, flyToNode, renameNode, startTransfer } from './transfer.js';
+import { splitSubOf } from './risplit.js';
+import { bindRiAnnex } from './selpanel.js';
 
 // ---- 영업계수 패널: 노선별 수지를 나쁜 순으로 보고 감편·폐선·재개통한다
 export let econView = { filter: 'all', sort: 'ratio', all: false };
@@ -266,7 +268,12 @@ export function renderSelection() {
     bindLevelLinks(el);
     el.querySelectorAll('[data-metro-rename]').forEach((b) => { b.onclick = () => metroRename(b.dataset.metroRename); });
   }
-  else if (selection.type === 'ri') { el.innerHTML = riPanel(selection.id); bindLevelLinks(el); }
+  else if (selection.type === 'ri') {
+    // 이미 떼어 낸 리는 그 소구역 창으로 (다시 다른 곳으로 옮길 수 있다)
+    const g = splitSubOf(selection.id);
+    if (g >= 0) { el.innerHTML = subPanel(g); bindAnnexButtons(el, g, true); }
+    else { el.innerHTML = riPanel(selection.id); bindLevelLinks(el); bindRiAnnex(el, selection.id); }
+  }
   else if (selection.type === 'emd') {
     const g = admin()?.emds.get(selection.id);
     el.innerHTML = emdPanel(selection.id);

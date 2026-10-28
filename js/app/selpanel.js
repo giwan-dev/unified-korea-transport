@@ -8,7 +8,7 @@ import { t } from '../i18n.js';
 import { routeKey } from '../sim/model.js';
 import { refreshNames } from '../ui/map.js';
 import { toast } from '../ui/panel.js';
-import { base, esc, happiness, historic, map, median, result, selection, setSelection, state, subPop0, subsFC, zoneProps } from './core.js';
+import { base, busy, esc, happiness, historic, map, median, result, selection, setSelection, state, subPop0, subsFC, zoneProps } from './core.js';
 import { gains, zoneName } from './year.js';
 import { sezHTML } from './sez.js';
 import { drawAdmin, krRi, nodeNames, provincePops, riCodeMap, riFeat, subArea, subInfo, subMetric } from './mapdata.js';
@@ -25,6 +25,7 @@ import { localZoneHTML } from './firstyear.js';
 import { REST_REMOVE_COST } from './housing.js';
 import { header } from './svcmap.js';
 import { linesAt, stationPanel } from './gazette.js';
+import { riPopOf, splitRi, splitSubOf } from './risplit.js';
 
 export function zonePanel(id) {
   const z = zoneProps[id];
@@ -247,7 +248,7 @@ export function riPanel(code) {
   if (!r) return header('리');
   const i = r.sub, s0 = result?.subs, area = riFeat.get(code)?.properties.area;
   if (!s0) return header(r.name);
-  const p = s0.pop[i] * r.share, c = s0.pop[i] / Math.max(subPop0[i], 1) - 1, emd = admin()?.emdOf[i] || `s:${i}`;
+  const p = riPopOf(code), c = s0.pop[i] / Math.max(subPop0[i], 1) - 1, emd = admin()?.emdOf[i] || `s:${i}`;
   return `${header(r.name)}
     <table class="kv">
       <tr><td>소속</td><td><a href="#" data-region-sel="${esc(subRegion(i))}">${esc(subRegion(i))}</a> <a href="#" data-unit-sel="${esc(subUnit(i))}">${esc(subCountyName(i))}</a> <a href="#" data-emd-sel="${esc(emd)}">${esc(subName(i))}</a></td></tr>
@@ -257,7 +258,64 @@ export function riPanel(code) {
       <tr><td>지역 간 철도역 접근 (대기 포함)</td><td>${s0.rail[i] >= 120 ? '역 없음' : `${Math.round(s0.rail[i])}분`}</td></tr>
       <tr><td>법정리 코드</td><td class="m">${esc(code)}</td></tr>
     </table>
-    <p class="hint">남측 법정리입니다. 교통·인구 계산은 읍면동 단위라, 리 인구는 읍면동 인구를 1km 인구 격자로 나눈 어림입니다. 같은 자리를 다시 누르면 광역 단체로 돌아갑니다.</p>`;
+    <p class="hint">남측 법정리입니다. 교통·인구 계산은 읍면동 단위라, 리 인구는 읍면동 인구를 1km 인구 격자로 나눈 어림입니다. 같은 자리를 다시 누르면 광역 단체로 돌아갑니다.</p>
+    ${riAnnexHTML(code)}`;
+}
+
+/**
+ * 남측 법정리를 편입할 수 있는 곳: 원래 읍면동의 이웃 가운데 리 경계가 실제로 맞닿는(꼭짓점이 약 300m 안) 시·광역시.
+ * 리와 읍면동 경계는 출처가 달라 꼭짓점을 같이 쓰지 않으므로 거리로 본다
+ */
+export function riAnnexTargets(code) {
+  const r = riCodeMap?.get(code), f = riFeat.get(code);
+  if (!r || !f || zoneProps[subInfo(r.sub)[0]].country !== 'KR') return { metro: [], si: [] };
+  const all = subAnnexAll(r.sub, true), ring = (g) => (g.type === 'Polygon' ? [g.coordinates] : g.coordinates).flatMap((pg) => pg[0]);
+  const rp = ring(f.geometry), step = Math.max(1, Math.floor(rp.length / 200)), pts = rp.filter((_, k) => k % step === 0);
+  const near = (j) => {
+    const g = subsFC?.features[j]?.geometry;
+    if (!g) return false;
+    const q = ring(g), tol = 0.003;
+    return pts.some(([x, y]) => q.some(([u, v]) => Math.abs(u - x) < tol && Math.abs(v - y) < tol));
+  };
+  const nb = [...subNeighbors(r.sub)].filter((j) => subUnit(j) !== subUnit(r.sub) && near(j));
+  return { metro: all.metro.filter((m) => nb.some((j) => subRegion(j) === m)), si: all.si.filter(([u]) => nb.some((j) => subUnit(j) === u)) };
+}
+
+/** 리 창의 편입 단락: 이 리만 떼어 맞닿은 시·광역시로 */
+export function riAnnexHTML(code) {
+  const r = riCodeMap?.get(code);
+  if (!r) return '';
+  const t = riAnnexTargets(code);
+  if (!t.metro.length && !t.si.length) return '';
+  return `<h4>리 단위 편입</h4><p class="hint">${esc(r.name)}만 ${esc(subName(r.sub))}에서 떼어 맞닿은 시·광역시로 옮깁니다. 떼어 낸 리는 그 뒤로 따로 계산합니다(인구 이동·교통 접근) · ${formatWon(annexSubCost(r.sub))}</p>
+    <div class="actions">${t.metro.map((m) => `<button class="small" data-ri-annex="metro" data-ri-target="${esc(m)}">${esc(m)}에 편입</button>`).join('')}
+    ${t.si.map(([u, nm]) => `<button class="small" data-ri-annex="unit" data-ri-target="${esc(u)}">${esc(nm)}에 편입</button>`).join('')}</div>`;
+}
+
+/** 리 창의 편입 단추: 리를 새 소구역으로 뗀 뒤 옮긴다 (risplit.js) */
+export function bindRiAnnex(el, code) {
+  el.querySelectorAll('[data-ri-annex]').forEach((b) => {
+    b.onclick = async () => {
+      const r = riCodeMap?.get(code), kind = b.dataset.riAnnex, to = b.dataset.riTarget;
+      if (!r || busy) return;
+      const toName = kind === 'unit' ? unitName(to) : to, from = `${subRegion(r.sub)} ${subCountyName(r.sub)}`, cost = annexSubCost(r.sub);
+      if (!confirm(`${r.name}(${from} ${subName(r.sub)})을(를) ${toName}에 편입할까요? 리를 따로 계산하도록 떼어 냅니다. ${formatWon(cost)}`)) return;
+      if (!payEvent(cost)) return;
+      const g = await splitRi(code);
+      if (g < 0) { alert('이 리의 경계를 찾지 못해 편입하지 못했습니다.'); return; }
+      if (kind === 'unit') setSubUnit(g, to);
+      else {
+        // 광역시 편입: 그 광역시에서 맞닿은 시군(구)으로
+        const cnt = new Map();
+        for (const j of subNeighbors(g)) if (subRegion(j) === to) cnt.set(subUnit(j), (cnt.get(subUnit(j)) || 0) + 1);
+        const dst = [...cnt].sort((x, y) => y[1] - x[1])[0]?.[0];
+        if (dst) setSubUnit(g, dst);
+        (state.local.annexSub ||= {})[subKey(g)] = to;
+      }
+      state.log.unshift(`${state.year}년 ${from} ${subName(r.sub)} ${r.name}, ${toName}로 편입 (리를 따로 떼어 계산)`);
+      save(state); drawAdmin(); select({ type: 'sub', id: g }); renderAll();
+    };
+  });
 }
 
 /** 읍면동 창 (북측은 1945년 면: 그 리들을 합친 값). 리가 여럿이면 리 목록 */
@@ -281,7 +339,7 @@ export function emdPanel(key) {
       ${happy != null ? `<tr><td>주민 행복도</td><td>${happy.toFixed(0)}</td></tr>` : ''}
     </table>
     ${!many && krRi?.[i0]?.length ? `<h4>법정리 ${krRi[i0].length}곳 (추정 인구 순)</h4>
-    <table class="kv">${[...krRi[i0]].sort((x, y) => y[1] - x[1]).map(([nm, sh, code]) => `<tr><td><a href="#" data-ri-sel="${esc(code)}">${esc(nm)}</a></td><td>${Math.round(s0.pop[i0] * sh).toLocaleString()}명</td></tr>`).join('')}</table>` : ''}
+    <table class="kv">${[...krRi[i0]].sort((x, y) => y[1] - x[1]).map(([nm, sh, code]) => `<tr><td><a href="#" data-ri-sel="${esc(code)}">${esc(nm)}</a>${splitSubOf(code) >= 0 ? ` <span class="m">편입 · ${esc(subCountyName(splitSubOf(code)))}</span>` : ''}</td><td>${Math.round(riPopOf(code)).toLocaleString()}명</td></tr>`).join('')}</table>` : ''}
     ${many ? `<h4>리 ${g.subs.length}곳 (인구 순)</h4>
     <table class="kv">${[...g.subs].sort((x, y) => s0.pop[y] - s0.pop[x]).slice(0, 60).map((i) => `<tr><td><a href="#" data-sub-sel="${i}">${esc(subName(i))}</a></td><td>${Math.round(s0.pop[i]).toLocaleString()}명</td></tr>`).join('')}</table>` : ''}
     ${annexHTML(i0)}

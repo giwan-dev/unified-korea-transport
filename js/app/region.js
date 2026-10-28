@@ -16,6 +16,7 @@ import { fmtPop, renderAll } from './panels.js';
 import { countyRep, countyRepCache, countyRepFresh, setCountyRepFresh, syncMayors, zoneGus } from './election.js';
 import { guNamesOfZone, isGeneralGu, payEvent, subAdjacency, unitZones } from './bungu.js';
 import { endHousingPick, inRing } from './housing.js';
+import { extraOf, extraSubs, extrasOfParent, extrasOfZone, padSubsFC } from './risplit.js';
 
 // ---- 읍면동 단위 광역시 편입 (state.local.annexSub: '도|시군|읍면동' → 광역시)
 
@@ -135,7 +136,8 @@ export function myeonDongDialog(k, then = null) {
 
 export function subKey(i) {
   const z = zoneProps[subInfo(i)[0]];
-  return `${z.province}|${z.name}|${subsFC?.features[i]?.properties.name || i}`;
+  const e = extraOf(i);   // 떼어 낸 남측 법정리: 같은 군의 다른 면에 같은 이름 리가 흔해 법정리 코드를 붙인다
+  return `${z.province}|${z.name}|${subsFC?.features[i]?.properties.name || i}${e ? `#${e.code}` : ''}`;
 }
 
 /** 따로 편입한 읍면동들: [[소구역 번호, 광역시]] (시군째 편입한 곳은 그 시군을 따른다) */
@@ -171,10 +173,11 @@ export function admin() {
   adminFresh = true;
   queueMicrotask(() => { adminFresh = false; });
   countyRep(0);   // 시군 대표 존 표를 지금 행정구역으로 (countyRepCache.sig)
-  const sig = adminSig(state.local, (countyRepCache?.sig || '') + JSON.stringify(state.local.dongMyeon || null) + (kpMyeon ? 1 : 0));
+  const sig = adminSig(state.local, (countyRepCache?.sig || '') + JSON.stringify(state.local.dongMyeon || null) + (kpMyeon ? 1 : 0) + `|ri${extraSubs.length}`);
   if (adminCache?.sig === sig) return adminCache.a;
+  padSubsFC();   // 떼어 낸 남측 법정리 자리 (risplit.js)
   const S = subsFC.features.length;
-  const a = buildAdmin({
+  const a = buildAdmin({ extrasOfZone,
     zoneProps, S, subInfo, subKey, countyRep,
     unitId: (j) => unitId(state, zoneProps[j]), regionOf: (j) => regionOf(state, zoneProps[j]), zoneName: (j) => countyNameOf(j),
     subPop: (i) => (result ? result.subs.pop[i] : 0), subPop0: (i) => subPop0[i] || 0,
@@ -234,6 +237,18 @@ export function annexGroup(i, one = false) {
 /** 읍면동 소구역들의 맞닿음 (계산용 경계가 꼭짓점을 둘 넘게 같이 쓰면 이웃). 나라별로 한 번 */
 export const subNbCache = new Map();
 export function subNeighbors(i) {
+  // 떼어 낸 남측 법정리: 경계 꼭짓점을 같이 쓰지 않으므로 원래 읍면동과 그 이웃, 같은 읍면동에서 뗀 다른 리를 이웃으로 본다
+  const e = extraOf(i);
+  if (e) {
+    const out = new Set([e.parent, ...subNeighbors(e.parent)]);
+    for (const o of extrasOfParent(e.parent)) if (o.g !== i) out.add(o.g);
+    out.delete(i);
+    return out;
+  }
+  const own = subNeighborsBase(i), ex = extraSubs.length ? [...own, i].flatMap((j) => extrasOfParent(j).map((o) => o.g)) : [];
+  return ex.length ? new Set([...own, ...ex]) : own;
+}
+function subNeighborsBase(i) {
   const c = zoneProps[subInfo(i)[0]].country;
   if (!subNbCache.has(c)) {
     const idx = [];
@@ -321,6 +336,12 @@ export function endUnitPick() {
 /** 누른 자리의 읍면동: 누른 점이 든 계산용 경계를 바로 찾는다 (가까운 존부터 견주던 예전 방식은 경계 가까이에서 이웃 시군을 잡았다) */
 export function subAtLngLat(ll) {
   const x = ll.lng, y = ll.lat;
+  // 떼어 낸 남측 법정리는 원래 읍면동 경계 안에 겹쳐 있으므로 먼저 본다
+  for (const e of extraSubs) {
+    if (Math.abs(e.x - x) > 0.2 || Math.abs(e.y - y) > 0.2) continue;
+    const g = e.feature.geometry, polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+    if (polys.some((pg) => inRing(x, y, pg[0]) && !pg.slice(1).some((h) => inRing(x, y, h)))) return e.g;
+  }
   let best = -1, bd = Infinity;
   zoneProps.forEach((z) => {
     if (z.ext) return;

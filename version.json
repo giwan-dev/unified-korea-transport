@@ -1,5 +1,5 @@
 {
-"v": "Alpha 0.5.0",
+"v": "Alpha 0.5.1",
 "files": [
 "css/style.css",
 "js/app/budget.js",
@@ -24,6 +24,7 @@
 "js/app/region.js",
 "js/app/reopen.js",
 "js/app/report.js",
+"js/app/risplit.js",
 "js/app/route.js",
 "js/app/selpanel.js",
 "js/app/sez.js",

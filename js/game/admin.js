@@ -45,7 +45,8 @@ export function buildAdmin(d, L) {
   const mixed = new Set();
   for (let i = 0; i < S; i++) if (moved[i]) { mixed.add(d.subInfo(i)[0]); const u = units.get(unitOfSub[i]); if (!u.split) for (const z of u.zones) mixed.add(z); }
   for (const u of units.values()) if (u.split) for (const z of u.zones) mixed.add(z);
-  const subsOfZone = (z) => { const zp = zoneProps[z], out = []; for (let k = 0; k < zp.subs.length; k++) out.push(zp.sub0 + k); return out; };
+  // 존의 소구역: 자료 소구역과 그 존에서 떼어 낸 남측 법정리 (d.extrasOfZone, js/app/risplit.js)
+  const subsOfZone = (z) => { const zp = zoneProps[z], out = []; for (let k = 0; k < zp.subs.length; k++) out.push(zp.sub0 + k); for (const g of d.extrasOfZone?.(z) || []) out.push(g); return out; };
   return {
     unitOfSub, regionOfSub, units, mixed, moved,
     /** 존 j의 기본 시군 id */

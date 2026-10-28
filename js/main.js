@@ -53,6 +53,7 @@ import { openSharedFromURL, packState } from './app/report.js';
 import { startServicePick } from './app/pick.js';
 import { closedFile, closedLines, refreshClosed, reopenPlan, setClosedFile, setClosedLines, startReopen } from './app/reopen.js';
 import { trainsData } from './app/transfer.js';
+import { padSubsFC, prepareRiSplits, subsMapData, toModelGrid, workerZones } from './app/risplit.js';
 
 async function init() {
   mark('init');
@@ -225,10 +226,13 @@ async function init() {
   // 저장된 게임의 그해 계산 상태 (같은 해·같은 데이터일 때만)
   const saved = state.snapshot ? await loadSim() : null;
   const savedOk = saved && saved.year === state.year && saved.stamp === meta?.stamp ? saved : null;
+  // 편입하면서 떼어 낸 남측 법정리를 다시 뗀다 (계산 워커가 그 소구역 구성으로 모형을 만든다)
+  await prepareRiSplits();
   loading.done('data');
   // 읍면동 경계는 지도에만 쓰므로 기다리지 않는다
   const subsReady = fetch('data/subzones.geojson').then((r) => r.json()).then(async (fc) => {
     setSubsFC(fc);
+    padSubsFC();
     // 분구 정리 (읍면동이 맞닿는지 알아야 해서 경계를 받은 뒤): 광역시 아래 남은 큰 시는 자치구로, 예전 분구의 월경지는 이웃 구로
     const split = splitMetroCities(), fixed = Object.keys(state.local?.bungu || {}).filter((u) => fixExclaves(u)).length;
     const kr = await applyKrGu();
@@ -253,7 +257,8 @@ async function init() {
   // 해마다 도는 통행배정을 나눠 맡을 보조 워커(ports)는 계산 워커와 포트로 바로 이어진다
   worker.postMessage({
     // 자료 격자로 모델을 만든 뒤 입주 인구를 더한 격자로 바꾼다 (그 소구역 역세권은 기준선 것을 쓰지 않고 다시 구한다)
-    type: 'init', zones: zoneProps, grid: grid.buffer.slice(0), gridEff: (setGridSent(effectiveGrid())) !== grid ? gridSent.buffer.slice(0) : null, net: effectiveNetwork(base, state),
+    // 떼어 낸 남측 법정리가 있으면 존·격자의 소구역을 모형 번호로 (risplit.js)
+    type: 'init', zones: workerZones(), grid: toModelGrid(grid).buffer.slice(0), gridEff: (setGridSent(effectiveGrid())) !== grid ? toModelGrid(gridSent).buffer.slice(0) : null, net: effectiveNetwork(base, state),
     ctx: ctx(), snapshot: state.snapshot, baseline, saved: savedOk, ports,
   }, [...(baseline ? [baseline.bin] : []), ...(savedOk ? [savedOk.bin] : []), ...ports]);
   setDataStamp(meta?.stamp);
@@ -279,7 +284,7 @@ async function init() {
     setLabelGroup((z) => ({ key: countyKey(z), weight: zoneProps[z]?.area || 0 }));
     refreshNames(map);
     subsReady.then(() => {
-      map.getSource('subs').setData(subsFC);
+      map.getSource('subs').setData(subsMapData());   // 국외 존 자리 채움은 빼고, 떼어 낸 남측 법정리는 넣어서
       if (fixBunguNames()) { syncMayors(); refreshNames(map); save(state); renderAll(); }   // 예전 저장: 거꾸로 붙은 구 이름
       drawAnnexedSubs(); drawBungu();
     });

@@ -40,6 +40,7 @@ import { goalTimes, routeTimes, routeWaits, setGoalTimes, showReport } from './r
 import { pppYear } from './ppp.js';
 import { refreshClosed } from './reopen.js';
 import { airportName } from './selpanel.js';
+import { extraSubs, fromModelSubs, toModelGrid, toModelSub } from './risplit.js';
 
 export let tourSites = [];   // data/tourism.json 관광지 (북측 관광지 해금 판정)
 
@@ -78,7 +79,7 @@ export function assignTourism(t) {
 export function ctx() {
   return { integration: state.integration, policy: state.policy, sez: (state.sez || []).filter((z) => z.done).map((z) => z.zone),
     univ: univList().filter((u) => u.built).map((u) => [u.zone, u.seats, u.isNew ? 1 : 0]).concat(univFundSeats()),
-    housingSubs: housingSubList() };
+    housingSubs: housingSubList().map(toModelSub) };   // 계산 워커의 소구역 번호로 (떼어 낸 남측 법정리, risplit.js)
 }
 
 /** 입주한 택지지구가 덮는 읍면동 (존 안 통행에서 도시철도를 더 탄다) */
@@ -108,6 +109,7 @@ export function onWorker(ev) {
 
 export function applyResult(res) {
   if (pendingStep) { for (const [n, t] of res.perf || []) perf.push([`worker: ${n}`, t]); mark('y: result'); }
+  res.subs = fromModelSubs(res.subs);   // 계산 워커의 소구역 순서를 전체 번호 순서로 (떼어 낸 남측 법정리, risplit.js)
   loading.done('sim');
   const stepped = result !== null && pendingStep;
   pendingStep = false;
@@ -129,7 +131,7 @@ export function applyResult(res) {
   if (stepped) {
     if (DIFFICULTY[state.difficulty].autoApprove) autoApprove();
     updateApproval(state, requests, res.summary, prevSummary, roadCongestedKm(vc), [nationalFactor(res.subs, gains)]);
-    updateMayorApproval(state, zoneGains(zoneProps, res.subs, gains));
+    updateMayorApproval(state, zoneGains(zoneProps, res.subs, gains, extraSubs.map((e) => [e.g, e.zone])));
     // 철도 운영사 한 해 결산
     settleRail(state, operatorEconomics());
     settleMega(state, base);
@@ -237,16 +239,17 @@ export function nextYear() {
   }
   const tourKP = unlockedTourKP(state, tourSites, zoneOfSite, zoneProps.length);
   // 입주로 1km 격자가 바뀌었으면 함께 넘긴다 (시뮬레이션 역세권·도심 밀도)
-  const g = effectiveGrid(), gridMsg = g !== gridSent ? g.buffer.slice(0) : null;
+  const g = effectiveGrid(), gridMsg = g !== gridSent ? toModelGrid(g).buffer.slice(0) : null;
   setGridSent(g);
   if (map.getLayoutProperty('grid-heat', 'visibility') === 'visible') showDensity(true);
   // 예전 저장: 이미 입주한 택지지구·역세권 개발의 인구가 해마다 같은 시군구 다른 읍면동으로 흩어졌다. 한 번 제자리로 돌려놓고 붙든다
   const anchor = state.devAnchored ? null : settledDevelopments().map(({ zone, lon, lat, persons }) => ({ zone, lon, lat, persons }));
   state.devAnchored = 1;
-  for (const d of dev) if (d.hid) { const h = (state.housing || []).find((x) => x.id === d.hid); if (h) d.parts = housingParts(h); }
+  const modelParts = (parts) => parts.map((q) => ({ ...q, sub: toModelSub(q.sub) }));   // 계산 워커의 소구역 번호로
+  for (const d of dev) if (d.hid) { const h = (state.housing || []).find((x) => x.id === d.hid); if (h) d.parts = modelParts(housingParts(h)); }
   // 예전 저장: 한 읍면동에 몰린 택지지구 인구를 지구가 덮는 읍면동들로 (한 번)
   const spread = state.housingSpread ? null : (state.housing || []).filter((h) => (h.done ? h.persons : h.occupied) > 0)
-    .map((h) => ({ zone: h.zone, lon: h.lon, lat: h.lat, persons: h.done ? h.persons : h.occupied, parts: housingParts(h) }));
+    .map((h) => ({ zone: h.zone, lon: h.lon, lat: h.lat, persons: h.done ? h.persons : h.occupied, parts: modelParts(housingParts(h)) }));
   state.housingSpread = 1;
   if (anchor?.length) state.log.unshift(`${state.year}년: 이미 입주한 택지지구·역세권 개발 ${anchor.length}곳의 인구를 지구 안으로 다시 맞췄습니다 (다른 읍면동으로 흩어진 만큼은 새로 채움, 인구 순증)`);
   worker.postMessage({ type: 'step', net: effectiveNetwork(base, state), ctx: { ...ctx(), dev, tourKP, grid: gridMsg, anchor, spread }, opened });

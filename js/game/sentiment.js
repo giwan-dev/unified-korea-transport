@@ -33,14 +33,12 @@ export function subGains(state, subs) {
   return out;
 }
 
-/** 존별 인구 가중 평균 체감 개선 */
-export function zoneGains(zoneProps, subs, gains) {
+/** 존별 인구 가중 평균 체감 개선. extra: 존의 자료 소구역 밖 소구역 [[소구역, 존], ...] (떼어 낸 남측 법정리) */
+export function zoneGains(zoneProps, subs, gains, extra = []) {
   const g = new Float64Array(zoneProps.length), w = new Float64Array(zoneProps.length);
-  zoneProps.forEach((z, i) => z.subs.forEach((_, k) => {
-    const s = z.sub0 + k, p = subs.pop[s];
-    if (!(p > 0)) return;
-    g[i] += gains[s] * p; w[i] += p;
-  }));
+  const add = (i, s) => { const p = subs.pop[s]; if (!(p > 0)) return; g[i] += gains[s] * p; w[i] += p; };
+  zoneProps.forEach((z, i) => z.subs.forEach((_, k) => add(i, z.sub0 + k)));
+  for (const [s, i] of extra) add(i, s);
   for (let i = 0; i < g.length; i++) g[i] = w[i] ? g[i] / w[i] : 0;
   return g;
 }

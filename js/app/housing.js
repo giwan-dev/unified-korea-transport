@@ -28,6 +28,7 @@ import { buildNow, runPreview } from './preview.js';
 import { header } from './svcmap.js';
 import { popWithin, stationNameHints } from './gazette.js';
 import { zoneAtPoint } from './transfer.js';
+import { extrasOfZone } from './risplit.js';
 
 /**
  * 1km 인구 격자 + 택지지구·역세권 개발에 들어온 인구. 지도 밀도, 역 반경 인구, 택지지구 입지 점수, 시뮬레이션의 역세권이 이것을 쓴다.
@@ -37,6 +38,8 @@ import { zoneAtPoint } from './transfer.js';
  */
 export const GRID_STEP = 1 / 120;   // 자료 격자 간격 30″ (약 0.9km)
 export let gridEff = null;
+/** 격자가 바뀌었다 (남측 법정리를 떼어 칸 소속이 바뀜): 입주 인구를 더한 격자를 다시 만든다 */
+export function resetGridEff() { gridEff = null; }
 /**
  * 택지지구 자리 이름: 광역 단체 · 시군(분구했으면 시 + 구) · 읍면동. 지구 가운데가 든 읍면동으로 센다
  * (예전에는 존 이름만 써서 분구한 시에서는 엉뚱한 구나 빈 이름이 나왔다)
@@ -70,6 +73,12 @@ export function housingCells(a) {
 /** 칸이 속한 읍면동: 그 시군의 읍면동 경계 안이면 그곳, 아니면 가장 가까운 그 시군 읍면동 */
 export function cellSub(zone, x, y) {
   let best = -1, bd = Infinity;
+  // 떼어 낸 남측 법정리가 원래 읍면동 경계 안에 겹쳐 있으므로 먼저 본다
+  for (const z of countyZones(zone)) for (const g of extrasOfZone(z)) {
+    const geom = subsFC?.features[g]?.geometry;
+    const polys = geom?.type === 'Polygon' ? [geom.coordinates] : geom?.type === 'MultiPolygon' ? geom.coordinates : [];
+    if (polys.some((pg) => inRing(x, y, pg[0]))) return g;
+  }
   for (const z of countyZones(zone)) {
     const zp = zoneProps[z];
     for (let k = 0; k < zp.subs.length; k++) {

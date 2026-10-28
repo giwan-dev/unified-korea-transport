@@ -165,6 +165,23 @@ async function handle(msg) {
         model.computeAccess();
         results(totals);
       }
+    } else if (msg.type === 'resub') {
+      // 남측 법정리를 새 소구역으로 뗐다 (js/app/risplit.js): 소구역 구성이 바뀌어 모형을 새로 만든다.
+      // 존 상태(인구·소득·보정 상수)와 교통량은 그대로 옮기고, 읍면동 몫만 from(예전 모형 번호)·factor(몫)로 나눈다
+      const ex = model.exportBaseline(lastTotals, null), snap = ex.json.snapshot;
+      const pick = (arr, f) => Array.from(msg.from, (o, k) => (o >= 0 ? arr[o] * (f ? msg.factor[k] : 1) : 0));
+      snap.subW = pick(snap.subW, true);
+      snap.subAmenity = pick(snap.subAmenity, false);
+      model = new Model(msg.zones, new Float32Array(msg.grid));
+      hs();
+      if (msg.gridEff) model.setGrid(new Float32Array(msg.gridEff));
+      model.setNetwork(lastNet);
+      model.importBaseline({ ...ex.json, snapshot: snap }, ex.bin);
+      inputs = { ...inputs, zones: msg.zones, grid: msg.gridEff || msg.grid };
+      // 보조 워커도 새 구성으로: 다음 배정 때 같은 포트로 모형을 다시 만든다 (포트는 닫지 않는다)
+      pool = undefined;
+      beforeCache = null;
+      results(lastTotals);
     } else if (msg.type === 'step') {
       wmark('step received');
       // 택지지구·역세권 개발 입주로 바뀐 1km 격자 (망을 짜기 전에: 바뀐 소구역의 역세권을 다시 구한다)
