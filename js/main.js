@@ -1,18 +1,17 @@
 // 진입점: 데이터를 받고 계산 워커·지도를 띄운다. 기능은 js/app/*.js 모듈에 나뉘어 있다.
+import './app/fresh.js';   // 맨 먼저: 게임 자료를 캐시에서 예전 것으로 쓰지 않게
 import {
-  base, busy, CLASS_LABEL, dataStamp, draft, errLog, grid, gridSent, historic, isForeign, loading, map, mark, namer, perf, places, Progress, requests, result, setBase,
-  setDataStamp, setGrid, setGridSent, setHistoric, setIsForeign, setMap, setPlaces, setState, setSubPop0, setSubsFC, setWorker, setZoneProps, setZonesFC, state, subPop0,
-  subsFC, worker, zoneProps, zonesFC,
+  APP_VERSION, base, busy, CLASS_LABEL, dataStamp, draft, errLog, grid, gridSent, historic, isForeign, loading, map, mark, namer, perf, places, Progress, requests, result, setBase, setDataStamp, setGrid, setGridSent, setHistoric, setIsForeign, setMap, setPlaces, setState, setSubPop0, setSubsFC, setWorker, setZoneProps, setZonesFC, state, subPop0, subsFC, worker, zoneProps, zonesFC,
 } from './app/core.js';
 import { fixNetwork, LEN_FIX_V } from './data/netfix.js';
 import { decodeNetwork } from './data/netpack.js';
 import { seedInterKoreaAir } from './game/airlines.js';
 import { makeForeignTest } from './game/lines.js';
 import { governorTitle, initLocal, metroName, normalizeUnitKeys, regionOf } from './game/local.js';
-import { migrateState, refFromBase, rememberNetwork } from './game/migrate.js';
+import { inferNetSize, migrateState, refFromBase, rememberNetwork, sliceRef } from './game/migrate.js';
 import { initRail } from './game/operators.js';
 import { initPPP } from './game/ppp.js';
-import { keepBackup } from './game/savestore.js';
+import { clearAuto, getRef, keepBackup, loadAuto } from './game/savestore.js';
 import { planService, refreshExistingServices, seedServices, tripsPerDay } from './game/services.js';
 import { clearSim, loadSim } from './game/simstore.js';
 import { colourNewMetro, dropOrphanNames, effectiveNetwork, initAirRoutes, initOngoing, load, migrateAir, newGame, placeName, save } from './game/state.js';
@@ -116,10 +115,16 @@ async function init() {
   // 옮기지 못하면 예전 저장은 따로 남겨 두고(설정 탭에서 파일로 받을 수 있다) 새로 시작한다
   // 자료 판 표시는 같은데 기본 노드·구간 수가 다르면(예전 파일 일부를 캐시에서 쓴 판에서 저장한 경우) 새로 만든 노드·구간 번호가
   // 판 옮기기 없이 밀려, 번호로 묶인 IC·역 이름이 엉뚱한 노드에 붙었다: 저장할 때의 수로 옮긴다
-  const sizeOff = state?.netSize && (state.netSize[0] !== base.nodes.length || state.netSize[1] !== base.links.length);
-  if (state && meta && state.dataStamp && (state.dataStamp !== meta.stamp || sizeOff)) {
+  // 예전 저장(0.5.2 전)은 그 수를 적지 않았으므로 새 구간 도형 끝과 새 노드 자리로 되짚는다 (inferNetSize)
+  let ref = null;
+  if (state && meta && state.dataStamp) {
+    const oldRef = state.dataStamp !== meta.stamp ? await getRef(state.dataStamp) : null;
+    const size = state.netSize || inferNetSize(state, oldRef?.N ?? base.nodes.length);
+    if (oldRef && size && (size[0] !== oldRef.N || size[1] !== oldRef.L)) ref = sliceRef(oldRef, size);
+    else if (!oldRef && state.dataStamp === meta.stamp && size && (size[0] !== base.nodes.length || size[1] !== base.links.length)) ref = refFromBase(base, zoneProps, size[0], size[1]);
+  }
+  if (state && meta && state.dataStamp && (state.dataStamp !== meta.stamp || ref)) {
     const old = state;
-    const ref = state.dataStamp === meta.stamp ? refFromBase(base, zoneProps, old.netSize[0], old.netSize[1]) : null;
     const r = await migrateState(old, { base, zones: zoneProps, stamp: meta.stamp, ref });
     if (r.ok) {
       await keepBackup(JSON.stringify(old), old.dataStamp);   // 옮기기가 잘못됐을 때 되돌릴 수 있게 옮긴 경우에도 남긴다
@@ -326,5 +331,29 @@ async function loadBaseline() {
 init().catch((e) => {
   console.error(e);
   const tip = document.querySelector('#loading .ld-tip');
-  if (tip) { tip.textContent = `불러오기 실패: ${e.message}`; tip.style.color = 'var(--bad)'; }
+  if (!tip) return;
+  // 어디서 멈췄는지 (제보로 원인을 찾을 수 있게): 오류가 난 첫 파일·줄
+  const at = String(e.stack || '').split(/\r?\n/).map((l) => l.match(/([\w.-]+\.js):(\d+)/)).find(Boolean);
+  tip.textContent = `불러오기 실패: ${e.message}${at ? ` (${at[1]}:${at[2]}, ${APP_VERSION})` : ''}`;
+  tip.style.color = 'var(--bad)';
+  // 저장 게임 때문에 열리지 않으면 빠져나올 길: 저장을 파일로 받아 두고 새로 시작 (예전에는 사이트 데이터를 지우는 수밖에 없었다)
+  const box = document.createElement('div');
+  box.className = 'ld-fail';
+  box.innerHTML = '<button class="small" data-fail="dl">저장을 파일로 받기</button> <button class="small" data-fail="new">새로 시작 (저장은 따로 남김)</button>';
+  tip.after(box);
+  box.querySelector('[data-fail=dl]').onclick = async () => {
+    const json = await loadAuto();
+    if (!json) { alert('저장된 게임이 없습니다.'); return; }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([`{"app":"unified-korea-transport","version":${JSON.stringify(APP_VERSION)},"savedAt":${Date.now()},"state":${json}}`], { type: 'application/json' }));
+    a.download = '통일교통망_불러오기실패_저장.json';
+    document.body.appendChild(a); a.click(); a.remove();
+  };
+  box.querySelector('[data-fail=new]').onclick = async () => {
+    if (!confirm('지금 저장된 게임을 두고 새로 시작할까요? 저장은 따로 남겨 두어 설정 탭에서 파일로 받을 수 있습니다.')) return;
+    const json = await loadAuto();
+    if (json) { let stamp = 'fail'; try { stamp = JSON.parse(json).dataStamp || stamp; } catch { /* 깨진 저장 */ } await keepBackup(json, `${stamp}-불러오기실패`); }
+    await clearAuto(); await clearSim();
+    location.reload();
+  };
 });

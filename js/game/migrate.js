@@ -41,6 +41,43 @@ export function refFromBase(base, zones, N, L) {
   return { N, L, xy, ab, modes, zones: zones.map((z) => [z.name, z.country, z.cx, z.cy, (z.subs || [1]).length]) };
 }
 
+/**
+ * 예전 저장(기본 노드·구간 수를 적지 않던 0.5.2 전)의 그때 기본 노드·구간 수를 되짚는다: 새로 놓은 구간 도형의 양 끝이
+ * 새 노드 자리(newNodes[번호 − 기본 노드 수])와 맞는 기본 노드 수 (구간 수는 첫 새 구간의 번호).
+ * 브라우저가 국외 거점 자료(data/air_sea.json)를 예전 것으로 캐시에서 쓰면 기본 노드 수가 달라져(국외 거점 13곳 차이),
+ * 자료 판 표시는 같은데 새 노드 번호가 밀려 IC·역 이름과 새 노선 연결이 엉뚱한 노드에 붙었다.
+ * @returns {[number, number]|null} 끝이 9할 넘게 맞는 수가 하나로 나오면 [기본 노드 수, 기본 구간 수]
+ */
+export function inferNetSize(state, near) {
+  const nn = state?.newNodes || [], ends = [];
+  for (const nl of state?.newLinks || []) {
+    const g = nl.geom;
+    if (nl.replaced || !g || g.length < 4 || Number.isNaN(g[0]) || Number.isNaN(g[g.length - 1])) continue;
+    ends.push([nl.a, g[0], g[1]], [nl.b, g[g.length - 2], g[g.length - 1]]);
+  }
+  if (!nn.length || ends.length < 10) return null;
+  let best = null;
+  for (let N = near - 300; N <= near + 300; N++) {
+    let m = 0, t = 0;
+    for (const [id, x, y] of ends) {
+      const k = id - N;
+      if (k < 0 || k >= nn.length) continue;
+      t++;
+      if (Math.abs(nn[k][0] - x) < 5e-4 && Math.abs(nn[k][1] - y) < 5e-4) m++;
+    }
+    if (t >= 10 && m >= 0.9 * t && (!best || m > best.m)) best = { N, m };
+  }
+  const L = state.newLinks[0]?.id;
+  return best && L != null ? [best.N, L] : null;
+}
+
+/** 예전 판 좌표표를 그때의 기본 노드·구간 수로 자른다 (모자라는 구간은 모르는 것으로) */
+export function sliceRef(ref, [N, L]) {
+  const ab = new Int32Array(L * 3).fill(-1);
+  ab.set(ref.ab.subarray(0, Math.min(L, ref.L) * 3));
+  return { ...ref, N: Math.min(N, ref.N), L, xy: ref.xy.slice(0, Math.min(N, ref.N) * 2), modes: ref.modes.slice(0, Math.min(N, ref.N)), ab };
+}
+
 /** 좌표 격자 색인 */
 function grid(xy, n, cell) {
   const m = new Map();

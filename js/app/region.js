@@ -48,18 +48,40 @@ export function kpUnitKind(z) {
   return null;
 }
 
+/**
+ * 군청 소재지 면을 읍으로: 지금의 읍(군청 소재지, ○○읍)이 든 1945년 면은 그 읍 이름으로 부른다 (신고산면 → 고산읍).
+ * 1945년에는 면이던 군청 소재지가 뒤에 읍이 된 곳이 많아, 면 이름만 보이면 북측에 읍이 없는 것처럼 보였다.
+ * 열쇠: '대표 존|1945년 면' → 지금의 읍 이름 (행정구역을 바꾸면 adminInvalidate가 비운다)
+ */
+let eupOfMyeon = null;
+export function seatEup(key) {
+  if (!eupOfMyeon) {
+    if (!kpMyeon || !subsFC) return null;
+    eupOfMyeon = new Map();
+    subsFC.features.forEach((f, i) => {
+      const nm = f?.properties?.name || '', m = kpMyeon[i];
+      if (!m || !/읍$/.test(nm)) return;
+      const k = `${countyRep(subInfo(i)[0])}|${m}`;
+      if (!eupOfMyeon.has(k)) eupOfMyeon.set(k, nm);
+    });
+  }
+  return eupOfMyeon.get(key) || null;
+}
+
 /** 읍면동 번호의 옛 면 묶음 {key, name} (지도에서 한 면으로 그린다). 그대로 보일 것이면 null */
 export function unitMyeon(i) {
   const m = kpMyeon?.[i];
   if (!m) return null;
-  // 지금의 읍은 1945년 면으로 묶지 않고 하나의 읍으로 둔다 (1945년에는 면이던 군청 소재지가 뒤에 읍이 된 곳이 많아, 묶으면 북측 읍 146곳 가운데 113곳이 사라졌다)
-  if (/읍$/.test(subsFC?.features[i]?.properties.name || '')) return null;
+  const raw = subsFC?.features[i]?.properties.name || '';
   const [z] = subInfo(i), sp = splitOfSub(i);
   const kind = sp ? (/시$/.test(state.local.splitUnit[sp]?.name || '') ? 'si' : 'gun') : kpUnitKind(z);
   if (!kind) return null;
+  const key = `${countyRep(z)}|${m}`, eup = seatEup(key);
+  // 지금의 읍이 1945년 면을 하나도 이룰 수 없으면(이름을 모를 때) 읍 그대로 둔다
+  if (/읍$/.test(raw) && !eup) return null;
   const dongs = sp ? new Set(state.local.dongMyeon?.[sp] || []) : dongMyeons(z);
-  if (kind === 'si' && (/동$/.test(subsFC?.features[i]?.properties.name || '') || dongs.has(m))) return null;
-  return { key: `${countyRep(z)}|${m}`, name: m };
+  if (kind === 'si' && (/동$/.test(raw) || dongs.has(m))) return null;
+  return { key, name: eup || m };
 }
 
 /** 시에서 동으로 바꾼 면의 리 이름: ○○리 → ○○동 (직접 바꾼 이름은 그대로) */
@@ -95,9 +117,10 @@ export function unitMyeonList(k) {
     return [...out.values()].sort((a, b) => b.pop - a.pop);
   }
   for (const z of zs) zoneProps[z].subs.forEach((_, j) => {
-    const i = zoneProps[z].sub0 + j, m = kpMyeon?.[i];
-    if (!m || /동$/.test(subsFC?.features[i]?.properties.name || '')) return;
-    const e = out.get(m) || { name: m, subs: 0, pop: 0 };
+    const i = zoneProps[z].sub0 + j, raw = subsFC?.features[i]?.properties.name || '', m = kpMyeon?.[i];
+    if (!m || /동$/.test(raw)) return;
+    // 군청 소재지 면은 읍 이름으로 (unitMyeon과 같다). 열쇠(동으로 바꿀 때 적는 이름)는 1945년 면 그대로
+    const e = out.get(m) || { name: seatEup(`${countyRep(z)}|${m}`) || m, key: m, subs: 0, pop: 0 };
     e.subs++; e.pop += result ? result.subs.pop[i] : 0;
     out.set(m, e);
   });
@@ -109,7 +132,7 @@ export function myeonDongDialog(k, then = null) {
   const list = unitMyeonList(k);
   if (!list.length) { then?.(); return; }
   const kr = zoneProps[unitZones(k)[0]]?.country === 'KR';
-  const cur = new Set(state.local.dongMyeon?.[k] ?? (kr ? [] : list.filter((e) => /읍$/.test(e.name)).map((e) => e.name)));
+  const cur = new Set(state.local.dongMyeon?.[k] ?? (kr ? [] : list.filter((e) => /읍$/.test(e.name)).map((e) => e.key ?? e.name)));
   const wrap = document.createElement('div');
   wrap.className = 'setup-wrap';
   wrap.innerHTML = `<div class="setup" role="dialog" aria-modal="true"><h2>동으로 바꿀 읍면 · ${esc(k.split('|')[1].replace(/군$/, '시'))}</h2>
@@ -118,14 +141,14 @@ export function myeonDongDialog(k, then = null) {
     : '군에는 읍·면만 두지만 시에는 읍·면·동을 모두 둘 수 있습니다. 고른 읍면의 리는 동이 되어(○○리 → ○○동) 하나씩 보이고, 고르지 않은 읍면은 읍·면 하나로 보입니다. 읍면은 1945년(분단 직전) 면입니다. 나중에도 시를 눌러 바꿀 수 있습니다.'}</p>
     <div class="actions setup-quick"><button class="small" data-myeon-all>모두</button><button class="small" data-myeon-none>하나도 안 바꿈</button><button class="small" data-myeon-eup>읍만</button></div>
     <div class="setup-body"><div class="list">${list.map((e) => `<label class="item" style="display:flex;gap:8px;align-items:center">
-      <input type="checkbox" data-myeon="${esc(e.name)}" ${cur.has(e.name) ? 'checked' : ''}>
+      <input type="checkbox" data-myeon="${esc(e.key ?? e.name)}" data-eup="${/읍$/.test(e.name) ? 1 : ''}" ${cur.has(e.key ?? e.name) ? 'checked' : ''}>
       <span class="t" style="flex:1">${esc(e.name)}</span><span class="m">리 ${e.subs}곳${result ? ` · ${fmtPop(e.pop)}` : ''}</span></label>`).join('')}</div></div>
     <div class="setup-btns"><span style="flex:1"></span><button class="small primary" data-myeon-ok>정하기</button></div></div>`;
   document.body.appendChild(wrap);
   const boxes = () => [...wrap.querySelectorAll('[data-myeon]')];
   wrap.querySelector('[data-myeon-all]').onclick = () => boxes().forEach((x) => { x.checked = true; });
   wrap.querySelector('[data-myeon-none]').onclick = () => boxes().forEach((x) => { x.checked = false; });
-  wrap.querySelector('[data-myeon-eup]').onclick = () => boxes().forEach((x) => { x.checked = /읍$/.test(x.dataset.myeon); });
+  wrap.querySelector('[data-myeon-eup]').onclick = () => boxes().forEach((x) => { x.checked = !!x.dataset.eup; });
   wrap.querySelector('[data-myeon-ok]').onclick = () => {
     (state.local.dongMyeon ||= {})[k] = [...wrap.querySelectorAll('[data-myeon]')].filter((x) => x.checked).map((x) => x.dataset.myeon);
     wrap.remove();
@@ -165,7 +188,7 @@ export function splitOfSub(i) {
   return u && u.startsWith('split:') ? u : null;
 }
 /** 소속표를 다시 맞춰 보게 한다 (소속을 바꾼 뒤, 화면을 다시 그릴 때) */
-export function adminInvalidate() { adminFresh = false; setCountyRepFresh(false); }
+export function adminInvalidate() { adminFresh = false; setCountyRepFresh(false); eupOfMyeon = null; }
 export function admin() {
   if (!subsFC || !state?.local) return null;
   // 한 번의 처리 안에서는 표를 다시 맞춰 보지 않는다: 읍면동마다 부르는 곳이 많아, 부를 때마다 행정구역 설정을 견주면 화면 하나 그리는 데 10초가 넘게 걸렸다

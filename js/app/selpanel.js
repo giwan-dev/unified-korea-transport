@@ -13,8 +13,7 @@ import { gains, zoneName } from './year.js';
 import { sezHTML } from './sez.js';
 import { drawAdmin, krRi, nodeNames, provincePops, riCodeMap, riFeat, subArea, subInfo, subMetric } from './mapdata.js';
 import {
-  admin, adminInvalidate, annexGroup, annexSubCost, kpMyeon, mergeSplitUnit, riToDong, setSubUnit, subAnnexAll, subCountyName, subKey, subName, subNeighbors, subRegion,
-  subUnit, unitMyeon, unitName, unitOfficeKey, unitPop, unitRepZone,
+  admin, adminInvalidate, annexGroup, annexSubCost, kpMyeon, mergeSplitUnit, riToDong, seatEup, setSubUnit, subAnnexAll, subCountyName, subKey, subName, subNeighbors, subRegion, subUnit, unitMyeon, unitName, unitOfficeKey, unitPop, unitRepZone,
 } from './region.js';
 import { select } from './interact.js';
 import { fmtPop, pct, renderAll } from './panels.js';
@@ -411,9 +410,10 @@ export function splitDongDialog(id, then = null) {
   const kp = zoneProps[subInfo(u.subs[0])[0]].country === 'KP';
   const list = new Map();
   for (const i of u.subs) {
+    // 북측은 1945년 면으로 (군청 소재지 면은 그 읍 이름으로 보인다)
     const raw = subsFC?.features[i]?.properties.name || '', key = kp ? kpMyeon?.[i] : raw;
     if (!key || (!kp && !/[읍면]$/.test(raw))) continue;
-    const e = list.get(key) || { name: key, n: 0, pop: 0 };
+    const e = list.get(key) || { name: kp ? seatEup(`${countyRep(subInfo(i)[0])}|${key}`) || key : key, key, n: 0, pop: 0 };
     e.n++; e.pop += result ? result.subs.pop[i] : 0;
     list.set(key, e);
   }
@@ -425,12 +425,12 @@ export function splitDongDialog(id, then = null) {
     <p class="setup-intro hint">군에는 읍·면만 두지만 시에는 읍·면·동을 모두 둘 수 있습니다. 시가지가 된 읍면을 고르면 동이 됩니다${kp ? '(그 면의 리는 ○○동으로 하나씩 보입니다)' : '(○○읍 → ○○동)'}.</p>
     <div class="actions setup-quick"><button class="small" data-q="all">모두</button><button class="small" data-q="none">하나도 안 바꿈</button><button class="small" data-q="eup">읍만</button></div>
     <div class="setup-body"><div class="list">${[...list.values()].sort((x, y) => y.pop - x.pop).map((e) => `<label class="item" style="display:flex;gap:8px;align-items:center">
-      <input type="checkbox" data-myeon="${esc(e.name)}" ${cur.has(e.name) ? 'checked' : ''}><span class="t" style="flex:1">${esc(e.name)}</span>
+      <input type="checkbox" data-myeon="${esc(e.key)}" data-eup="${/읍$/.test(e.name) ? 1 : ''}" ${cur.has(e.key) ? 'checked' : ''}><span class="t" style="flex:1">${esc(e.name)}</span>
       <span class="m">${kp ? `리 ${e.n}곳 · ` : ''}${result ? fmtPop(e.pop) : ''}</span></label>`).join('')}</div></div>
     <div class="setup-btns"><span style="flex:1"></span><button class="small primary" data-ok>정하기</button></div></div>`;
   document.body.appendChild(wrap);
   const boxes = () => [...wrap.querySelectorAll('[data-myeon]')];
-  wrap.querySelectorAll('[data-q]').forEach((b) => { b.onclick = () => boxes().forEach((x) => { x.checked = b.dataset.q === 'all' || (b.dataset.q === 'eup' && /읍$/.test(x.dataset.myeon)); }); });
+  wrap.querySelectorAll('[data-q]').forEach((b) => { b.onclick = () => boxes().forEach((x) => { x.checked = b.dataset.q === 'all' || (b.dataset.q === 'eup' && !!x.dataset.eup); }); });
   wrap.querySelector('[data-ok]').onclick = () => {
     (L.dongMyeon ||= {})[id] = boxes().filter((x) => x.checked).map((x) => x.dataset.myeon);
     wrap.remove();

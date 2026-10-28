@@ -264,6 +264,7 @@ table.cmp th.asc, table.cmp th.desc { color: var(--ink); }
 .ld-steps li.now, .ld-steps li.ok { color: var(--ink); }
 .ld-steps li.ok .p { width: 100% !important; background: var(--good); }
 .ld-tip { font-size: 12px; color: var(--muted); }
+.ld-fail { margin-top: 8px; display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
 #btn-next5 { white-space: nowrap; }
 .lg-toggle { display: none; }
 #btn-next5.on { background: var(--accent-soft); border-color: var(--accent); }

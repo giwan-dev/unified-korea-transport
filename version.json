@@ -1,5 +1,5 @@
 {
-"v": "Alpha 0.5.2",
+"v": "Alpha 0.5.3",
 "files": [
 "css/style.css",
 "js/app/budget.js",
@@ -10,6 +10,7 @@
 "js/app/econ.js",
 "js/app/election.js",
 "js/app/firstyear.js",
+"js/app/fresh.js",
 "js/app/gazette.js",
 "js/app/housing.js",
 "js/app/interact.js",
