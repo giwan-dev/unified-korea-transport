@@ -127,6 +127,12 @@ def main():
             if ln is None or ln.length <= 0.002:
                 continue
             if code == -2 and country[i] == "KP":
+                # 북측 쪽 선은 버리되, 비무장지대 안에서 북측 두 시군이 가는 틈을 두고 맞닿은 곳(판문구역과 옛 장단 땅 조각 사이 등)은
+                # 두 시군 사이 경계로 남긴다. 버리면 장단군을 경기도에 되살릴 때 개성시와의 도 경계가 2km쯤 끊겼다
+                others = [k for k in kp if k != i]
+                for nb, piece in split_by_neighbor(ln, shapely.STRtree([geoms[k] for k in others]), others, geoms, reach=0.003):
+                    if nb is not None and ids[i] < ids[nb] and piece.length > 0.001:
+                        feats.append((ids[i], ids[nb], piece))
                 continue
             if code == -2:
                 for nb, piece in split_by_neighbor(ln, kp_tree, kp, geoms):

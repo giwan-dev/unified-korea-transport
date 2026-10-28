@@ -525,3 +525,10 @@ details > summary.flash { animation: flash 1.4s ease-out; }
 /* 되돌릴 수 없는 동작 (사업 취소 등) */
 button.danger { color: #b3261e; border-color: #e3b4b0; }
 button.danger:hover:not(:disabled) { background: #fdecea; }
+
+/* 분구 미리보기 창: 지도를 가리지 않게 왼쪽 위에 떠 있다 (지도에서 동을 눌러 구를 바꾼다) */
+.gu-float { position: fixed; left: 12px; top: 64px; z-index: 1500; width: min(340px, calc(100vw - 24px)); max-height: calc(100vh - 90px); overflow: auto;
+  background: var(--panel, #fff); color: var(--ink, #1d232b); border: 1px solid var(--line, #ccc); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.22); padding: 10px 12px; }
+.gu-float h3 { margin: 0 0 4px; font-size: 15px; }
+.gu-float .item { padding: 6px 0; border-bottom: 1px solid var(--line, #eee); }
+.gu-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; flex: none; margin-right: 6px; align-self: center; }

@@ -51,7 +51,8 @@ function baseStyle() {
       // 해안·국경선(가늘게)과 광역 단체 경계(굵게). 광역 경계는 setRegions가 지금 행정구역(개편·광역시 승격 반영)으로 고른다
       { id: 'bg-coast', type: 'line', source: 'edges', filter: ['==', ['get', 'b'], -1], paint: { 'line-color': c.sido, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.5, 10, 1] } },
       { id: 'bg-sido', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1],
-        layout: { 'line-join': 'round' }, paint: { 'line-color': c.sido, 'line-opacity': 0.85, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.6, 10, 3.2] } },
+        // 경계선 조각마다 끝을 둥글게: 조각 끝이 몇 m씩 어긋난 곳(남북·시도 자료가 만나는 곳)이 끊겨 보이지 않게
+        layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': c.sido, 'line-opacity': 0.85, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.6, 10, 3.2] } },
       // 바다·강 위 도 경계: 점선 (해안에서 약 12km 안, 가장 가까운 시군을 따라 나눈 선)
       { id: 'bg-sido-water', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1],
         paint: { 'line-color': c.sido, 'line-opacity': 0.7, 'line-dasharray': [3, 2], 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1, 10, 2] } },
@@ -154,11 +155,13 @@ function renamed(features, level, idKey) {
 }
 
 let labelGroup = null;
-let extraLabels = [];
-/** 분구한 구 이름: 원래 있던 구와 같은 시군구 라벨 층(lb-sgg)에 단다 ({name} 점들) */
+let extraLabels = [], baseLabels = null;
+/** 분구한 구 이름: 원래 있던 구와 같은 시군구 라벨 층(lb-sgg)에 단다 ({name} 점들). 시군구 라벨은 지난번 것을 그대로 쓴다 */
 export function setExtraLabels(map, feats) {
   extraLabels = feats.map((f) => ({ ...f, properties: { ...f.properties, rank: 2 } }));
-  return refreshNames(map);
+  if (!baseLabels) return refreshNames(map);
+  map.getSource('labels')?.setData({ type: 'FeatureCollection', features: [...baseLabels, ...extraLabels] });
+  return Promise.resolve();
 }
 /** 시군 라벨 묶기: 존 번호 → {key, weight}. 같은 key(한 시군으로 보이는 존들)는 weight가 가장 큰 존에만 이름을 단다 */
 export function setLabelGroup(fn) { labelGroup = fn; }
@@ -177,6 +180,7 @@ export async function refreshNames(map) {
     }
     feats = feats.filter((f) => f.properties.zone == null || best.get(labelGroup(f.properties.zone).key).zone === f.properties.zone);
   }
+  baseLabels = feats;
   map.getSource('labels').setData({ type: 'FeatureCollection', features: [...feats, ...extraLabels] });
   setUnits(map);
 }
@@ -421,7 +425,7 @@ export function setHousing(map, list) {
       for (let k = 0; k <= 36; k++) { const t = (k / 36) * 2 * Math.PI; ring.push(at(R * wob(t) * Math.cos(t), R * wob(t) * Math.sin(t))); }
     }
     const built = h.built || h.done;
-    features.push({ type: 'Feature', properties: { k: 'area', done: !!built }, geometry: { type: 'Polygon', coordinates: [ring] } });
+    features.push({ type: 'Feature', properties: { k: 'area', done: !!built, id: h.id }, geometry: { type: 'Polygon', coordinates: [ring] } });
     features.push({ type: 'Feature', properties: { k: 'label', name: h.done ? h.name : built ? `${h.name} (입주 중)` : `${h.name} (공사 중)` }, geometry: { type: 'Point', coordinates: [h.lon, h.lat] } });
     // (예전에는 다 지은 지구 안에 150m 간격 격자 도로를 그렸다: 확대하면 지저분해 뺐다. 단지 간선도로는 실제 도로망에 있다)
   }
@@ -448,7 +452,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   }, below);
   map.addLayer({
     // 시군구 경계: 경계선 조각(edges) 가운데 같은 광역 단체 안의 변만 (도 경계는 bg-sido, 해안은 bg-coast가 한 번씩 그린다)
-    id: 'zones-line', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1], layout: { 'line-join': 'round' },
+    id: 'zones-line', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1], layout: { 'line-join': 'round', 'line-cap': 'round' },
     paint: { 'line-color': '#7a7f86', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.2, 9, 0.8], 'line-opacity': 0.7 },
   }, below);
   map.addLayer({

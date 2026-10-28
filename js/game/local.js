@@ -66,12 +66,16 @@ export function promotedName(state, z) {
  * 광역시로 승격한 시 자체(구로 나뉘지 않은 한 존)는 중구로 (해주시 → 해주광역시 중구)
  */
 export function countyDisplayName(state, z) {
-  const L = state.local, own = promotedName(state, z);
+  // 바탕 이름은 행정구역 정리 이름(되살린 연백군, 두음법칙 등)부터: 예전에는 정리 이름이 맨 위에 덮여 승격(연백군 → 연백시)·
+  // 광역시 편입(○○시 → ○○구)이 이름에 보이지 않았다
+  const L = state.local, pn = promotedName(state, z), base = state.adminNames?.[`z:${z.id}`] || z.name;
+  const own = pn !== z.name ? base.replace(/군$/, '시') : base;
   if (!L || z.ext) return own;
-  if (annexOf(state, z) && isMetroCity(regionOf(state, z)) && /시$/.test(own)) return own.replace(/시$/, '구');
+  if (!z.city && /시$/.test(pn) && L.independent?.includes(pn) && z.province !== pn) return '중구';
+  // 광역시 아래에 시는 없다: 광역시에 든 시(편입한 시, 승격한 뒤 편입한 군)는 구로 (벽성시 → 벽성구)
+  if (!z.city && z.name !== z.province && /시$/.test(own) && isMetroCity(regionOf(state, z))) return own.replace(/시$/, '구');
   // 광역시 산하 군을 구로 바꾼 곳 (기장군 → 기장구)
   if (L.gunToGu?.includes(unitId(state, z)) && /군$/.test(own)) return own.replace(/군$/, '구');
-  if (!z.city && /시$/.test(own) && L.independent?.includes(own) && z.province !== own) return '중구';
   // 북측 직할시의 시 본체(개성시 안의 개성시: 개풍·장풍·판문과 나란한 시내)는 중구로. 예전에는 광역단체장과 같은 '개성시장'이 겹치고,
   // 개성광역시로 바꾸면 '광역시와 같은 이름의 시'라 기초단체장이 없어져 시내에 지방자치가 없었다. 시 전체가 한 시군인 라선은 그대로
   if (!z.city && z.name === z.province && KP_DIRECT_CITIES.includes(z.province) && z.province !== '라선시' && isMetroCity(regionOf(state, z))) return '중구';
@@ -197,6 +201,36 @@ export function initLocal(state) {
 }
 
 /** 이 시군을 편입한 곳: { prov, side } (편입한 광역 단체의 바탕: 자료의 도·남북, 승격한 도시면 그 도시 이름). 예전 저장은 이름 문자열 */
+/**
+ * 편입·승격·군→구·분구 열쇠를 지금 시군 열쇠(unitId)로 맞춘다. 합친 군(연안·배천 → 연백군)의 한 조각 열쇠로 적혀 있으면
+ * (예전 저장, 편입한 뒤 행정구역 정리를 바꾼 경우) 그 조각만 편입돼 한 군이 두 광역 단체로 갈리고 군청이 둘 찍혔다. 바꿨으면 true
+ */
+export function normalizeUnitKeys(state, zones) {
+  const L = state.local;
+  if (!L) return false;
+  const to = new Map();
+  for (const z of zones) if (!z.ext) { const c = countyId(z), u = unitId(state, z); if (c !== u) to.set(c, u); }
+  let changed = false;
+  for (const f of ['annex', 'bungu']) {
+    const o = L[f];
+    if (!o) continue;
+    for (const [k, v] of Object.entries(o)) {
+      const u = to.get(k);
+      if (!u) continue;
+      if (!(u in o)) o[u] = v;
+      else if (f === 'bungu') Object.assign(o[u].gu, v.gu);
+      delete o[k];
+      changed = true;
+    }
+  }
+  for (const f of ['cityUp', 'gunToGu']) {
+    if (!L[f]) continue;
+    const n = [...new Set(L[f].map((k) => to.get(k) || k))];
+    if (n.join('\n') !== L[f].join('\n')) { L[f] = n; changed = true; }
+  }
+  return changed;
+}
+
 export function annexOf(state, z) {
   const A = state.local?.annex;
   return (A && (A[unitId(state, z)] || A[countyId(z)] || (z.city && A[`${z.province}|${z.city}`]))) || null;
@@ -242,7 +276,7 @@ export const REGION_RENAMED = { 강원도: '강원북도' };
 /** 승격한 도시의 광역 단체 이름: 옛 직할시(평양·남포)는 그대로, 나머지 시는 ○○광역시 */
 export function metroName(c) { return isMetroCity(c) ? c : c.replace(/시$/, '광역시'); }
 
-export function isMetroCity(name) { return /(특별시|광역시|직할시|특별자치시)$/.test(name) || ['평양시', '남포시', '라선시', '개성시'].includes(name); }
+export function isMetroCity(name) { return /(특별시|광역시|직할시|특별자치시)$/.test(name) || ['평양시', '남포시', '라선시', '나선시', '개성시'].includes(name); }
 
 export function governorTitle(region) {
   // 특별시·광역시·특별자치시장은 단체 이름 그대로 (함흥광역시장), 옛 직할시는 ○○시장
