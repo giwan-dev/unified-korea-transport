@@ -10,6 +10,7 @@
 """
 import collections
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -40,6 +41,11 @@ def norm(n):
     return dueum(n.strip())
 
 
+def ri_stem(n):
+    """리·동 이름 줄기: 1945년 평안북도는 마을을 ○○동으로 불러(도령동) 지금 ○○리와 끝이 다르다"""
+    return re.sub(r"(로동자구|노동자구|동|리|읍|면)$", "", norm(n)) or norm(n)
+
+
 def stem(n):
     for suf in ("특별시", "광역시", "직할시", "구역", "군", "부", "시", "구"):
         if n.endswith(suf) and len(n) > len(suf):
@@ -66,7 +72,7 @@ def load_1945():
         if len(parts) < 4 or parts[0] not in NORTH:
             continue
         do, gun, myeon, ri = parts[:4]
-        by_gun[stem(gun)][norm(ri)].append((do, myeon))
+        by_gun[stem(dueum(gun))][ri_stem(ri)].append((do, myeon))
     return by_gun
 
 
@@ -110,19 +116,26 @@ def main():
             continue
         idxs = [z["sub0"] + k for k in range(len(z["subs"]))]
         # 이 시군·옛 군(hist)·이웃 시군 이름의 옛 부군 (가까운 쪽부터)
-        cands = [stem(z["name"])] + ([stem(z["hist"])] if z.get("hist") else []) + [stem(zones[j]["name"]) for j in sorted(nb[zi])]
+        # 1952년에 새로 생긴 군(피현군 등)은 옛 군이 이웃의 이웃일 수 있어 두 겹까지 (두음법칙도: 룡천 = 용천)
+        ring2 = sorted({k for j in nb[zi] for k in nb[j]} - nb[zi] - {zi})
+        cands = [stem(dueum(z["name"]))] + ([stem(dueum(z["hist"]))] if z.get("hist") else [])             + [stem(dueum(zones[j]["name"])) for j in sorted(nb[zi])] + [stem(dueum(zones[j]["name"])) for j in ring2]
         cands = [c for c in dict.fromkeys(cands) if c in old]
-        got = {}
+        got, hits = {}, {}
         for i in idxs:
-            nm = norm(feats[i]["properties"].get("name", ""))
-            if not nm.endswith("리") and not nm.endswith("동"):
+            raw = feats[i]["properties"].get("name", "")
+            if not re.search(r"(리|동|읍|로동자구|노동자구)$", raw):
                 continue
-            for c in cands:
-                hit = old[c].get(nm)
-                if hit:
-                    got[i] = hit[0][1]
-                    stats["matched"] += 1
-                    break
+            nm = ri_stem(raw)
+            opts = [(k, c, m) for k, c in enumerate(cands) for _, m in old[c].get(nm, [])]
+            if opts:
+                hits[i] = opts
+        # 같은 이름 리가 여러 옛 군·면에 있으면, 이 시군의 다른 리도 많이 맞는 면으로 (우연히 이름만 같은 먼 면을 고르지 않게).
+        # 비기면 이 시군 이름의 옛 군 → 이웃 → 이웃의 이웃 순
+        votes = collections.Counter((c, m) for opts in hits.values() for (c, m) in {(c, m) for _, c, m in opts})
+        for i, opts in hits.items():
+            k, c, m = max(opts, key=lambda o: (votes[(o[1], o[2])], -o[0]))
+            got[i] = m
+            stats["matched"] += 1
         if not got:
             stats["zones_without_match"] += 1
             continue
