@@ -80,6 +80,9 @@ const wmark = (name) => wperf.push([name, Math.round(performance.now())]);
 function results(totals, { withState = true } = {}) {
   lastTotals = totals;
   wmark('results start');
+  // 존 안 통행 수단 분담 (도시철도 구 안 이용 포함): 분담률과 도시철도 이용객에 더한다
+  try { totals.local = model.updateLocalTrips(); } catch (e) { console.warn('local trips', e); }
+  wmark('local trips');
   const links = model.linkResults();
   const zones = model.zoneResults();
   const stations = model.stationResults();
@@ -112,10 +115,14 @@ self.onmessage = (ev) => { queue = queue.then(() => handle(ev.data)); };
 
 async function handle(msg) {
   try {
+    // 택지지구가 덮는 읍면동: 존 안 통행에서 도시철도를 더 탄다 (model.localTransitCost)
+    const hs = () => { if (model && msg.ctx?.housingSubs) model.housingSubs = new Set(msg.ctx.housingSubs); };
+    hs();
     if (msg.type === 'init') {
       wmark('init received');
       post('progress', { label: '시뮬레이션 준비 중', value: 0 });
       model = new Model(msg.zones, new Float32Array(msg.grid));
+      hs();
       wmark('model built');
       if (msg.baseline?.json.access) model.preloadAccess(msg.baseline.json, msg.baseline.bin);
       if (msg.gridEff) model.setGrid(new Float32Array(msg.gridEff));   // 택지지구 등 입주 인구를 더한 격자

@@ -373,7 +373,7 @@ export class Model {
    * 역마다 역세권(반경 약 800m) 인구 × metroLocalRate명이 타고, 평균 metroLocalKm만큼 노선을 따라 간다고 보고 구간에 얹는다.
    * 갈림길에서는 갈래마다 나눈다. 보고하는 이용객·혼잡도와 경로 선택의 혼잡(updateCosts)에 더한다
    */
-  metroLocalLoads() {
+  metroLocalLoads(scale = null) {
     const L = this.net.links, out = new Float32Array(L.length);
     const adj = new Map();
     L.forEach((l, i) => {
@@ -385,7 +385,8 @@ export class Model {
     for (const s of adj.keys()) {
       if (!stations.has(s)) continue;
       const [x, y] = this.net.nodes[s];
-      const riders = this.densityAt(x, y) * 2 * P.metroLocalRate;   // 밀도(명/km²) × 약 2km² (반경 800m)
+      // 밀도(명/km²) × 약 2km² (반경 800m). scale: 존마다 수단 선택(updateLocalTrips)으로 나온 구 안 도시철도 통행 / 이 고정 비율의 승차
+      const riders = this.densityAt(x, y) * 2 * P.metroLocalRate * (scale ? scale[this.nodeZone(s)] ?? 1 : 1);
       if (!(riders > 0)) continue;
       // 노선을 따라 퍼진다: [노드, 간 거리, 몫, 온 링크]
       const stack = [[s, 0, 1, -1]], seen = new Set([s]);
@@ -414,7 +415,63 @@ export class Model {
    * @param {number[]} zones 계산할 존
    * @returns {Float64Array} 존마다 Σ 통행 × 기대 비용 (분·통행/일)
    */
-  localTransitCost(zones) {
+  /** 노드가 든 존 (가장 가까운 읍면동의 존) */
+  nodeZone(n) {
+    (this.nodeZoneCache ||= new Map());
+    let z = this.nodeZoneCache.get(n);
+    if (z != null) return z;
+    const [x, y] = this.net.nodes[n];
+    let best = 0, bd = Infinity;
+    for (let s = 0; s < this.S; s++) { const d = (this.subX[s] - x) ** 2 + (this.subY[s] - y) ** 2; if (d < bd) { bd = d; best = s; } }
+    z = this.subZone[best];
+    this.nodeZoneCache.set(n, z);
+    return z;
+  }
+
+  /** 도착지 주차 부담 (분): 밀도가 높은 도심일수록 주차장 찾기·걷기와 요금 */
+  parkMin(z) {
+    if (this.isExt[z]) return 0;
+    const dens = this.densityAt(this.cx[z], this.cy[z]);
+    const t = Math.min(1, Math.max(0, (dens - P.carParkDensLo) / (P.carParkDensHi - P.carParkDensLo)));
+    return t * (P.carParkMaxMin + P.carParkMaxFee / P.vot);
+  }
+
+  /**
+   * 존(시군구) 안 읍면동 사이 통행의 수단 분담: 승용차·버스·도시철도(일반철도 광역전철 포함) 로짓 (localTransitCost와 같은 시간).
+   * 지역 간 통행만 세던 분담률에 같은 구·시 안 통행(도시철도 이용 대부분)을 더하고, 도시철도 구 안 이용객(metroLocal)도 이 몫에 맞춘다.
+   * @returns {{trips, car, bus, metro, kr: {trips, car, bus, metro}}} 하루 통행
+   */
+  updateLocalTrips() {
+    const zones = [];
+    for (let z = 0; z < this.Z; z++) if (!this.isExt[z]) zones.push(z);
+    const sh = { car: new Float64Array(zones.length), bus: new Float64Array(zones.length), met: new Float64Array(zones.length) };
+    this.localTransitCost(zones, sh);
+    const tot = { trips: 0, car: 0, bus: 0, metro: 0, kr: { trips: 0, car: 0, bus: 0, metro: 0 } };
+    const metZ = new Float64Array(this.Z);
+    zones.forEach((z, k) => {
+      const c = sh.car[k], b = sh.bus[k], m = sh.met[k];
+      metZ[z] = m;
+      for (const t of this.isKP[z] ? [tot] : [tot, tot.kr]) { t.trips += c + b + m; t.car += c; t.bus += b; t.metro += m; }
+    });
+    // 도시철도 구 안 이용객: 역세권 고정 비율로 퍼뜨린 승차를 존마다 수단 선택 몫에 맞춘다 (0.2~5배)
+    const base = this.metroLocalLoads();
+    const fixedBoard = new Float64Array(this.Z), stations = new Set(this.net.stations), seen = new Set();
+    for (const l of this.net.links) {
+      if (l.mode !== 2 || !l.active || l.via) continue;
+      for (const s of [l.a, l.b]) {
+        if (!stations.has(s) || seen.has(s)) continue;
+        seen.add(s);
+        fixedBoard[this.nodeZone(s)] += this.densityAt(...this.net.nodes[s]) * 2 * P.metroLocalRate;
+      }
+    }
+    const scale = new Float64Array(this.Z).fill(1);
+    for (let z = 0; z < this.Z; z++) if (fixedBoard[z] > 0) scale[z] = Math.min(5, Math.max(0.2, metZ[z] / fixedBoard[z]));
+    this.metroLocal = base.length ? this.metroLocalLoads(scale) : base;
+    this.localTotals = tot;
+    return tot;
+  }
+
+  localTransitCost(zones, shares = null) {
     const L = this.net.links, M = P.metroCandidates, K = P.stationCandidates;   // this.K는 통행량 보정 계수다 (역 후보 수가 아니다)
     const adj = new Map();
     // 시간이 숫자가 아닌 선로(속도·길이 없는 구간)는 뺀다: NaN이 섞이면 아래 최단 경로가 끝나지 않는다
@@ -498,9 +555,13 @@ export class Model {
       const candCache = new Map();
       const candOf = (a) => { let c = candCache.get(a); if (!c) candCache.set(a, (c = cands(a))); return c; };
       const trips = this.pop[z] * P.localTripRate;
+      const parkZ = this.parkMin(z) * P.localParkShare;   // 도심 주차 부담 (구 안 짧은 통행은 주차가 더 쉽다: 일부만)
       let cost = 0;
       for (let k = 0; k < pairs.length; k += 4) {
-        const a = pairs[k], b = pairs[k + 1], dr = pairs[k + 2] * P.localDetour, T = (trips * pairs[k + 3]) / gsum;
+        const a = pairs[k], b = pairs[k + 1], dr = pairs[k + 2] * P.localDetour;
+        // 택지지구: 역 중심으로 짓고 연계 버스·보행로를 함께 놓아 도시철도까지 가깝고, 새로 든 사람은 통행이 많다
+        const tod = this.housingSubs && (this.housingSubs.has(a) || this.housingSubs.has(b));
+        const T = ((trips * pairs[k + 3]) / gsum) * (tod ? P.housingTripBoost : 1);
         const car = (dr / P.localCarKmh) * 60 + P.localCarExtraMin;
         const bus = (dr / P.localBusKmh) * 60 + P.localBusExtraMin;
         let met = Infinity;
@@ -512,8 +573,10 @@ export class Model {
             if (t != null) met = Math.min(met, accA + t + cb[j + 1]);
           }
         }
-        const e = Math.exp(-th * car) + Math.exp(-th * bus) + (met < Infinity ? Math.exp(-th * met) : 0);
+        if (tod && met < Infinity) met = Math.max(1, met - P.housingMetroBonusMin);
+        const eC = Math.exp(-th * (car + parkZ)), eB = Math.exp(-th * bus), eM = met < Infinity ? Math.exp(-th * met) : 0, e = eC + eB + eM;
         cost += T * (-Math.log(e) / th);
+        if (shares) { shares.car[zi] += (T * eC) / e; shares.bus[zi] += (T * eB) / e; shares.met[zi] += (T * eM) / e; }
       }
       out[zi] = cost;
     });
@@ -1171,12 +1234,7 @@ export class Model {
     const croad = new Float64Array(Z), ctr = new Float64Array(Z);
     // 도착지 주차: 밀도가 높은 도심일수록 주차장 찾기·걷기와 주차 요금이 든다 (도시철도가 승용차를 덜어내는 큰 이유)
     const park = new Float64Array(Z);
-    for (let j = 0; j < Z; j++) {
-      if (this.isExt[j]) continue;
-      const dens = this.densityAt(this.cx[j], this.cy[j]);
-      const t = Math.min(1, Math.max(0, (dens - P.carParkDensLo) / (P.carParkDensHi - P.carParkDensLo)));
-      park[j] = t * (P.carParkMaxMin + P.carParkMaxFee / P.vot);
-    }
+    for (let j = 0; j < Z; j++) park[j] = this.parkMin(j);
     const egress = new Int32Array(this.S);   // 대중교통 도착 소구역별 하차 노드
     const mass = this.tripMass();
     // 관광 통행: 목적지 쪽 질량에 관광 매력도를 더한다 (방문객 1명 ≈ 인구 tourismMass명)

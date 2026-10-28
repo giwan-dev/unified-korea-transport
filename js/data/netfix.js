@@ -96,7 +96,7 @@ function chaikin(pts, n = 3) {
   return out;
 }
 
-export function fixNetwork(base, nodeFix = {}) {
+export function fixNetwork(base, nodeFix = {}, roadFix = {}) {
   // 대심도 광역급행철도(GTX): 지도 자료 선형이 역 어귀에서 기존 노선을 따라 구불거린다(대곡 등). 지하 깊이 거의 곧게 가므로
   // 250m 안의 잔굴곡을 없애고 매끈한 곡선으로 (양 끝 역 자리는 그대로)
   for (const l of base.links) {
@@ -109,6 +109,27 @@ export function fixNetwork(base, nodeFix = {}) {
   let moved = 0;
   for (const [n, p] of Object.entries(nodeFix)) {
     if (base.nodes[+n]) { moveNode(base, +n, p, 0); moved++; }
+  }
+  // 고속도로 분기점 손질 (data/road_geom_fix.json, pipeline/build_node_fix.py):
+  // rewire: 한 고속도로가 다른 고속도로 위를 따라가던 구간의 끝을 바꿔 잇는다 (안산분기점: 영동은 교차점에서 곧게, 남는 구간은 분기점 연결로)
+  // geom: 서로 다른 고속도로가 같은 두 노드 사이를 함께 쓰는 구간을 제 고속도로 선형으로 따로 그린다 (조남 북쪽 서해안·수원문산)
+  const pl = (g) => { let s = 0; for (let k = 2; k + 1 < g.length; k += 2) s += km([g[k - 2], g[k - 1]], [g[k], g[k + 1]]); return s; };
+  for (const [id, r] of Object.entries(roadFix.rewire || {})) {
+    const l = base.links[+id];
+    if (!l || l.mode !== 0 || [l.a, l.b].sort().join() !== [...r.from].sort().join()) continue;   // 다른 망이면 건드리지 않는다
+    l.a = r.a; l.b = r.b; l.geom = r.geom.slice();
+    l.geom.splice(0, 2, ...base.nodes[r.a]); l.geom.splice(-2, 2, ...base.nodes[r.b]);
+    l.len = Math.round(pl(l.geom) * 100) / 100;
+    if (r.name) { l.name = r.name; l.cls = 'trunk'; }
+  }
+  for (const [id, g] of Object.entries(roadFix.geom || {})) {
+    const l = base.links[+id];
+    if (!l || l.mode !== 0 || g.length < 4) continue;
+    const ga = [g[0], g[1]], na = base.nodes[l.a], nb = base.nodes[l.b];
+    const fwd = km(ga, na) <= km(ga, nb);
+    const out = g.slice();
+    out.splice(0, 2, ...(fwd ? na : nb)); out.splice(-2, 2, ...(fwd ? nb : na));
+    l.geom = out;
   }
   // 역에서 엇갈리는 두 노선의 갈고리
   const st = new Set([...base.stations.map((s) => s[1]), ...(base.metro_stations || []).map((s) => s[1])]);

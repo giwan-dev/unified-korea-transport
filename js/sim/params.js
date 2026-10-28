@@ -93,6 +93,9 @@ export const P = {
   localBusKmh: 15,            // 시내버스 평균 속도 (정차 포함)
   localBusExtraMin: 12,       // 버스: 정류장까지 걷기 + 기다림
   localTheta: 0.1,            // 수단 선택 로짓 계수 (1/분)
+  localParkShare: 0.6,
+  housingMetroBonusMin: 12,   // 택지지구 읍면동: 역 중심 개발·연계 버스로 도시철도까지 이만큼 덜 걸린다 (분)
+  housingTripBoost: 1.4,      // 택지지구 읍면동이 낀 존 안 통행 (새 입주 가구는 통근·통학이 많다)        // 구 안 통행의 도심 주차 부담 비율 (지역 간 통행 대비)
   localMaxMin: 75,            // 이보다 긴 철도 경로는 보지 않는다
   localRailKmh: 45,           // 존 안 통행에서 일반철도(광역전철) 구간 속도
   localRailWaitMax: 20,       // 존 안 통행에서 일반철도역 기다림 상한 (분)
