@@ -69,7 +69,12 @@ export function countyDisplayName(state, z) {
   const L = state.local, own = promotedName(state, z);
   if (!L || z.ext) return own;
   if (annexOf(state, z) && isMetroCity(regionOf(state, z)) && /시$/.test(own)) return own.replace(/시$/, '구');
+  // 광역시 산하 군을 구로 바꾼 곳 (기장군 → 기장구)
+  if (L.gunToGu?.includes(unitId(state, z)) && /군$/.test(own)) return own.replace(/군$/, '구');
   if (!z.city && /시$/.test(own) && L.independent?.includes(own) && z.province !== own) return '중구';
+  // 북측 직할시의 시 본체(개성시 안의 개성시: 개풍·장풍·판문과 나란한 시내)는 중구로. 예전에는 광역단체장과 같은 '개성시장'이 겹치고,
+  // 개성광역시로 바꾸면 '광역시와 같은 이름의 시'라 기초단체장이 없어져 시내에 지방자치가 없었다. 시 전체가 한 시군인 라선은 그대로
+  if (!z.city && z.name === z.province && KP_DIRECT_CITIES.includes(z.province) && z.province !== '라선시' && isMetroCity(regionOf(state, z))) return '중구';
   return own;
 }
 
@@ -85,6 +90,8 @@ export const ADMIN_OPTIONS = [
   { key: 'goseong', label: '고성군 (강원 남·북)', choices: [['separate', '남북 따로 둔다'], ['ganseong', '남측 고성군을 간성군으로'], ['south', '하나로 합쳐 남측 강원에'], ['north', '하나로 합쳐 북측 강원에']] },
   { key: 'jagang', label: '자강도·량강도 (1945년 이전 도 복원 때)', choices: [['merge', '평안북도·함경남도로 합친다'], ['keep', '도로 남겨 둔다']] },
   { key: 'dueum', label: '북측 지명 두음법칙', choices: [['keep', '북측 표기 그대로 (량강도·룡천)'], ['apply', '남측 표기로 (양강도·용천)']] },
+  { key: 'univ', label: '북측 인물 이름 대학', choices: [['keep', '그대로 둔다'], ['restore', '지명 이름으로 (김일성종합대학 → 평양종합대학)']] },
+  { key: 'guyeok', label: '북측 구역 (평양·남포·개성)', choices: [['keep', '○○구역 그대로'], ['gu', '○○구로 (중구역 → 중구, 보통강구역 → 보통강구)']] },
 ];
 
 /** 두음법칙: 첫 음절의 ㄹ·ㄴ을 남측 표기로 (량강→양강, 룡천→용천, 락원→낙원, 녕변→영변) */
@@ -176,6 +183,8 @@ export function adminNames(admin, zones, targets = []) {
   if (admin.dueum === 'apply') zones.forEach((z, i) => { if (z.country === 'KP' && !z.ext && dueum(z.name) !== z.name) out[`z:${i}`] = dueum(z.name); });
   if (admin.goseong === 'ganseong') zones.forEach((z, i) => { if (isZone(z, '고성군', 'KR', KR_GANGWON)) out[`z:${i}`] = '간성군'; });
   if (admin.propaganda === 'restore') for (const t of targets) out[`${t.level === 'zone' ? 'z' : 'u'}:${t.id}`] = t.historic;
+  // 북측 구역을 남측처럼 구로 (구역장 → 구청장)
+  if (admin.guyeok === 'gu') zones.forEach((z, i) => { const n = out[`z:${i}`] || z.name; if (z.country === 'KP' && !z.ext && /구역$/.test(n)) out[`z:${i}`] = n.replace(/구역$/, '구'); });
   // 되살린 옛 군: 그 군에 속했던 존(떼어 낸 조각 포함)을 모두 그 군 이름으로
   zones.forEach((z, i) => { const h = z.hist && HIST_BY_NAME[z.hist]; if (h && admin[h.key] && h.prov[admin[h.key]]) out[`z:${i}`] = h.name; });
   return out;

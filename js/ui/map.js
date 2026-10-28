@@ -154,6 +154,12 @@ function renamed(features, level, idKey) {
 }
 
 let labelGroup = null;
+let extraLabels = [];
+/** 분구한 구 이름: 원래 있던 구와 같은 시군구 라벨 층(lb-sgg)에 단다 ({name} 점들) */
+export function setExtraLabels(map, feats) {
+  extraLabels = feats.map((f) => ({ ...f, properties: { ...f.properties, rank: 2 } }));
+  return refreshNames(map);
+}
 /** 시군 라벨 묶기: 존 번호 → {key, weight}. 같은 key(한 시군으로 보이는 존들)는 weight가 가장 큰 존에만 이름을 단다 */
 export function setLabelGroup(fn) { labelGroup = fn; }
 
@@ -171,7 +177,7 @@ export async function refreshNames(map) {
     }
     feats = feats.filter((f) => f.properties.zone == null || best.get(labelGroup(f.properties.zone).key).zone === f.properties.zone);
   }
-  map.getSource('labels').setData({ type: 'FeatureCollection', features: feats });
+  map.getSource('labels').setData({ type: 'FeatureCollection', features: [...feats, ...extraLabels] });
   setUnits(map);
 }
 
