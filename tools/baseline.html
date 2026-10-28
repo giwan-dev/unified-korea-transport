@@ -15,7 +15,7 @@
     import { seedServices } from '../js/game/services.js';
     import { seedInterKoreaAir } from '../js/game/airlines.js';
     import { loadNetwork } from '../js/data/netpack.js';
-    import { fixNetwork } from '../js/data/netfix.js';
+    import { fixNetwork, LEN_FIX_V } from '../js/data/netfix.js';
     import { extendWorld, urbanLanes } from '../js/game/world.js';
     const log = (s) => { document.querySelector('#log').textContent += s + '\n'; };
     const [zones, net, meta, grid] = await Promise.all([
@@ -29,6 +29,7 @@
     const linkFix = await jsonOr('../data/link_fix.json');
     log(`자료 손질 ${JSON.stringify(fixNetwork(net, await jsonOr('../data/node_fix.json'), await jsonOr('../data/road_geom_fix.json'), linkFix))}`);
     if (linkFix.v) meta.stamp = `${meta.stamp}+f${linkFix.v}`;
+    meta.stamp = `${meta.stamp}+L${LEN_FIX_V}`;   // 계산 길이를 도형 길이로 맞춘 판 (게임과 같게)
     const world = await fetch('../data/air_sea.json').then((r) => r.json());
     extendWorld(net, zones, world);
     log(`도심 간선도로 차로 보정 ${urbanLanes(net, grid)}개 구간`);

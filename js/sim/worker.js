@@ -36,8 +36,10 @@ async function makePool() {
       // 망만 먼저 보내 보조 워커가 망을 짜게 한다 (주 워커가 경제·인구를 갱신하는 동안 함께)
       async preNet(net) {
         if (this.netSent === net) return;
+        const t0 = performance.now();
         const access = model.accessPack();
-        await Promise.all(ports.map((p) => call(p, { type: 'sync', net, access, snapshot: null }, 60000)));
+        const rs = await Promise.all(ports.map((p) => call(p, { type: 'sync', net, access, snapshot: null }, 60000)));
+        wmark(`helpers net: post+build ${Math.round(performance.now() - t0)}ms, build ${rs.map((r) => r.ms).join('/')}ms`);
         this.netSent = net;
       },
       run: (mk) => Promise.all(ports.map((p, k) => call(p, mk(k), 120000))),
@@ -111,7 +113,12 @@ function calibrateFresh(ctx) {
 
 // 메시지는 하나씩 차례로 처리한다 (배정 도중 다른 요청이 상태를 건드리지 않게)
 let queue = Promise.resolve();
-self.onmessage = (ev) => { queue = queue.then(() => handle(ev.data)); };
+self.onmessage = (ev) => {
+  queue = queue.then(() => handle(ev.data));
+  // 첫 결과를 보낸 뒤 보조 워커의 모델을 미리 만들어 둔다: 첫해 넘기기가 그만큼 빨라진다
+  // (망은 해마다 바뀌어 넘길 때 보낸다)
+  if (ev.data?.type === 'init') queue = queue.then(async () => { if (pool === undefined) pool = await makePool(); });
+};
 
 async function handle(msg) {
   try {
@@ -127,7 +134,7 @@ async function handle(msg) {
       if (msg.baseline?.json.access) model.preloadAccess(msg.baseline.json, msg.baseline.bin);
       if (msg.gridEff) model.setGrid(new Float32Array(msg.gridEff));   // 택지지구 등 입주 인구를 더한 격자
       model.setNetwork(msg.net);
-      wmark('network set');
+      wmark(`network set (역세권 ${model.accessReused ? '기준선 것' : '다시 계산'})`);
       lastNet = msg.net;
       inputs = { zones: msg.zones, grid: msg.gridEff || msg.grid, ports: msg.ports };
       const bl = msg.baseline;

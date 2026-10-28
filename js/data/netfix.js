@@ -118,7 +118,7 @@ function chaikin(pts, n = 3) {
  * 구조(노드·구간 수)가 바뀌므로 v를 올리면 자료 판(stamp)도 바뀌어 저장 게임 번호를 옮긴다 (main.js)
  */
 export function applyLinkFix(base, fix) {
-  const out = { set: 0, add: 0, off: 0, merged: 0 };
+  const out = { set: 0, add: 0, off: 0, merged: 0, lenSet: new Set() };
   if (!fix?.v) return out;
   const N0 = base.nodes.length;
   for (const p of fix.nodes || []) base.nodes.push(p);
@@ -139,6 +139,7 @@ export function applyLinkFix(base, fix) {
     if (!l || !same(l, r)) continue;
     const { id, a, b, geom, to, ...attrs } = r;
     Object.assign(l, attrs);
+    if ('len' in attrs && !geom && !to) out.lenSet.add(r.id);   // 길이를 손으로 정한 구간: 도형 길이로 다시 매기지 않는다
     if (to) { l.a = node(to[0]); l.b = node(to[1]); if (!geom) { l.geom = fit(l.geom, l.a, l.b); l.len = Math.round(pl(l.geom) * 100) / 100; } }
     if (geom) { l.geom = fit(geom, l.a, l.b); l.len = Math.round(pl(l.geom) * 100) / 100; }
     out.set++;
@@ -264,5 +265,34 @@ export function fixNetwork(base, nodeFix = {}, roadFix = {}, linkFix = null) {
       break;
     }
   }
-  return { moved, hooks, ...lf };
+  const { lenSet, ...lfOut } = lf;
+  const lens = fitLengths(base, lenSet);
+  return { moved, hooks, lens, ...lfOut };
+}
+
+/** 계산 길이(len)를 도형 길이로 맞춘 판. 올리면 자료 판(stamp)에 붙어 기준 연도·저장 게임 번호를 다시 맞춘다 (main.js, tools/baseline.html) */
+export const LEN_FIX_V = 1;
+
+/**
+ * 구간의 계산 길이를 지도 도형 길이로 맞춘다. 자료(pipeline/build_data.py)의 len은 노드를 합치고 나누는 동안 직선거리·비례로
+ * 다시 매겨져, 고속도로 셋 중 하나가 도형의 2/3도 안 됐다 (남해고속도로 한 구간 0.09km ↔ 도형 2.44km): 경로 계산이 그런 구간을 너무 짧게 봐 교통이 몰렸다.
+ * 길이를 손으로 정한 구간(link_fix set), 없앤 구간(off), 도형이 없거나 조각난 구간은 그대로 둔다. 바꾼 구간 수를 돌려준다
+ */
+function fitLengths(base, keep = new Set()) {
+  let n = 0;
+  base.links.forEach((l, i) => {
+    const g = l.geom;
+    if (l.off || keep.has(i) || !g || g.length < 4) return;
+    let s = 0;
+    for (let k = 2; k + 1 < g.length; k += 2) {
+      const x0 = g[k - 2], y0 = g[k - 1], x1 = g[k], y1 = g[k + 1];
+      if (Number.isNaN(x0) || Number.isNaN(x1)) return;
+      const dx = (x1 - x0) * Math.cos(((y0 + y1) / 2) * Math.PI / 180), dy = y1 - y0;
+      s += Math.sqrt(dx * dx + dy * dy) * 111.32;
+    }
+    if (!(s >= 0.01)) return;
+    const len = Math.round(s * 100) / 100;
+    if (len !== l.len) { l.len = len; n++; }
+  });
+  return n;
 }

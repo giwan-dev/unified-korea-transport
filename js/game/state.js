@@ -81,27 +81,59 @@ export function baseTransfers(base) {
   let out = transferCache.get(base.stations);
   if (out) return out;
   out = [];
-  const metro = (base.metro_stations || []).map(([nm, n]) => [stName(nm), n, base.nodes[n]]);
+  // 위도순으로 놓고 ±0.01° 안만 본다 (모든 짝을 견주면 불러올 때 0.4초). 짝은 예전처럼 도시철도역 목록 순서로 넣는다
+  const metro = (base.metro_stations || []).map(([nm, n], o) => [stName(nm), n, base.nodes[n], o]).filter((x) => x[2]).sort((x, y) => x[2][1] - y[2][1]);
+  const lat = metro.map((x) => x[2][1]);
   const km = (p, q) => Math.hypot((p[0] - q[0]) * 88.4, (p[1] - q[1]) * 111);
   const seen = new Set();
   for (const [nm, r] of base.stations) {
     const pr = base.nodes[r];
     if (!pr) continue;
-    for (const [mn, m, pm] of metro) {
-      if (m === r || !pm || Math.abs(pm[1] - pr[1]) > 0.01) continue;
+    let lo = 0, hi = lat.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (lat[mid] < pr[1] - 0.01) lo = mid + 1; else hi = mid; }
+    const sn = stName(nm), hits = [];
+    for (let q = lo; q < metro.length && metro[q][2][1] <= pr[1] + 0.01; q++) {
+      const [mn, m, pm, o] = metro[q];
+      if (m === r) continue;
       const d = km(pr, pm);
-      if ((mn === stName(nm) && d <= 1) || d <= 0.25) {
-        const k = `${r}-${m}`;
-        if (!seen.has(k)) { seen.add(k); out.push([r, m]); }
-      }
+      if ((mn === sn && d <= 1) || d <= 0.25) hits.push([o, m]);
+    }
+    hits.sort((x, y) => x[0] - y[0]);
+    for (const [, m] of hits) {
+      const k = `${r}-${m}`;
+      if (!seen.has(k)) { seen.add(k); out.push([r, m]); }
     }
   }
   transferCache.set(base.stations, out);
   return out;
 }
 
-/** 기본 네트워크 + 개량 + 신설을 합친, 시뮬레이션에 넘길 네트워크 */
+/**
+ * 망을 바꾸는 상태 값의 지문: 같으면 지난번 망을 그대로 돌려준다 (화면 하나 그리는 데 여러 번 불러 해마다 수십 번 망 전체를 만들었다).
+ * 사업 상태·신설 구간·개량·운행 계통·폐선·감편·공항·환승 연결처럼 effectiveNetwork가 읽는 것을 모두 넣는다
+ */
+function netKey(state) {
+  let p = 0;
+  for (const x of state.projects) p = (Math.imul(p, 31) + (x.status === 'building' ? 1 : x.status === 'done' ? 2 : 3) + (x.kind === 'upgrade' ? 4 : 0)) | 0;
+  let nl = 0;
+  for (const l of state.newLinks) nl = (Math.imul(nl, 31) + (l.built ? 1 : 0) + (l.replaced ? 2 : 0) + l.a * 7 + l.b) | 0;
+  const osm = state.osm ? `${Object.keys(state.osm.opened || {}).length}:${Object.keys(state.osm.auto || {}).length}` : '';
+  return JSON.stringify([state.year, state.projects.length, p, state.newNodes.length, state.newLinks.length, nl, state.overrides, osm, state.replaced ?? null,
+    state.closedLines ?? null, state.lineFreq ?? null, state.newStations, (state.newAirports || []).map((a) => [a.id, !!a.built]), state.airportCap ?? null,
+    state.airportIntl ?? null, state.air?.routes ?? null, state.air?.banned ?? null, state.services ?? null, state.closedStations ?? null, state.transfers ?? null]);
+}
+const netMemo = new WeakMap();   // state → {base, key, net}
+
+/** 기본 네트워크 + 개량 + 신설을 합친, 시뮬레이션에 넘길 네트워크 (돌려받은 망은 고치지 말 것: 다음 호출이 같은 것을 받는다) */
 export function effectiveNetwork(base, state) {
+  const key = netKey(state), m = netMemo.get(state);
+  if (m && m.base === base && m.key === key) return m.net;
+  const net = buildNetwork(base, state);
+  netMemo.set(state, { base, key, net });
+  return net;
+}
+
+function buildNetwork(base, state) {
   const nodes = base.nodes.concat(state.newNodes);
   const building = new Set();
   for (const p of state.projects) if (p.status === 'building' && p.kind === 'upgrade') p.links.forEach((id) => building.add(id));

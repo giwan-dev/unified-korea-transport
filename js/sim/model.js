@@ -502,28 +502,38 @@ export class Model {
       let d = cache.get(src);
       if (d) return d;
       d = new Map([[src, 0]]);
-      const hk = [0], hv = [src];   // 이진 힙 (시간, 노드)
+      const hk = [0], hv = [src];   // 이진 힙 (시간, 노드): 배열을 새로 만들지 않고 자리만 바꾼다
       const push = (k, v) => {
         let i = hk.length; hk.push(k); hv.push(v);
-        while (i > 0) { const p = (i - 1) >> 1; if (hk[p] <= hk[i]) break; [hk[p], hk[i]] = [hk[i], hk[p]]; [hv[p], hv[i]] = [hv[i], hv[p]]; i = p; }
-      };
-      const pop = () => {
-        const k = hk[0], v = hv[0], lk = hk.pop(), lv = hv.pop();
-        if (hk.length) {
-          hk[0] = lk; hv[0] = lv;
-          for (let i = 0; ;) {
-            const l = 2 * i + 1, r = l + 1;
-            let m = i;
-            if (l < hk.length && hk[l] < hk[m]) m = l;
-            if (r < hk.length && hk[r] < hk[m]) m = r;
-            if (m === i) break;
-            [hk[m], hk[i]] = [hk[i], hk[m]]; [hv[m], hv[i]] = [hv[i], hv[m]]; i = m;
-          }
+        while (i > 0) {
+          const p = (i - 1) >> 1;
+          if (hk[p] <= k) break;
+          hk[i] = hk[p]; hv[i] = hv[p]; i = p;
         }
-        return [k, v];
+        hk[i] = k; hv[i] = v;
+      };
+      let popK = 0;
+      const pop = () => {
+        const v = hv[0], lk = hk.pop(), lv = hv.pop();
+        popK = hk.length ? hk[0] : lk;
+        if (hk.length) {
+          const n = hk.length;
+          let i = 0;
+          for (;;) {
+            const l = 2 * i + 1, r = l + 1;
+            let m = i, mk = lk;
+            if (l < n && hk[l] < mk) { m = l; mk = hk[l]; }
+            if (r < n && hk[r] < mk) { m = r; mk = hk[r]; }
+            if (m === i) break;
+            hk[i] = hk[m]; hv[i] = hv[m]; i = m;
+          }
+          hk[i] = lk; hv[i] = lv;
+          return v;
+        }
+        return lv;
       };
       while (hk.length) {
-        const [du, u] = pop();
+        const u = pop(), du = popK;
         if (du > d.get(u)) continue;
         const a = adj.get(u);
         if (!a) continue;
@@ -675,6 +685,7 @@ export class Model {
     // 기준선에 담겨 온 결과(preloadAccess)가 이 망 것이면, 바뀐 노드가 없는 셈으로 쳐서 소구역 계산을 모두 건너뛴다
     const pre = this.accessPreload;
     this.accessPreload = null;
+    this.accessReused = !!(pre && pre.sig === sig);   // 불러오기 단계 표시용 (worker.js)
     if (pre && pre.sig === sig) {
       Object.assign(this, pre.arrays);
       this.stationNodePrev = pre.stations;
@@ -857,6 +868,7 @@ export class Model {
   }
 
   updateCosts() {
+    this.road?.fixCosts(null); this.transit?.fixCosts(null);   // 펴 둔 간선 비용은 이제 맞지 않는다
     const L = this.net.links;
     for (let i = 0; i < L.length; i++) {
       // 도시철도는 구 안 짧은 이용객(metroLocal)도 같은 열차를 탄다: 경로 선택의 혼잡에도 넣는다 (예전에는 보고에만 더해,
@@ -1120,6 +1132,7 @@ export class Model {
       lap('main origins');
       const rs = await pending;
       lap('wait helpers');
+      rs.forEach((r, k) => tm.push([`helper${k} begin/pass`, `${r.tBegin}/${r.tPass}`]));
       for (const r of rs) this.mergeOrigins(run, r, it);
       lap('merge');
       this.endIteration(run, it);
@@ -1206,6 +1219,7 @@ export class Model {
 
   /** 보조 워커 쪽: 주 워커와 같은 교통량으로 맞춘 뒤 제 몫의 출발 존을 계산해 돌려준다 */
   originsFor(msg) {
+    const t0 = performance.now();
     this.volume.set(msg.volume);
     this.stationWait.set(msg.stationWait);
     this.airOD.set(msg.airOD);
@@ -1213,10 +1227,11 @@ export class Model {
     const run = this.startAssign(msg.integration, false, null);
     run.iters = msg.iters;
     this.beginIteration(run, msg.D);
+    const t1 = performance.now();
     const zones = [];
     for (let i = msg.part; i < this.Z; i += msg.parts) zones.push(i);
     this.originPass(run, msg.it, zones, null);
-    return { aux: run.aux, stOD: run.stOD, airOD: run.airOD, latentOD: run.latentOD, totals: run.totals, ccomp: this.ccomp, zones,
+    return { tBegin: Math.round(t1 - t0), tPass: Math.round(performance.now() - t1), aux: run.aux, stOD: run.stOD, airOD: run.airOD, latentOD: run.latentOD, totals: run.totals, ccomp: this.ccomp, zones,
       odT: msg.it === msg.iters ? run.odT : null, odTime: msg.it === msg.iters ? run.odTime : null };
   }
 
@@ -1245,7 +1260,11 @@ export class Model {
     const crail = new Float64Array(Z), airC = new Array(Z), compAcc = new Float64Array(Z), timeAcc = new Float64Array(Z), tAcc = new Float64Array(Z);
     const lam = P.logitLambda;
     const A = this.airports.length;
+    const kmRow = new Float64Array(Z), bcRow = new Float64Array(Z);   // 출발 존마다 한 번 (승용차 출발 묶음마다 다시 재지 않게)
     let done = 0;
+    // 이 반복 동안 링크 비용은 그대로다: 간선 순서로 펴 둔 비용을 쓴다 (최단경로가 링크 번호로 건너뛰며 읽지 않게)
+    this.road.fixCosts(this.cost);
+    this.transit.fixCosts(this.costT);
 
     for (const i of zoneList) {
       const o0 = this.zoneSub0[i], on = this.zoneSubN[i];
@@ -1298,6 +1317,7 @@ export class Model {
       const carPen = P.carlessPenaltyMin * Math.max(0, 1 - this.income[i] / P.carOwnershipIncome);
       // 승용차: 출발 소구역 묶음마다 따로 최단경로 트리를 만든다.
       // 존 전체를 한 트리로 하면 모든 통행이 가장 유리한 접속점 하나로 나가, 같은 시군구 안 다른 읍면동 쪽 도로는 비어 보인다
+      for (let j = 0; j < Z; j++) { kmRow[j] = kmBetween(this.cx[i], this.cy[i], this.cx[j], this.cy[j]) * 1.25; bcRow[j] = this.borderCost(i, j, integration); }
       let zw = 0;
       for (let o = o0; o < o0 + on; o++) zw += Math.max(this.subW[o], 0);
       for (let g = this.grpOff[i]; g < this.grpOff[i + 1]; g++) {
@@ -1332,8 +1352,8 @@ export class Model {
 
         nodeDemand.fill(0);
         for (let j = 0; j < Z; j++) {
-          const km = kmBetween(this.cx[i], this.cy[i], this.cx[j], this.cy[j]) * 1.25;
-          const bc = this.borderCost(i, j, integration);
+          const km = kmRow[j];
+          const bc = bcRow[j];
           const gr = croad[j] + (km * P.carCostPerKm) / P.vot + bc + carPen + park[j];
           let hsrShare = 0;
           for (let k = pickOff[j]; k < pickOff[j + 1]; k += 3) {
@@ -1411,6 +1431,8 @@ export class Model {
       done++;
       if (progress && done % 25 === 0) progress(((it - 1) + 0.9 * done / zoneList.length) / iters);
     }
+    this.road.fixCosts(null);
+    this.transit.fixCosts(null);
   }
 
   /**

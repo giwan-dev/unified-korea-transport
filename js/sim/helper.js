@@ -20,6 +20,7 @@ function handle(m) {
       model = new Model(m.zones, new Float32Array(m.grid));
       out.postMessage({ ok: true });
     } else if (m.type === 'sync') {
+      const t0 = performance.now();
       if (m.grid) model.setGrid(new Float32Array(m.grid));
       if (m.net) {
         model.useAccessPack(m.access);   // 주 워커가 이 망으로 구한 역세권 결과를 그대로 쓴다
@@ -27,7 +28,7 @@ function handle(m) {
       }
       if (m.snapshot) model.restore(m.snapshot);   // 망만 먼저 받는 경우(snapshot 없음)도 있다
       if (m.groups) model.setOriginGroups(m.groups);
-      out.postMessage({ ok: true });
+      out.postMessage({ ok: true, ms: Math.round(performance.now() - t0) });
     } else if (m.type === 'origins') {
       const r = model.originsFor(m);
       out.postMessage(r, [r.aux.buffer, r.stOD.buffer, r.airOD.buffer, r.latentOD.buffer]);

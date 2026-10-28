@@ -43,7 +43,21 @@ export class Graph {
    * @param {Float64Array} linkCost 링크별 비용(분)
    * @param {number[]} [init] 출발 노드별 초기 비용
    */
+  /**
+   * 한동안 바뀌지 않을 링크 비용을 간선 순서로 펴 둔다: 그동안 shortestPaths(_, linkCost)는 이 배열을 차례로 읽는다.
+   * 비용을 바꾸기 전에 fixCosts(null)로 푼다
+   * @param {Float64Array|null} linkCost
+   */
+  fixCosts(linkCost) {
+    this.fixedFor = linkCost;
+    if (!linkCost) return;
+    const { edgeLink } = this;
+    const ec = this.edgeCost && this.edgeCost.length === edgeLink.length ? this.edgeCost : (this.edgeCost = new Float64Array(edgeLink.length));
+    for (let e = 0; e < edgeLink.length; e++) ec[e] = linkCost[edgeLink[e]];
+  }
+
   shortestPaths(source, linkCost, init) {
+    if (linkCost === this.fixedFor) { this.shortestPathsFixed(source, init); return; }
     const { dist, predEdge, order, heap, offset, target, edgeLink } = this;
     // 직전 탐색에서 건드린 노드만 되돌린다 (철도처럼 작은 부분망을 여러 번 탐색할 때 빠르다)
     for (let k = 0; k < this.settled; k++) { dist[order[k]] = Infinity; predEdge[order[k]] = -1; }
@@ -65,6 +79,38 @@ export class Graph {
       for (let e = offset[u]; e < offset[u + 1]; e++) {
         const v = target[e];
         const nd = du + linkCost[edgeLink[e]];
+        if (nd < dist[v]) {
+          dist[v] = nd;
+          predEdge[v] = e;
+          heap.pushOrDecrease(v, nd);
+        }
+      }
+    }
+    this.settled = k;
+  }
+
+  /** shortestPaths와 같다: fixCosts로 펴 둔 간선 비용을 쓴다 */
+  shortestPathsFixed(source, init) {
+    const { dist, predEdge, order, heap, offset, target } = this, ec = this.edgeCost;
+    for (let k = 0; k < this.settled; k++) { dist[order[k]] = Infinity; predEdge[order[k]] = -1; }
+    heap.clear();
+    if (Array.isArray(source)) {
+      for (let k = 0; k < source.length; k++) {
+        const s = source[k], c = init ? init[k] : 0;
+        if (c < dist[s]) { dist[s] = c; heap.pushOrDecrease(s, c); }
+      }
+    } else {
+      dist[source] = 0;
+      heap.push(source, 0);
+    }
+    let k = 0;
+    while (heap.size > 0) {
+      const u = heap.pop();
+      const du = dist[u];
+      order[k++] = u;
+      for (let e = offset[u], e1 = offset[u + 1]; e < e1; e++) {
+        const v = target[e];
+        const nd = du + ec[e];
         if (nd < dist[v]) {
           dist[v] = nd;
           predEdge[v] = e;

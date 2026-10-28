@@ -15,7 +15,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def main():
-    v = re.search(r"const APP_VERSION = '([^']+)'", (ROOT / "js/main.js").read_text(encoding="utf-8")).group(1)
+    # 0.5.0부터 판 번호는 js/app/core.js에 있다 (예전 판은 js/main.js)
+    src = next(t for p in ("js/app/core.js", "js/main.js") if (ROOT / p).exists() and "const APP_VERSION" in (t := (ROOT / p).read_text(encoding="utf-8")))
+    v = re.search(r"const APP_VERSION = '([^']+)'", src).group(1)
     html = (ROOT / "index.html").read_text(encoding="utf-8")
     files = sorted(p.relative_to(ROOT).as_posix() for d in ("js", "css") for p in (ROOT / d).rglob("*") if p.suffix in (".js", ".css"))
     # 시작할 때 받는 큰 데이터 (index.html의 preload). 나머지 data/는 index.html이 받을 때마다 서버에 바뀌었는지 묻게 한다

@@ -48,6 +48,14 @@ export const countyId = (z) => `${z.province}|${z.name}`;
  * 승격·편입·분구의 열쇠: 행정구역 정리로 하나로 묶인 시군(분단 전 경계로 합친 철원군, 하나로 합친 고성·옹진)은
  * 남북·옛 소속 조각이 모두 같은 열쇠를 갖는다 (예전에는 조각마다 열쇠가 달라 편입을 조각 수만큼 눌러야 했다)
  */
+/**
+ * 예전 저장의 열쇠(자료의 도 + 이름)로도 찾아도 되는지: 옛 군을 되살려 다른 군에 든 조각(연천 신서면 → 되살린 철원군)은
+ * 자료 이름의 군(연천군)을 편입·승격해도 따라가면 안 된다. 그런 조각이면 null
+ */
+function legacyKey(state, z) {
+  return restoredCounty(state, z) ? null : countyId(z);
+}
+
 export function unitId(state, z) {
   const h = restoredCounty(state, z);
   if (h) return `${h.province}|${h.name}`;
@@ -58,7 +66,8 @@ export function unitId(state, z) {
 /** 시로 승격한 군이면 시 이름 (○○군 → ○○시). 광역 단체를 가리는 데 쓰는 이름 (보이는 이름은 countyDisplayName) */
 export function promotedName(state, z) {
   const up = state.local?.cityUp;
-  return up?.length && (up.includes(unitId(state, z)) || up.includes(countyId(z))) ? z.name.replace(/군$/, '시') : z.name;
+  const legacy = legacyKey(state, z);
+  return up?.length && (up.includes(unitId(state, z)) || (legacy && up.includes(legacy))) ? z.name.replace(/군$/, '시') : z.name;
 }
 
 /**
@@ -210,7 +219,11 @@ export function normalizeUnitKeys(state, zones) {
   const L = state.local;
   if (!L) return false;
   const to = new Map();
-  for (const z of zones) if (!z.ext) { const c = countyId(z), u = unitId(state, z); if (c !== u) to.set(c, u); }
+  // 자료 열쇠를 지금 열쇠로 옮긴다. 다른 존이 그 자료 열쇠를 지금도 쓰면 옮기지 않는다
+  // (옛 철원 땅인 연천 신서면만 철원군으로 갔다고 '경기도|연천군' 편입·분구를 철원군으로 옮기면 안 된다)
+  const inUse = new Set();
+  for (const z of zones) if (!z.ext) inUse.add(unitId(state, z));
+  for (const z of zones) if (!z.ext) { const c = countyId(z), u = unitId(state, z); if (c !== u && !inUse.has(c)) to.set(c, u); }
   let changed = false;
   for (const f of ['annex', 'bungu']) {
     const o = L[f];
@@ -234,7 +247,9 @@ export function normalizeUnitKeys(state, zones) {
 
 export function annexOf(state, z) {
   const A = state.local?.annex;
-  return (A && (A[unitId(state, z)] || A[countyId(z)] || (z.city && A[`${z.province}|${z.city}`]))) || null;
+  if (!A) return null;
+  const legacy = legacyKey(state, z);
+  return A[unitId(state, z)] || (legacy && (A[legacy] || (z.city && A[`${z.province}|${z.city}`]))) || null;
 }
 
 /** 광역 단체를 가리기 전의 바탕: 자료의 도와 남북 (행정구역 정리·편입 반영) */

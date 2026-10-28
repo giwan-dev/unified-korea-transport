@@ -53,7 +53,8 @@ export function hotspotsFC(linksFC, vc) {
 export function warnIcon(size = 40) {
   const c = document.createElement('canvas');
   c.width = c.height = size;
-  const g = c.getContext('2d');
+  // 그림을 바로 읽어 가므로 GPU 캔버스로 만들지 않는다 (GPU에서 읽어 오느라 불러올 때 0.6초 멈췄다)
+  const g = c.getContext('2d', { willReadFrequently: true });
   const s = size;
   g.beginPath();
   g.moveTo(s / 2, s * 0.08); g.lineTo(s * 0.95, s * 0.88); g.lineTo(s * 0.05, s * 0.88); g.closePath();
