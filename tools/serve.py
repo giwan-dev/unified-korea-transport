@@ -34,4 +34,7 @@ if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
     handler = partial(DevHandler, directory=str(ROOT))
     print(f"http://localhost:{port}")
+    # 대기 연결 수 기본값(5)이면 브라우저가 처음에 파일 수십 개를 한꺼번에 받을 때 일부 연결이 거절돼 'Failed to fetch'가 났다
+    ThreadingHTTPServer.request_queue_size = 128
+    ThreadingHTTPServer.daemon_threads = True
     ThreadingHTTPServer(("127.0.0.1", port), handler).serve_forever()

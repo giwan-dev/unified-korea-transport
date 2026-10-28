@@ -454,7 +454,6 @@ export class Model {
       for (const t of this.isKP[z] ? [tot] : [tot, tot.kr]) { t.trips += c + b + m; t.car += c; t.bus += b; t.metro += m; }
     });
     // 도시철도 구 안 이용객: 역세권 고정 비율로 퍼뜨린 승차를 존마다 수단 선택 몫에 맞춘다 (0.2~5배)
-    const base = this.metroLocalLoads();
     const fixedBoard = new Float64Array(this.Z), stations = new Set(this.net.stations), seen = new Set();
     for (const l of this.net.links) {
       if (l.mode !== 2 || !l.active || l.via) continue;
@@ -466,7 +465,7 @@ export class Model {
     }
     const scale = new Float64Array(this.Z).fill(1);
     for (let z = 0; z < this.Z; z++) if (fixedBoard[z] > 0) scale[z] = Math.min(5, Math.max(0.2, metZ[z] / fixedBoard[z]));
-    this.metroLocal = base.length ? this.metroLocalLoads(scale) : base;
+    this.metroLocal = this.metroLocalLoads(scale);
     this.localTotals = tot;
     return tot;
   }
@@ -547,6 +546,7 @@ export class Model {
         for (let b = s0; b < s0 + n; b++) {
           if (a === b) continue;
           const d = kmBetween(this.subX[a], this.subY[a], this.subX[b], this.subY[b]);
+          if (d > P.localPairMaxKm) continue;   // 먼 쌍은 통행이 거의 없다 (exp(−12/3) ≈ 2%): 북측 리 수백 개짜리 군에서 쌍이 수만 개라 무거웠다
           const g = Math.max(this.subW[a], 0) * Math.max(this.subW[b], 0) * Math.exp(-d / P.localTripKm);
           if (g > 0) { pairs.push(a, b, d, g); gsum += g; }
         }

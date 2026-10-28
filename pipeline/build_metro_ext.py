@@ -57,23 +57,26 @@ def main():
             dx, dy = (end[0] - prev[0]) * 88.6, (end[1] - prev[1]) * 111
             dl = math.hypot(dx, dy) or 1
             best = None
-            for h in halls:
-                z = zones[h["z"]]
-                if z.get("ext") or z["country"] != country or county(z) in own or h["k"] not in ("si", "gun"):
-                    continue
-                key = county(z)
-                if key in taken:
-                    continue
-                d = km(end, (h["x"], h["y"]))
-                if not 5 <= d <= 25:
-                    continue
-                hx, hy = (h["x"] - end[0]) * 88.6, (h["y"] - end[1]) * 111
-                dot = (dx * hx + dy * hy) / (dl * d)
-                if dot < 0.2:   # 노선이 뻗던 쪽으로 (되돌아 시내를 지나가지 않게)
-                    continue
-                score = d / (0.4 + dot)
-                if best is None or score < best[0]:
-                    best = (score, h, z, d)
+            for reuse in (False, True):   # 다른 노선이 이미 잇는 청사는 쓸 곳이 없을 때만 (평양 5호선처럼 둘레 청사를 앞 노선이 다 잡은 경우)
+              if best:
+                break
+              for h in halls:
+                  z = zones[h["z"]]
+                  if z.get("ext") or z["country"] != country or county(z) in own or h["k"] not in ("si", "gun"):
+                      continue
+                  key = county(z)
+                  if key in taken and not reuse:
+                      continue
+                  d = km(end, (h["x"], h["y"]))
+                  if not 5 <= d <= 25:
+                      continue
+                  hx, hy = (h["x"] - end[0]) * 88.6, (h["y"] - end[1]) * 111
+                  dot = (dx * hx + dy * hy) / (dl * d)
+                  if dot < 0.2:   # 노선이 뻗던 쪽으로 (되돌아 시내를 지나가지 않게)
+                      continue
+                  score = d / (0.4 + dot)
+                  if best is None or score < best[0]:
+                      best = (score, h, z, d)
             if not best:
                 continue
             _, h, z, d = best

@@ -29,11 +29,21 @@ function pointAway(pts, dist) {
   return pts[pts.length - 1];
 }
 
+/** 노드 → 닿는 구간 (fixNetwork 한 번에 한 번 만든다: 노드 하나 옮길 때마다 3만 구간을 다 보면 느리다) */
+let incident = null;
+function linksAt(base, n) {
+  if (!incident) {
+    incident = new Map();
+    for (const l of base.links) for (const x of [l.a, l.b]) { let a = incident.get(x); if (!a) incident.set(x, (a = [])); if (!a.includes(l)) a.push(l); }
+  }
+  return incident.get(n) || [];
+}
+
 /** 노드를 p로 옮기고 그 노드에 닿는 구간 끝을 맞춘다. trim km 안의 꺾임 점은 지운다 (only가 있으면 그 구간들만) */
 function moveNode(base, n, p, trim, only = null) {
   const old = base.nodes[n];
   base.nodes[n] = p;
-  for (const l of base.links) {
+  for (const l of linksAt(base, n)) {
     if (l.a !== n && l.b !== n) continue;
     const g = l.geom || [];
     if (g.length < 4) continue;
@@ -97,6 +107,7 @@ function chaikin(pts, n = 3) {
 }
 
 export function fixNetwork(base, nodeFix = {}, roadFix = {}) {
+  incident = null;
   // 대심도 광역급행철도(GTX): 지도 자료 선형이 역 어귀에서 기존 노선을 따라 구불거린다(대곡 등). 지하 깊이 거의 곧게 가므로
   // 250m 안의 잔굴곡을 없애고 매끈한 곡선으로 (양 끝 역 자리는 그대로)
   for (const l of base.links) {
@@ -120,7 +131,9 @@ export function fixNetwork(base, nodeFix = {}, roadFix = {}) {
     l.a = r.a; l.b = r.b; l.geom = r.geom.slice();
     l.geom.splice(0, 2, ...base.nodes[r.a]); l.geom.splice(-2, 2, ...base.nodes[r.b]);
     l.len = Math.round(pl(l.geom) * 100) / 100;
-    if (r.name) { l.name = r.name; l.cls = 'trunk'; }
+    // 분기점 연결로는 고속도로끼리 잇는 길이라 고속도로 그대로 둔다 (일반도로로 바꾸면 도로 접속 노드가 늘어 기준선의 역세권 계산을 못 쓰고
+    // 불러올 때마다 20초쯤 다시 셌다)
+    if (r.name) l.name = r.name;
   }
   for (const [id, g] of Object.entries(roadFix.geom || {})) {
     const l = base.links[+id];

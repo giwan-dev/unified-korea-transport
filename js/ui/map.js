@@ -81,6 +81,21 @@ const unitFiles = new Map();
 export function setNameResolver(fn) { nameResolver = fn; }
 
 let regionKey = '';
+let lastInner = null, mixedZones = [];
+/** 시군 경계선: 같은 광역 단체 안 변 가운데, 양쪽 존이 모두 소속이 바뀐 존(편입·시군구 신설)인 변은 빼고 (그 자리는 읍면동 경계로 다시 긋는다) */
+function applyZoneLineFilter(map) {
+  if (!lastInner || !map.getLayer('zones-line')) return;
+  const base = ['in', ['get', 'i'], ['literal', lastInner]];
+  map.setFilter('zones-line', mixedZones.length
+    ? ['all', base, ['!', ['all', ['in', ['get', 'a'], ['literal', mixedZones]], ['in', ['get', 'b'], ['literal', mixedZones]]]]]
+    : base);
+}
+export function setMixedZones(map, zones) {
+  const k = zones.join(',');
+  if (k === mixedZones.join(',')) return;
+  mixedZones = zones;
+  applyZoneLineFilter(map);
+}
 /**
  * 광역 단체 경계와 이름을 지금 행정구역으로 다시 그린다.
  * @param {string[]} regionOfZone 존 id → 광역 단체 이름 (북측 도 복원·광역시 승격 반영)
@@ -105,7 +120,8 @@ export function setRegions(map, regionOfZone, countryOfZone, zoneCenter, short =
     }
     map.setFilter('bg-sido', ['in', ['get', 'i'], ['literal', ids]]);
     map.setFilter('bg-sido-water', ['in', ['get', 'i'], ['literal', water]]);
-    if (map.getLayer('zones-line')) map.setFilter('zones-line', ['in', ['get', 'i'], ['literal', inner]]);
+    lastInner = inner;
+    applyZoneLineFilter(map);
   });
   // 이름 자리: 단체에 속한 존 중심들의 가운데에 가장 가까운 존 중심 (바다·다른 도 위에 뜨지 않게)
   const groups = new Map();
