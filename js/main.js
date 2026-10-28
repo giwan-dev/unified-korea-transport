@@ -1440,8 +1440,12 @@ function univPickClick(ll) {
   const used = new Set(univList().map((u) => u.name));
   // 이름 후보: 도 이름 줄임(충남대학교·경북대학교처럼 황남대학교·평북대학교), 지명, 국립 지명. 아직 쓰이지 않은 첫 후보가 기본
   const prov = regionAbbr(regionOf(state, zoneProps[zi]));
-  const cands = [...new Set([`${prov}대학교`, `${base0}대학교`, `국립${base0}대학교`, `국립${prov}대학교`, `${prov}과학기술원`])].filter((n) => !used.has(n));
+  const cands = [...new Set([`${prov}대학교`, `${base0}대학교`, `국립${base0}대학교`, `국립${prov}대학교`])].filter((n) => !used.has(n));
   const nm = cands[0] || `${base0}${prov}대학교`;
+  // 과학기술원은 도시 이름 (광주·대구경북·울산과학기술원처럼): 광역시면 그 이름, 시면 시 이름, 군이면 가까운 지명
+  const rg = regionOf(state, zoneProps[zi]), zn = zoneName(zi);
+  const city = isMetroCity(rg) ? regionAbbr(rg) : /시$/.test(zn) ? stem(zn) : base0;
+  const kaistName = [`${city}과학기술원`, `${city}${prov}과학기술원`, `${prov}과학기술원`].find((n) => !used.has(n)) || `제2${city}과학기술원`;
   const kp = isKP(ll.lat, ll.lng);
   const wrap = document.createElement('div');
   wrap.className = 'setup-wrap';
@@ -1450,7 +1454,7 @@ function univPickClick(ll) {
     <p class="setup-intro hint">${esc(regionOf(state, zoneProps[zi]))} ${esc(zoneName(zi))}. 개교하면 이 시군과 90분 안팎에 닿는 시군의 기대 교육연수가 오르고(최대 +1.5년, 정원이 모자란 곳일수록 크게), 평균 교육연수·HDI가 수십 년에 걸쳐 따라 오릅니다. 교통망이 좋을수록 효과가 멀리 퍼집니다.</p>
     <div class="setup-body"><div class="list">${Object.entries(UNIV_TYPES).map(([k, t]) => {
       const cost = Math.round(t.cost * (kp ? KP_COST_FACTOR : 1));
-      return `<div class="item"><div class="t">${t.label} · 정원 ${t.seats.toLocaleString()}명</div><div class="m">${formatWon(cost)} · ${t.years}년</div>
+      return `<div class="item"><div class="t">${t.label} · 정원 ${t.seats.toLocaleString()}명</div><div class="m">${formatWon(cost)} · ${t.years}년${k === 'kaist' ? ` · 이름은 ${esc(kaistName)} (이름 칸을 고치면 그 이름)` : ''}</div>
         <button class="small primary" data-univ-type="${k}">설립</button></div>`;
     }).join('')}</div></div>
     <div class="setup-btns"><span style="flex:1"></span><button class="small" data-univ-type="cancel">닫기</button></div></div>`;
@@ -1462,7 +1466,8 @@ function univPickClick(ll) {
     if (k !== 'cancel') {
       const t = UNIV_TYPES[k], cost = Math.round(t.cost * (kp ? KP_COST_FACTOR : 1));
       if (!canAfford(state, cost, t.years)) { alert('예산과 차입 한도가 부족합니다.'); return; }
-      const name = wrap.querySelector('#u-name').value.trim() || nm;
+      const typed = wrap.querySelector('#u-name').value.trim();
+      const name = k === 'kaist' && (!typed || typed === nm) ? kaistName : typed || nm;
       const id = crypto.randomUUID();
       (state.univNew ||= []).push({ id, name, lon: ll.lng, lat: ll.lat, zone: zi, type: k, seats: t.seats, done: false });
       startProject(state, { id, kind: 'univ', links: [], stations: [], cost, years: t.years, label: `${name} 설립 (${t.label})` });
