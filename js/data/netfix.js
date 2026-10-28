@@ -61,7 +61,51 @@ function crossAt(a1, b1, a2, b2) {
   return [a1[0] + d1[0] * t, a1[1] + d1[1] * t];
 }
 
+/** 점 목록 단순화 (더글러스-포이커, tol km) */
+function simplify(pts, tol) {
+  if (pts.length < 3) return pts;
+  const keep = new Array(pts.length).fill(false);
+  keep[0] = keep[pts.length - 1] = true;
+  const segD = (p, a, b) => {
+    const dx = (b[0] - a[0]) * 88.6, dy = (b[1] - a[1]) * 111, px = (p[0] - a[0]) * 88.6, py = (p[1] - a[1]) * 111;
+    const t = Math.max(0, Math.min(1, (px * dx + py * dy) / (dx * dx + dy * dy || 1)));
+    return Math.hypot(px - t * dx, py - t * dy);
+  };
+  const stack = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [s, e] = stack.pop();
+    let k = -1, md = tol;
+    for (let i = s + 1; i < e; i++) { const d = segD(pts[i], pts[s], pts[e]); if (d > md) { md = d; k = i; } }
+    if (k >= 0) { keep[k] = true; stack.push([s, k], [k, e]); }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+/** 모서리 깎기(Chaikin) 매끈하게: 양 끝은 그대로 */
+function chaikin(pts, n = 3) {
+  let out = pts;
+  for (let r = 0; r < n && out.length > 2; r++) {
+    const nx = [out[0]];
+    for (let i = 0; i + 1 < out.length; i++) {
+      const [a, b] = [out[i], out[i + 1]];
+      if (i > 0) nx.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25]);
+      if (i + 1 < out.length - 1) nx.push([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+    }
+    nx.push(out[out.length - 1]);
+    out = nx;
+  }
+  return out;
+}
+
 export function fixNetwork(base, nodeFix = {}) {
+  // 대심도 광역급행철도(GTX): 지도 자료 선형이 역 어귀에서 기존 노선을 따라 구불거린다(대곡 등). 지하 깊이 거의 곧게 가므로
+  // 250m 안의 잔굴곡을 없애고 매끈한 곡선으로 (양 끝 역 자리는 그대로)
+  for (const l of base.links) {
+    if (l.mode !== 1 || !/광역급행철도/.test(l.name || '') || !l.geom || l.geom.some((v) => Number.isNaN(v))) continue;
+    const pts = [];
+    for (let k = 0; k + 1 < l.geom.length; k += 2) pts.push([l.geom[k], l.geom[k + 1]]);
+    if (pts.length < 3) continue;
+    l.geom = chaikin(simplify(pts, 0.25)).flat();
+  }
   let moved = 0;
   for (const [n, p] of Object.entries(nodeFix)) {
     if (base.nodes[+n]) { moveNode(base, +n, p, 0); moved++; }

@@ -639,6 +639,8 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     id: 'points', type: 'circle', source: 'points',
     // 중요도(rank 0~3)에 따라 확대할수록 더 많이: 0 도시·새 시설, 1 큰 역, 2 일반 역·JCT, 3 IC·도시철도역
     filter: POINT_BASE.points,
+    // 겹치면 휴게소를 맨 아래, 그 위에 IC·JCT, 역, 도시 (휴게소가 IC를 가리지 않게)
+    layout: { 'circle-sort-key': ['match', ['get', 'kind'], 'rest', 0, 'station', 2, 'city', 3, 1] },
     paint: {
       'circle-radius': ['match', ['get', 'kind'], 'city', 6, 'station', 4, 'rest', 4, 3],
       'circle-color': ['match', ['get', 'kind'], 'city', '#f2c14e', 'station', '#ffffff', 'rest', '#2f8f5b', '#1d232b'],
@@ -652,6 +654,8 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     layout: {
       'text-field': ['get', 'name'], 'text-size': ['case', ['==', ['get', 'isNew'], 1], 13, 11],
       'text-offset': [0, 1.0], 'text-anchor': 'top', 'text-font': FONT,
+      // 이름이 겹치면 도시·역·IC를 먼저 놓고 휴게소 이름은 나중에 (작은 값이 먼저)
+      'symbol-sort-key': ['match', ['get', 'kind'], 'city', 0, 'station', 1, 'rest', 3, 2],
     },
     paint: { 'text-color': '#1d232b', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 },
   });

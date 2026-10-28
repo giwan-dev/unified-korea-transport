@@ -6,10 +6,10 @@ import {
   updateCongestion, defaultFix, updateApproval, canAfford, isKP, linksUnderWork, UPGRADES, NEW_BUILDS, upgradeCost, colourNewMetro, addNewNode, addPlannedRoad,
   placeName, setPlaceName, startRestoreName, RENAME, startAirport, startAirportExpand, renameLine, splitLink, cleanLineName,
   fundFor, settlePPP, settleRail, renameKPLines, KP_LINE_RENAME, LINE_RENAME_COST, railDividend, railEquity, mergeRail, OP_FACTORS, initOngoing, linkPending, setProjectPace, PACES,
-  initAirRoutes, updateAirRoutes, startOpenRoute, closeRoute, AIR,
+  initAirRoutes, updateAirRoutes, startOpenRoute, closeRoute, AIR, designateIntl, migrateAir,
   closeLine, reopenLine, setLineFreq, FREQ_STEPS, CLOSE_APPROVAL, REOPEN_PER_KM, startMega, settleMega, repayDebt, REPAY_SHARES,
 } from './game/state.js';
-import { MEGA, TSR_FREIGHT, megaGeometry, applyMega } from './game/mega.js';
+import { MEGA, TSR_FREIGHT, megaGeometry, applyMega, kpACCost, kpDCLines } from './game/mega.js';
 import { AIRPORT } from './game/catalog.js';
 import { setNameResolver, setLabelGroup, setUnitGroup, setExtraLabels, refreshNames, setRegions, setZoneOutline, setLinks, paintHotspots, setHousing, fetchEdges, unitFeaturesIn, smoothRing } from './ui/map.js';
 import { isNarrow, twinPrimary, mergeTwins, ROAD_RANK, motorwayMainline, bridgeMainlineGaps, flattenMainline, connectJunctions, smoothMainlineEnds, mainlineBubbles, roundMainlineCorners } from './ui/traffic.js';
@@ -59,7 +59,7 @@ startI18n();
 import { buildReport, reportHTML, downloadReportImage, TIME_PAIRS, GOALS } from './ui/report.js';
 import { openGazette } from './ui/gazette.js';
 
-const APP_VERSION = 'Alpha 0.4.6';
+const APP_VERSION = 'Alpha 0.4.7';
 const BUG_MAIL = 'evrgrn0528@gmail.com';
 // 오류 제보에 함께 보낼 최근 오류 (화면에 안 보이는 것도)
 const errLog = [];
@@ -193,6 +193,7 @@ async function init() {
   if (keysFixed || state.local?.independent?.length || Object.keys(state.local?.annex || {}).length) syncMayors();
   if (keysFixed) save(state);
   initAirRoutes(state, world.routes || []);
+  migrateAir(state, world.longhaulRoutes || [], new Set(world.foreign.map((f) => f.id)));   // 예전 저장: 장거리 노선, 지정 안 한 새 공항 국제선 정리
   seedInterKoreaAir(state);
   initRail(state);
   seedServices(state, base);
@@ -623,7 +624,7 @@ function applyResult(res) {
     updateMayorApproval(state, zoneGains(zoneProps, res.subs, gains));
     // 철도 운영사 한 해 결산
     settleRail(state, operatorEconomics());
-    settleMega(state);
+    settleMega(state, base);
     // 지방선거·단체장 SOC 제안
     localYear(lastDone);
     // 민자사업 정산 (최소운영수입보장·임대료)
@@ -732,8 +733,13 @@ function nextYear() {
   // 예전 저장: 이미 입주한 택지지구·역세권 개발의 인구가 해마다 같은 시군구 다른 읍면동으로 흩어졌다. 한 번 제자리로 돌려놓고 붙든다
   const anchor = state.devAnchored ? null : settledDevelopments().map(({ zone, lon, lat, persons }) => ({ zone, lon, lat, persons }));
   state.devAnchored = 1;
+  for (const d of dev) if (d.hid) { const h = (state.housing || []).find((x) => x.id === d.hid); if (h) d.parts = housingParts(h); }
+  // 예전 저장: 한 읍면동에 몰린 택지지구 인구를 지구가 덮는 읍면동들로 (한 번)
+  const spread = state.housingSpread ? null : (state.housing || []).filter((h) => (h.done ? h.persons : h.occupied) > 0)
+    .map((h) => ({ zone: h.zone, lon: h.lon, lat: h.lat, persons: h.done ? h.persons : h.occupied, parts: housingParts(h) }));
+  state.housingSpread = 1;
   if (anchor?.length) state.log.unshift(`${state.year}년: 이미 입주한 택지지구·역세권 개발 ${anchor.length}곳의 인구를 지구 안으로 다시 맞췄습니다 (다른 읍면동으로 흩어진 만큼은 새로 채움, 인구 순증)`);
-  worker.postMessage({ type: 'step', net: effectiveNetwork(base, state), ctx: { ...ctx(), dev, tourKP, grid: gridMsg, anchor }, opened });
+  worker.postMessage({ type: 'step', net: effectiveNetwork(base, state), ctx: { ...ctx(), dev, tourKP, grid: gridMsg, anchor, spread }, opened });
   mark('y: posted');
 }
 
@@ -1518,9 +1524,13 @@ const UNIV_REP = {
 };
 /** 분교 (법적으로 따로인 캠퍼스): 순위를 따로 센다. 그 밖의 여러 캠퍼스는 이원화 캠퍼스로 본교와 함께 센다 */
 const UNIV_BRANCH = [/^고려대학교 세종/, /^연세대학교 (미래|원주)/, /^동국대학교$/, /^건국대학교 글로컬/, /^한양대학교 ERICA/, /^홍익대학교 세종/];
-const UNIV_FUNDS = [0, 50, 100, 300, 500, 1000];   // 연 재정 투입 (억원)
-const univFundBonus = (f) => 15 * (1 - Math.exp(-f / 500));
-const univFundShare = (f) => 0.5 * (1 - Math.exp(-f / 500));   // 정원 상당 교육 효과 (최대 +50%)
+const UNIV_FUNDS = [0, 50, 100, 300, 500, 1000, 3000, 5000, 10000];   // 연 재정 투입 바로 고르기 (억원). 그 밖의 금액도 직접 넣는다 (위 한도 없음)
+// 효과는 대학 크기(정원)에 맞춰 잰다: 정원 1만 명 대학이면 500억이 한 단위. 평판은 투입이 늘수록 로그로 계속 오르고(한도 없이 체감),
+// 평판 점수는 120점에서 멈춘다. 교육 효과는 정원 상당 최대 +100%까지
+const univFundUnit = (seats) => 500 * Math.max(0.3, (seats || 10000) / 10000);
+const univFundBonus = (f, seats) => 9 * Math.log1p(f / univFundUnit(seats));
+const univFundShare = (f, seats) => 1 - Math.exp(-f / (2 * univFundUnit(seats)));
+const UNIV_SCORE_MAX = 120;
 let univRankAll = false;
 
 /** 순위를 세는 단위: 대학(이원화 캠퍼스는 함께)·분교·게임에서 세운 대학 */
@@ -1560,7 +1570,7 @@ function univEntries() {
 function univFundSeats() {
   const F = state.univFund || {};
   if (!Object.keys(F).length) return [];
-  return univEntries().flatMap((e) => (F[e.key] ? e.campuses.map((c) => [c.zone, Math.round(c.seats * univFundShare(F[e.key])), 1]) : []));
+  return univEntries().flatMap((e) => (F[e.key] ? e.campuses.map((c) => [c.zone, Math.round(c.seats * univFundShare(F[e.key], e.seats)), 1]) : []));
 }
 
 /** 해마다: 재정 투입을 예산에서 내고, 평판을 목표(바탕 + 재정 + 북측은 통합도)로 15%씩 다가가게 */
@@ -1570,7 +1580,7 @@ function univYear() {
   for (const e of univEntries()) {
     const f = F[e.key] || 0;
     total += f;
-    const target = e.base + univFundBonus(f) + (e.country === 'KP' ? 8 * (state.integration || 0) : 0);
+    const target = Math.min(UNIV_SCORE_MAX, e.base + univFundBonus(f, e.seats) + (e.country === 'KP' ? 8 * (state.integration || 0) : 0));
     (state.univScore ||= {})[e.key] = Math.round((e.score + 0.15 * (target - e.score)) * 10) / 10;
   }
   if (total) {
@@ -1591,8 +1601,9 @@ function univRankHTML(u) {
       <tr><td>평판</td><td>${e.score.toFixed(1)}점 · 전국 ${e.rank}위 / ${all.length}곳</td></tr>
       <tr><td>순위 단위</td><td>${esc(e.name)}${e.branch ? ' · 분교로 따로 셈' : e.campuses.length > 1 ? ` · 캠퍼스 ${e.campuses.length}곳 함께 셈 (이원화)` : ''}</td></tr>
     </table>
-    <div class="name-row"><span>연 재정 투입</span><select id="univ-fund" data-key="${esc(e.key)}" class="small">${UNIV_FUNDS.map((v) => `<option value="${v}" ${v === f ? 'selected' : ''}>${v ? formatWon(v) : '없음'}</option>`).join('')}</select></div>
-    <p class="hint">재정을 넣으면 해마다 평판이 오르고(목표 최대 +${univFundBonus(1000).toFixed(0)}점, 해마다 15%씩 다가감), 둘레 시군의 교육 수준이 오릅니다(정원 상당 최대 +50%). 해마다 예산에서 나갑니다.${e.country === 'KP' ? ' 북측 대학은 남북 통합도가 오를수록 평판이 따라 오릅니다.' : ''}</p>`;
+    <div class="name-row"><span>연 재정 투입 (억원)</span><input type="number" id="univ-fund" data-key="${esc(e.key)}" class="small" min="0" step="50" value="${f}" list="univ-fund-list" style="width:110px">
+      <datalist id="univ-fund-list">${UNIV_FUNDS.map((v) => `<option value="${v}">${v ? formatWon(v) : '없음'}</option>`).join('')}</datalist></div>
+    <p class="hint">금액은 한도 없이 정합니다. 효과는 대학 크기에 맞춰 잽니다(이 대학은 ${formatWon(Math.round(univFundUnit(e.seats)))}이 한 단위): 지금 금액이면 평판 목표 +${univFundBonus(f, e.seats).toFixed(1)}점(투입이 늘수록 덜 오름, 평판은 ${UNIV_SCORE_MAX}점까지, 해마다 15%씩 다가감), 둘레 시군 교육 효과 정원 상당 +${Math.round(univFundShare(f, e.seats) * 100)}%. 해마다 예산에서 나갑니다.${e.country === 'KP' ? ' 북측 대학은 남북 통합도가 오를수록 평판이 따라 오릅니다.' : ''}</p>`;
 }
 
 /** 통계 탭: 대학 순위 (상위 20, 펼쳐 보기) */
@@ -1681,7 +1692,7 @@ function univPanel(key) {
 
 function bindUnivPanel(el) {
   el.querySelector('#univ-fund')?.addEventListener('change', (e) => {
-    const k = e.target.dataset.key, v = +e.target.value;
+    const k = e.target.dataset.key, v = Math.max(0, Math.round(+e.target.value || 0));
     if (v) (state.univFund ||= {})[k] = v; else if (state.univFund) delete state.univFund[k];
     state.log.unshift(`${state.year}년 ${univEntries().find((x) => x.key === k)?.name || '대학'} 재정 투입: 연 ${formatWon(v)}`);
     save(state); renderSelection(); renderStats();
@@ -2066,12 +2077,58 @@ function endDraftView() {
  */
 const GRID_STEP = 1 / 120;   // 자료 격자 간격 30″ (약 0.9km)
 let gridEff = null;
+/** 택지지구가 덮는 칸 자리 (그린 경계, 없으면 면적만큼의 원, 반 칸 간격) */
+function housingCells(a) {
+  const r = Math.sqrt(a.km2 / Math.PI) / 111;
+  const ring = a.ring?.length > 2 ? a.ring : null;
+  const xs = ring ? ring.map((q) => q[0]) : [a.lon - r / Math.cos((a.lat * Math.PI) / 180), a.lon + r / Math.cos((a.lat * Math.PI) / 180)];
+  const ys = ring ? ring.map((q) => q[1]) : [a.lat - r, a.lat + r];
+  const cells = [], st = GRID_STEP / 2;
+  for (let i = Math.round(Math.min(...xs) / st); i <= Math.round(Math.max(...xs) / st); i++) {
+    for (let j = Math.round(Math.min(...ys) / st); j <= Math.round(Math.max(...ys) / st); j++) {
+      const x = i * st, y = j * st;
+      if (ring ? inRing(x, y, ring) : kmBetween(x, y, a.lon, a.lat) <= r * 111) cells.push([x, y]);
+    }
+  }
+  if (!cells.length) cells.push([a.lon, a.lat]);
+  return cells;
+}
+
+/** 칸이 속한 읍면동: 그 시군의 읍면동 경계 안이면 그곳, 아니면 가장 가까운 그 시군 읍면동 */
+function cellSub(zone, x, y) {
+  let best = -1, bd = Infinity;
+  for (const z of countyZones(zone)) {
+    const zp = zoneProps[z];
+    for (let k = 0; k < zp.subs.length; k++) {
+      const i = zp.sub0 + k, g = subsFC?.features[i]?.geometry;
+      const polys = g?.type === 'Polygon' ? [g.coordinates] : g?.type === 'MultiPolygon' ? g.coordinates : [];
+      if (polys.some((pg) => inRing(x, y, pg[0]))) return i;
+      const d = (zp.subs[k][0] - x) ** 2 + (zp.subs[k][1] - y) ** 2;
+      if (d < bd) { bd = d; best = i; }
+    }
+  }
+  return best;
+}
+
+/** 택지지구가 덮는 읍면동과 몫 [{sub, share}]: 지구 칸이 그 읍면동에 든 만큼 (인구를 한 읍면동에 몰지 않고 나눠 넣는다) */
+const housingPartsMemo = new Map();
+function housingParts(h) {
+  const a = { lon: h.lon, lat: h.lat, ring: h.ring, km2: Math.max(0.5, Math.PI * housingR(h) ** 2), zone: h.zone };
+  const key = `${h.id}|${a.lon}|${a.lat}|${a.km2}|${h.ring?.length || 0}`;
+  if (housingPartsMemo.has(key)) return housingPartsMemo.get(key);
+  const cells = housingCells(a), cnt = new Map();
+  for (const [x, y] of cells) { const s = cellSub(h.zone, x, y); if (s >= 0) cnt.set(s, (cnt.get(s) || 0) + 1); }
+  const parts = [...cnt].map(([sub, c]) => ({ sub, share: c / cells.length }));
+  housingPartsMemo.set(key, parts);
+  return parts;
+}
+
 /** 지금까지 입주한 택지지구·역세권 개발 (자리, 입주 인구, 면적) */
 function settledDevelopments() {
   const adds = [];
   for (const h of state?.housing || []) {
     const persons = h.phases ? h.occupied || 0 : h.done ? h.persons : 0;
-    if (persons > 0) adds.push({ persons, lon: h.lon, lat: h.lat, ring: h.ring, km2: Math.max(0.5, Math.PI * housingR(h) ** 2), zone: h.zone });   // 지도에 그린 단지 넓이 안에
+    if (persons > 0) adds.push({ persons, lon: h.lon, lat: h.lat, ring: h.ring, km2: Math.max(0.5, Math.PI * housingR(h) ** 2), zone: h.zone, hid: h.id });   // 지도에 그린 단지 넓이 안에
   }
   for (const d of state?.devels || []) if (d.done && d.persons > 0) adds.push({ persons: d.persons, lon: d.lon, lat: d.lat, km2: 1, zone: d.zone });
   return adds;
@@ -2084,31 +2141,15 @@ function effectiveGrid() {
   if (!adds.length) { gridEff = { sig, grid }; return grid; }
   const extra = [];
   for (const a of adds) {
-    // 지구 안 칸 자리
-    const r = Math.sqrt(a.km2 / Math.PI) / 111;
-    const ring = a.ring?.length > 2 ? a.ring : null;
-    const xs = ring ? ring.map((q) => q[0]) : [a.lon - r / Math.cos((a.lat * Math.PI) / 180), a.lon + r / Math.cos((a.lat * Math.PI) / 180)];
-    const ys = ring ? ring.map((q) => q[1]) : [a.lat - r, a.lat + r];
-    const cells = [];
-    // 반 칸(약 450m) 간격으로 짚어 작은 지구도 경계 모양대로 채운다
-    const st = GRID_STEP / 2;
-    for (let i = Math.round(Math.min(...xs) / st); i <= Math.round(Math.max(...xs) / st); i++) {
-      for (let j = Math.round(Math.min(...ys) / st); j <= Math.round(Math.max(...ys) / st); j++) {
-        const x = i * st, y = j * st;
-        if (ring ? inRing(x, y, ring) : kmBetween(x, y, a.lon, a.lat) <= r * 111) cells.push([x, y]);
-      }
-    }
-    if (!cells.length) cells.push([a.lon, a.lat]);
-    // 새 칸이 속할 읍면동: 시뮬레이션이 입주 인구를 넣은 소구역(지구 가운데에서 가장 가까운 읍면동)
-    const zp = zoneProps[a.zone];
-    let sub = -1;
-    if (zp) {
-      let bd = Infinity;
-      zp.subs.forEach(([x, y], k) => { const d = (x - a.lon) ** 2 + (y - a.lat) ** 2; if (d < bd) { bd = d; sub = zp.sub0 + k; } });
-    }
-    if (sub < 0) continue;
+    // 지구 안 칸 자리 (반 칸, 약 450m 간격으로 짚어 작은 지구도 경계 모양대로), 칸마다 그 칸이 든 읍면동
+    // (예전에는 모든 칸을 지구 가운데에서 가장 가까운 읍면동 하나에 붙여 큰 지구 인구가 한 읍면동에 몰렸다)
+    const cells = housingCells(a);
+    if (!zoneProps[a.zone]) continue;
     const each = a.persons / cells.length;
-    for (const [x, y] of cells) extra.push(x, y, each, sub);
+    for (const [x, y] of cells) {
+      const sub = cellSub(a.zone, x, y);
+      if (sub >= 0) extra.push(x, y, each, sub);
+    }
   }
   const g = new Float32Array(grid.length + extra.length);
   g.set(grid);
@@ -2526,6 +2567,16 @@ function nodeDirs(node, mode) {
 function withTangents(points, mode) {
   if (points.length < 2) return points;
   const out = points.map((p) => ({ ...p }));
+  // 순환선(처음과 끝이 같은 역: GTX-F 대곡): 그 역을 곧게 지나가게 앞뒤 점(끝에서 둘째 → 둘째)을 잇는 방향으로.
+  // 기존 선로 방향으로 나가고 들어오게 하면 대곡에서 경의선 방향으로 꺾였다 도는 갈고리(dogleg)가 생겼다
+  const first = out[0], last = out[out.length - 1];
+  if (out.length > 3 && ((first.node != null && first.node === last.node) || kmBetween(first.lon, first.lat, last.lon, last.lat) < 0.05)) {
+    const a = out[out.length - 2], b = out[1], t = [b.lon - a.lon, b.lat - a.lat], tl = Math.hypot(...t) || 1;
+    delete first.lead; delete last.lead;
+    first.tan = [t[0] / tl, t[1] / tl];
+    last.tan = [-t[0] / tl, -t[1] / tl];
+    return out;
+  }
   for (const [i, j] of [[0, 1], [out.length - 1, out.length - 2]]) {
     const p = out[i], q = out[j];
     delete p.tan; delete p.lead;
@@ -4119,6 +4170,12 @@ function renderSelection() {
     const ap = effectiveNetwork(base, state).airports.find((a) => a.id === selection.id);
     const r = startAirportExpand(state, ap);
     if (!r.ok) return alert(r.reason);
+    save(state); renderAll();
+  });
+  el.querySelector('#ap-intl')?.addEventListener('click', () => {
+    const r = designateIntl(state, selection.id);
+    if (!r.ok) return alert(r.reason);
+    state.log.unshift(`${state.year}년 ${airportName(selection.id)} 국제공항 지정`);
     save(state); renderAll();
   });
   el.querySelector('[data-sez]')?.addEventListener('click', (e) => startSEZ(+e.currentTarget.dataset.sez));
@@ -6668,6 +6725,9 @@ const bunguSelect = (id, none = '분구 안 함 (구 없이)', min = 1) => `<sel
 
 /** 건설 탭: 국가 대형 사업 목록 (착공 전·공사 중·완공). 선형 보기·효과 미리보기·착공 */
 function megaHTML() {
+  // 교류화 사업비는 남은 직류 구간 연장으로 (착공 전에만 다시 잰다)
+  const ac = MEGA.find((m) => m.id === 'kp-ac');
+  if (ac && !state.projects.some((x) => x.kind === 'mega' && x.mega === 'kp-ac')) ac.cost = state.mega?.['kp-ac'] ? ac.cost : kpACCost(base, state);
   return `<h4>국가 대형 사업</h4>
     <p class="hint">해마다 예산을 들여 짓는 국가 단위 사업입니다. 선형을 지도에서 보고, 다 지었을 때의 효과와 예비타당성 평가를 미리 볼 수 있습니다.</p>
     <div class="list">${MEGA.map((m) => {
@@ -6676,8 +6736,9 @@ function megaHTML() {
       : p ? `공사 중 · ${p.doneYear}년 완공 예정`
       : `<button class="small primary" data-mega="${m.id}" ${m.ready(state) ? '' : 'disabled'}>착공 ${formatWon(m.cost)} · ${m.years}년</button>
         <button class="small" data-mega-prev="${m.id}">효과 미리보기</button>${m.ready(state) || !m.need ? '' : ` <span class="m">조건: ${esc(m.need)}</span>`}`;
-    return `<div class="item"><div class="t">${esc(m.name)} <button class="small" data-mega-show="${m.id}">선형 보기</button></div>
-      <div class="m">${esc(m.desc)}${m.id === 'tsr' ? ` 화물 수입 연 ${formatWon(TSR_FREIGHT)}.` : ''}</div><div class="row" style="display:flex;gap:4px;flex-wrap:wrap">${status}</div></div>`;
+    const acInfo = m.id === 'kp-ac' ? (() => { const L = kpDCLines(base, state); return ` 남은 직류 구간 ${L.length}개 노선 ${Math.round(L.reduce((s0, g) => s0 + g.km, 0)).toLocaleString()}km.`; })() : '';
+    return `<div class="item"><div class="t">${esc(m.name)} ${m.id === 'kp-ac' ? '' : `<button class="small" data-mega-show="${m.id}">선형 보기</button>`}</div>
+      <div class="m">${esc(m.desc)}${m.id === 'tsr' ? ` 화물 수입 연 ${formatWon(TSR_FREIGHT)}.` : ''}${acInfo}</div><div class="row" style="display:flex;gap:4px;flex-wrap:wrap">${status}</div></div>`;
   }).join('')}</div>`;
 }
 
@@ -6712,9 +6773,9 @@ function showMegaLine(id) {
 
 function previewMega(id) {
   const m = MEGA.find((x) => x.id === id);
-  const g = showMegaLine(id);
+  const g = id === 'kp-ac' ? { coords: [] } : showMegaLine(id);
   if (!m || !g) return;
-  const km = id === 'kj-tunnel' ? 230 : id === 'jeju-hsr' ? 167 : polylineKm(g.coords);
+  const km = id === 'kj-tunnel' ? 230 : id === 'jeju-hsr' ? 167 : id === 'kp-ac' ? kpDCLines(base, state).reduce((s0, x) => s0 + x.km, 0) : polylineKm(g.coords);
   runPreview(`${m.name} 미리보기`, (c) => applyMega(base, c, id),
     { kind: 'mega', cost: m.cost, years: m.years, km, cls: 'hsr', mode: 1, plan: true, border: id === 'tsr' });
 }
@@ -10293,6 +10354,9 @@ function airportPanel(id) {
     ${ap.ext ? '' : airportRailHTML(id, k)}
     ${ap.ext ? '' : busyProj ? `<p class="hint">공사 중: ${esc(busyProj.label)} (${busyProj.doneYear}년 완공)</p>`
       : `<div class="actions"><button class="small primary" id="ap-expand">${AIRPORT.expand.label} ${formatWon(cost)} · ${AIRPORT.expand.years}년</button></div>`}
+    ${!ap.ext && !ap.intl && /^NEW/.test(id) ? `<div class="actions"><button class="small" id="ap-intl">국제공항 지정 · ${formatWon(AIR.intlCost)}</button></div>
+      <p class="hint">새 공항은 국내선만 뜹니다. 국제공항으로 지정하면(세관·출입국·검역) 가까운 나라 국제선이 열립니다. 장거리(동남아·미주·유럽·대양주)는 허브인 인천에서만 뜹니다.</p>` : ''}
+    ${ap.hub ? '<p class="hint">허브 공항: 국제선 운항·연결편이 많아 둘레 300km 안에서 국제선을 타러 오고, 장거리 노선이 여기서만 뜹니다. 혼잡도가 1.1을 넘는 공항에는 새 노선이 생기지 않습니다.</p>' : ''}
     ${routePanel(id, k)}`;
 }
 

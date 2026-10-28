@@ -83,7 +83,7 @@ export function settleHousing(state, doneProjects) {
       if (ids.has(h.id)) {
         h.done = h.built = true;
         state.budget += h.revenue;
-        out.push({ zone: h.zone, lon: h.lon, lat: h.lat, persons: h.persons, net: 1 });
+        out.push({ zone: h.zone, lon: h.lon, lat: h.lat, persons: h.persons, net: 1, hid: h.id });
       }
       continue;
     }
@@ -107,7 +107,7 @@ export function settleHousing(state, doneProjects) {
     h.moving = h.moving.filter((m) => m.step < HOUSING.moveIn.length);
     if (inc > 0) {
       h.occupied = Math.min(h.persons, (h.occupied || 0) + inc);
-      out.push({ zone: h.zone, lon: h.lon, lat: h.lat, persons: inc, net: 1 });
+      out.push({ zone: h.zone, lon: h.lon, lat: h.lat, persons: inc, net: 1, hid: h.id });
     }
     if (!h.done && h.phases.every((p) => p.done) && !h.moving.length) {
       h.done = true;

@@ -27,6 +27,7 @@ export const P = {
   stationCandidates: 4,       // 소구역마다 고려하는 역 수
   walkMaxKm: 1.5,             // 이보다 가까운 격자는 역까지 걸어간다
   walkSpeedKmh: 4.5,
+  walkDetour: 1.2,            // 걷는 길의 우회 (골목·횡단보도로 질러 가 연계 교통보다 덜 돈다)
   feederSpeedKmh: 22,         // 버스·승용차 연계
   feederPenaltyMin: 10,       // 연계교통 대기·환승
   roadTerminalMin: 3,
@@ -60,7 +61,7 @@ export const P = {
   targetKrConvVC: 0.65,       // 기준 연도 보정 목표: 남측 일반철도 V/C 상위 5% 구간 (경부선·경인선 수도권 구간)
   railCalibQuantile: 0.95,
   calibrationRounds: 7,
-  calibVersion: 5,            // 보정 방식이 바뀌면 올린다: 예전 기준 연도(data/baseline.json)는 쓰지 않고 새로 보정한다
+  calibVersion: 6,            // 보정 방식이 바뀌면 올린다: 예전 기준 연도(data/baseline.json)는 쓰지 않고 새로 보정한다
   railASCStep: 25,            // 보정 반복마다 철도 상수 조정 폭(분)
   msaIterations: 5,
   msaIterationsWarm: 1,       // 해마다 지난해 결과에서 이어 배정할 때. 새 배정은 warmMsaOffset만큼 묽게(1/4) 섞어 경로가 튀지 않는다 (2번이면 연도 넘기기가 두 배)
@@ -70,8 +71,12 @@ export const P = {
   busTimeFactor: 1.15,        // 같은 도로에서 승용차 대비 버스 주행시간
   busStopMinPerKm: 1.0,       // 고속도로 밖 정류장 정차 지체 (분/km)
   busAccessFactor: 1.5,       // 정류장까지 접근 (간선 도로망이 성기므로 승용차 접근보다 길게)
-  busWaitMin: 8,
-  metroWaitMin: 4,
+  busWaitMin: 10,             // 도심 버스 배차 (도시철도보다 성기다)
+  metroWaitMin: 3,
+  carParkDensLo: 3000,        // 도착지 주차 부담: 밀도(명/km²)가 이보다 낮으면 없음
+  carParkDensHi: 20000,       // 이 밀도 이상이면 최대 (서울 도심)
+  carParkMaxMin: 10,          // 주차장 찾기·걷기 (분)
+  carParkMaxFee: 3000,        // 주차 요금 (원)
   metroCandidates: 3,
   metroRadiusKm: 6,
   metroLocalRate: 0.2,        // 역세권(반경 800m) 주민 1명당 하루 구 안 도시철도 승차 (존 사이 통행은 따로 배정)
@@ -111,19 +116,23 @@ export const P = {
   airTerminalMin: 50,         // 수속·보안검색
   airAccessSpeedKmh: 50,
   airAccessMaxKm: 150,
+  airHubAccessKm: 300,        // 허브 공항(인천)은 국제선을 타러 이만큼 멀리서도 간다
   airportRailKm: 2,           // 공항에서 이만큼 안의 역은 공항역 (철도로 공항에 갈 수 있다)
   airRailWalkMin: 8,          // 공항역 → 터미널
   airBaseFare: 45000,         // 원
   airFarePerKm: 90,
+  airFareTaperKm: 1500,       // 이보다 먼 거리는 km당 운임이 줄어든다 (장거리 대형기)
+  airFarePerKmLong: 25,
+  airHubIntlMin: 45,          // 허브 공항(인천) 국제선 이점: 잦은 운항·연결편·대형기 (분)
   airIntlFareFactor: 1.6,
   airASC: 60,                 // 예약·탑승 절차 등 항공 고유 불편 (국내선은 제주처럼 다른 수단이 없을 때 주로 쓰인다)
-  airCongestionMin: 60,       // 공항 V/C·노선 탑승률이 1을 넘을 때 1당 추가 지체 (분)
+  airCongestionMin: 120,      // 공항 V/C·노선 탑승률이 1을 넘을 때 1당 추가 지체 (분)
   airSeats: 180,              // 편당 좌석
   airScheduleBase: 360,       // 스케줄 지체 = 360 / 하루 운항 횟수 (분)
   airScheduleMaxMin: 180,
 
   // --- 국외 연결: 국경·출입국 비용 (분)
-  intlBorderMin: { CN: 300, RU: 300, JP: 240 },
+  intlBorderMin: { CN: 300, RU: 300, JP: 240, HK: 120, TH: 120, VN: 120, PH: 150, SG: 120, AU: 180, US: 180, CA: 180, DE: 150, FR: 150, GB: 150 },
   extMassFactor: 0.25,        // 국외 도시의 통행 발생 비중 (언어·비자·생활권 차이로 국내 도시보다 적다)
   koreanDiasporaFactor: 0.8,  // 국외 거점의 한민족(조선족 등) 인구는 국내 인구의 이만큼으로 친다 (친척 방문·일·장사, 국경 수속은 그대로)
 

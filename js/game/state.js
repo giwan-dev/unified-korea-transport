@@ -5,7 +5,7 @@ import { routeKey } from '../sim/model.js';
 import { smoothSegments, polylineKm } from './curve.js';
 import { serviceLinks } from './services.js';
 import { initRail, operatorOf, OPERATORS, OP_FACTORS, MERGE_MIN_INTEGRATION, EQUITY_STEP } from './operators.js';
-import { MEGA, applyMega, TSR_FREIGHT } from './mega.js';
+import { MEGA, applyMega, TSR_FREIGHT, kpACYear } from './mega.js';
 import { dueum } from './local.js';
 import { saveAuto, loadAuto, clearAuto } from './savestore.js';
 
@@ -124,7 +124,7 @@ export function effectiveNetwork(base, state) {
   const stations = base.stations.map((s) => s[1])
     .concat((base.metro_stations || []).map((s) => s[1]), state.newStations);
   const airports = (base.airports || []).map((a) => ({ ...a, cap: state.airportCap?.[a.id] ?? a.cap }))
-    .concat((state.newAirports || []).filter((a) => a.built).map((a) => ({ ...a, cap: state.airportCap?.[a.id] ?? a.cap, intl: true })));
+    .concat((state.newAirports || []).filter((a) => a.built).map((a) => ({ ...a, cap: state.airportCap?.[a.id] ?? a.cap, intl: !!state.airportIntl?.[a.id] })));
   const airRoutes = Object.values(state.air?.routes || {}).map((r) => ({ a: r.a, b: r.b, freq: r.freq }));
   // 운행 계통(특급·급행·보통)은 실제 링크 뒤에 가상 링크로 붙는다
   const physCount = links.length;
@@ -455,7 +455,40 @@ export const AIR = {
   targetLoad: 0.75,     // 운항 횟수는 탑승률 75%를 목표로 맞춘다
   maxFreq: 150,
   maxNewPerYear: 5,
+  fullVC: 1.1,          // 이 혼잡도(V/C)를 넘는 공항에는 항공사가 새 노선을 내지 않는다 (활주로·터미널 슬롯)
+  intlCost: 300,        // 새 공항 국제공항 지정 (세관·출입국·검역 시설, 억원)
 };
+
+/** 새 공항 국제공항 지정: 지정하기 전에는 국내선만 뜬다 */
+export function designateIntl(state, id) {
+  if (state.airportIntl?.[id]) return { ok: false, reason: '이미 국제공항입니다.' };
+  if (!canAfford(state, AIR.intlCost, 1)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
+  state.budget -= AIR.intlCost;
+  if (state.budget < 0) { state.debt += -state.budget; state.budget = 0; }
+  (state.airportIntl ||= {})[id] = 1;
+  return { ok: true };
+}
+
+/**
+ * 예전 저장 손보기 (한 번): 장거리 기본 노선(인천–방콕·LA 등)을 넣고, 국제공항으로 지정하지 않은 새 공항의 국제선은 거둔다
+ * (예전에는 새 공항이 저절로 국제공항이 되어 서울 둘레 국제선 수요를 빨아들였다)
+ */
+export function migrateAir(state, longhaul, foreignIds) {
+  if (state.air?.longhaul) return;
+  state.air.longhaul = 1;
+  for (const [a, b, f] of longhaul) {
+    const key = routeKey(a, b);
+    if (!state.air.routes[key] && !state.air.banned.includes(key)) state.air.routes[key] = { a, b, freq: f, origin: 'base', low: 0, keep: true };
+    else if (state.air.routes[key]) state.air.routes[key].keep = true;
+  }
+  const fresh = new Set((state.newAirports || []).filter((a) => !state.airportIntl?.[a.id]).map((a) => a.id));
+  for (const [key, r] of Object.entries(state.air.routes)) {
+    if ((fresh.has(r.a) && foreignIds.has(r.b)) || (fresh.has(r.b) && foreignIds.has(r.a))) {
+      delete state.air.routes[key];
+      state.log.unshift(`${state.year}년 국제선 정리: 국제공항으로 지정하지 않은 공항의 국제선을 거둡니다`);
+    }
+  }
+}
 
 /** 처음 시작할 때 기본 노선표(data/air_sea.json routes)로 채운다 */
 export function initAirRoutes(state, defaults) {
@@ -463,6 +496,7 @@ export function initAirRoutes(state, defaults) {
   if (state.air.routes) return;
   state.air.routes = {};
   for (const [a, b, f] of defaults) state.air.routes[routeKey(a, b)] = { a, b, freq: f, origin: 'base', low: 0 };
+  state.air.longhaul = 1;
 }
 
 function targetFreq(pax, seats) {
@@ -488,8 +522,10 @@ export function updateAirRoutes(state, air, name) {
   }
   if (!state.air.auto) return;
   let opened = 0;
+  const full = (k) => air.pax && air.cap && air.pax[k] > AIR.fullVC * air.cap[k];
   for (const [ai, bi, pax] of air.latent) {
     if (pax < AIR.openPax || opened >= AIR.maxNewPerYear) break;
+    if (full(ai) || full(bi)) continue;
     const a = air.ids[ai], b = air.ids[bi], key = routeKey(a, b);
     if (routes[key] || state.air.banned.includes(key)) continue;
     routes[key] = { a, b, freq: targetFreq(pax, air.seats), origin: 'auto', low: 0 };
@@ -503,6 +539,8 @@ export function startOpenRoute(state, apA, apB) {
   const key = routeKey(apA.id, apB.id);
   if (state.air.routes[key]) return { ok: false, reason: '이미 운항 중인 노선입니다.' };
   if (state.projects.some((p) => p.status === 'building' && p.key === key)) return { ok: false, reason: '이미 준비 중인 노선입니다.' };
+  if ((apA.ext || apB.ext) && !(apA.intl && apB.intl)) return { ok: false, reason: '국내공항입니다. 먼저 국제공항으로 지정하세요.' };
+  if ((apA.longhaul && !apB.hub) || (apB.longhaul && !apA.hub)) return { ok: false, reason: '장거리 노선은 허브 공항(인천)에서만 뜹니다.' };
   const cost = Math.round(AIR.openCost * (apA.country !== apB.country ? 1.5 : 1));
   if (!canAfford(state, cost, 1)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
   startProject(state, { id: crypto.randomUUID(), kind: 'airRoute', key, a: apA.id, b: apB.id, links: [], cost, years: 1,
@@ -916,6 +954,7 @@ export function setLineFreq(state, name, f) {
 export function startMega(state, id) {
   const m = MEGA.find((x) => x.id === id);
   if (!m || !m.ready(state)) return { ok: false, reason: m?.need ? `조건: ${m.need}` : '시작할 수 없습니다.' };
+  if (!(m.cost > 0)) return { ok: false, reason: '할 일이 없습니다 (이미 모두 교류입니다).' };
   if (state.projects.some((p) => p.kind === 'mega' && p.mega === id)) return { ok: false, reason: '이미 착공했습니다.' };
   if (!canAfford(state, m.cost, m.years)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
   startProject(state, { id: crypto.randomUUID(), kind: 'mega', mega: id, links: [], cost: m.cost, years: m.years, label: m.label });
@@ -923,7 +962,13 @@ export function startMega(state, id) {
 }
 
 /** 시베리아 횡단철도: 해마다 대륙 통과 화물 수입을 북측(합병 뒤 통합) 철도 운영사가 얻는다 */
-export function settleMega(state) {
+export function settleMega(state, base) {
+  // 북측 철도 교류화: 공사 중 해마다 긴 노선부터 차례로 교류 개통
+  for (const p of state.projects) {
+    if (p.status !== 'building' || p.kind !== 'mega' || p.mega !== 'kp-ac' || !base) continue;
+    const names = kpACYear(base, state, p);
+    if (names.length) state.log.unshift(`${state.year}년 교류 25kV 개통: ${names.slice(0, 4).join('·')}${names.length > 4 ? ` 등 ${names.length}개 노선` : ''}`);
+  }
   if (!state.mega?.tsr) return;
   const ops = railOps(state);
   const op = state.rail?.merged ? 'merged' : 'kprail';

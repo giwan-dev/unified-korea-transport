@@ -161,7 +161,8 @@ async function handle(msg) {
       lastNet = msg.net;
       // 지난 1년의 교통 조건으로 경제·인구를 갱신한 뒤 새 해의 통행을 배정한다 (완공된 역세권 개발 인구를 먼저 옮긴다)
       if (msg.ctx.dev?.length) model.applyDevelopments(msg.ctx.dev);
-      if (msg.ctx.anchor?.length) model.anchorDevelopments(msg.ctx.anchor);   // 예전 저장의 입주 인구를 제자리로 (한 번)
+      if (msg.ctx.anchor?.length) model.anchorDevelopments(msg.ctx.anchor);
+      if (msg.ctx.spread?.length) model.spreadDevelopments(msg.ctx.spread);   // 예전 저장: 한 읍면동에 몰린 택지지구 인구를 지구가 덮는 읍면동으로 (한 번)   // 예전 저장의 입주 인구를 제자리로 (한 번)
       // 열린 북측 관광지만 관광 수요를 끈다 (해금)
       if (msg.ctx.tourKP?.length === model.tourKP.length) model.tourKP.set(msg.ctx.tourKP);
       model.advanceYear(msg.ctx.integration, msg.ctx.policy, msg.ctx.sez || [], msg.ctx.univ || []);
