@@ -59,7 +59,7 @@ startI18n();
 import { buildReport, reportHTML, downloadReportImage, TIME_PAIRS, GOALS } from './ui/report.js';
 import { openGazette } from './ui/gazette.js';
 
-const APP_VERSION = 'Alpha 0.4.4';
+const APP_VERSION = 'Alpha 0.4.5';
 const BUG_MAIL = 'evrgrn0528@gmail.com';
 // 오류 제보에 함께 보낼 최근 오류 (화면에 안 보이는 것도)
 const errLog = [];
@@ -441,7 +441,7 @@ const loading = {
 
 function ctx() {
   return { integration: state.integration, policy: state.policy, sez: (state.sez || []).filter((z) => z.done).map((z) => z.zone),
-    univ: univList().filter((u) => u.built).map((u) => [u.zone, u.seats, u.isNew ? 1 : 0]) };
+    univ: univList().filter((u) => u.built).map((u) => [u.zone, u.seats, u.isNew ? 1 : 0]).concat(univFundSeats()) };
 }
 
 // ------------------------------------------------------------ 경제특구
@@ -716,6 +716,7 @@ function nextYear() {
   housingComplaints();
   settleSEZ(done);
   settleUniv(done);
+  univYear();
   // 남북 통합도가 오르면 북측 관광지가 하나씩 열린다
   for (const s of newlyUnlocked(state, tourSites)) {
     const z = zoneOfSite(s);
@@ -1497,7 +1498,116 @@ function drawHalls() {
 let univs = [];
 let showUnivs = true;
 try { showUnivs = localStorage.getItem('ukt-univs') !== '0'; } catch { /* 기본은 켬 */ }
-const UNIV_SEATS = { univ: 10000, college: 4000 };   // 정원 어림 (OSM에 없다): 4년제 1만, 전문대·단과대 4천
+const UNIV_SEATS = { univ: 10000, college: 4000 };
+
+// ------------------------------------------------------------ 대학 순위·재정 투입
+/**
+ * 대학 평판 바탕값 (0~100, 게임 가정값): 순위의 출발점. 해마다 재정 투입(최대 +15)과, 북측 대학은 남북 통합도(최대 +8)를 따라 오른다.
+ * 표에 없는 대학은 이름으로(국립·교육대학교 70, 과학기술원 85) 또는 남 66 · 북 58
+ */
+const UNIV_REP = {
+  서울대학교: 100, 한국과학기술원: 97, 포항공과대학교: 95, 연세대학교: 95, 고려대학교: 94, 성균관대학교: 91, 한양대학교: 89, 서강대학교: 88,
+  울산과학기술원: 88, 광주과학기술원: 86, 대구경북과학기술원: 86, 중앙대학교: 86, 경희대학교: 85, 이화여자대학교: 85, 한국외국어대학교: 84,
+  서울시립대학교: 84, 부산대학교: 82, 건국대학교: 82, 동국대학교: 82, 경북대학교: 81, 홍익대학교: 81, 인하대학교: 81, 아주대학교: 80,
+  숙명여자대학교: 79, 전남대학교: 78, 국민대학교: 78, 숭실대학교: 78, 충남대학교: 77, 세종대학교: 77, 가톨릭대학교: 77, 서울과학기술대학교: 77,
+  전북대학교: 76, 광운대학교: 76, 단국대학교: 76, 인천대학교: 75, 한국항공대학교: 75, 한국교원대학교: 75, 한국기술교육대학교: 75,
+  충북대학교: 74, 강원대학교: 74, 부경대학교: 74, 가천대학교: 74, 경상국립대학교: 73, 영남대학교: 73, 명지대학교: 73, 상명대학교: 72,
+  서울여자대학교: 72, 성신여자대학교: 72, 제주대학교: 71, 동아대학교: 71, 계명대학교: 70, 경기대학교: 70, 동덕여자대학교: 70, 덕성여자대학교: 70,
+  김일성종합대학: 80, 김책공업종합대학: 78, 리과대학: 75, 평양의학대학: 72, 평양과학기술대학: 72, 평양외국어대학: 70, 김형직사범대학: 68,
+  인민경제대학: 66, 평양건축종합대학: 66, 평양철도종합대학: 64, 고려성균관대학: 62,
+};
+/** 분교 (법적으로 따로인 캠퍼스): 순위를 따로 센다. 그 밖의 여러 캠퍼스는 이원화 캠퍼스로 본교와 함께 센다 */
+const UNIV_BRANCH = [/^고려대학교 세종/, /^연세대학교 (미래|원주)/, /^동국대학교$/, /^건국대학교 글로컬/, /^한양대학교 ERICA/, /^홍익대학교 세종/];
+const UNIV_FUNDS = [0, 50, 100, 300, 500, 1000];   // 연 재정 투입 (억원)
+const univFundBonus = (f) => 15 * (1 - Math.exp(-f / 500));
+const univFundShare = (f) => 0.5 * (1 - Math.exp(-f / 500));   // 정원 상당 교육 효과 (최대 +50%)
+let univRankAll = false;
+
+/** 순위를 세는 단위: 대학(이원화 캠퍼스는 함께)·분교·게임에서 세운 대학 */
+function univEntries() {
+  const m = new Map();
+  for (const u of univList()) {
+    if (!u.built) continue;
+    const orig = u.orig || u.name, fam = orig.split(' ')[0];
+    const branch = !u.isNew && UNIV_BRANCH.some((rx) => rx.test(orig));
+    const key = u.isNew ? u.key : branch ? `${fam}|분교` : fam;
+    if (!m.has(key)) {
+      const famRep = UNIV_REP[fam] ?? (/과학기술원$/.test(fam) ? 85 : /^국립|교육대학교$/.test(fam) ? 70 : u.country === 'KP' ? 58 : 66);
+      const base = u.isNew ? ({ comp: 60, kaist: 72, branch: 55 }[u.kind] ?? 60) : branch ? famRep - 12 : famRep;
+      const shown = u.name.split(' ')[0];
+      const name = u.isNew ? u.name : branch ? `${u.name.includes(' ') ? u.name : `${u.name} ${stem(zoneName(u.zone))}캠퍼스`} (분교)` : shown;
+      m.set(key, { key, name, base, branch, campuses: [], seats: 0, country: u.country || zoneProps[u.zone]?.country, zone: u.zone });
+    }
+    const e = m.get(key);
+    e.campuses.push(u); e.seats += u.seats;
+  }
+  const out = [...m.values()];
+  for (const e of out) {
+    e.score = state.univScore?.[e.key] ?? e.base;
+    // 본교 캠퍼스(지역·바로가기): 관악·신촌, 대학 이름 그대로인 곳(KAIST 대전), 서울캠퍼스·인문 등, 아니면 사람이 가장 많은 시군의 캠퍼스
+    // (서울대학교라는 이름만 붙은 점은 세종의 시설이라 관악캠퍼스를 먼저)
+    const nm = (c) => c.orig || c.name;
+    e.main = e.campuses.find((c) => /관악|신촌/.test(nm(c))) || e.campuses.find((c) => nm(c) === e.key) || e.campuses.find((c) => /서울캠퍼스|인문|본교/.test(nm(c)))
+      || e.campuses.reduce((x, y) => (zoneProps[y.zone].pop > zoneProps[x.zone].pop ? y : x));
+    e.zone = e.main.zone;
+  }
+  out.sort((a, b) => b.score - a.score || b.seats - a.seats);
+  out.forEach((e, k) => { e.rank = k + 1; });
+  return out;
+}
+
+/** 재정 투입이 교육 효과로: 넣은 대학 캠퍼스마다 정원의 최대 50%를 '새 정원'처럼 친다 */
+function univFundSeats() {
+  const F = state.univFund || {};
+  if (!Object.keys(F).length) return [];
+  return univEntries().flatMap((e) => (F[e.key] ? e.campuses.map((c) => [c.zone, Math.round(c.seats * univFundShare(F[e.key])), 1]) : []));
+}
+
+/** 해마다: 재정 투입을 예산에서 내고, 평판을 목표(바탕 + 재정 + 북측은 통합도)로 15%씩 다가가게 */
+function univYear() {
+  const F = state.univFund || {};
+  let total = 0;
+  for (const e of univEntries()) {
+    const f = F[e.key] || 0;
+    total += f;
+    const target = e.base + univFundBonus(f) + (e.country === 'KP' ? 8 * (state.integration || 0) : 0);
+    (state.univScore ||= {})[e.key] = Math.round((e.score + 0.15 * (target - e.score)) * 10) / 10;
+  }
+  if (total) {
+    state.budget -= total;
+    if (state.budget < 0) { state.debt += -state.budget; state.budget = 0; }
+    state.log.unshift(`${state.year}년 대학 재정 투입: ${formatWon(total)}`);
+  }
+}
+
+/** 대학 창: 순위와 재정 투입 */
+function univRankHTML(u) {
+  if (!u.built) return '';
+  const all = univEntries(), e = all.find((x) => x.campuses.some((c) => c.key === u.key));
+  if (!e) return '';
+  const f = state.univFund?.[e.key] || 0;
+  return `<h4>순위·재정 투입</h4>
+    <table class="kv">
+      <tr><td>평판</td><td>${e.score.toFixed(1)}점 · 전국 ${e.rank}위 / ${all.length}곳</td></tr>
+      <tr><td>순위 단위</td><td>${esc(e.name)}${e.branch ? ' · 분교로 따로 셈' : e.campuses.length > 1 ? ` · 캠퍼스 ${e.campuses.length}곳 함께 셈 (이원화)` : ''}</td></tr>
+    </table>
+    <div class="name-row"><span>연 재정 투입</span><select id="univ-fund" data-key="${esc(e.key)}" class="small">${UNIV_FUNDS.map((v) => `<option value="${v}" ${v === f ? 'selected' : ''}>${v ? formatWon(v) : '없음'}</option>`).join('')}</select></div>
+    <p class="hint">재정을 넣으면 해마다 평판이 오르고(목표 최대 +${univFundBonus(1000).toFixed(0)}점, 해마다 15%씩 다가감), 둘레 시군의 교육 수준이 오릅니다(정원 상당 최대 +50%). 해마다 예산에서 나갑니다.${e.country === 'KP' ? ' 북측 대학은 남북 통합도가 오를수록 평판이 따라 오릅니다.' : ''}</p>`;
+}
+
+/** 통계 탭: 대학 순위 (상위 20, 펼쳐 보기) */
+function univRankTable() {
+  const all = univEntries();
+  if (!all.length) return '';
+  const F = state.univFund || {}, total = Object.values(F).reduce((s, v) => s + v, 0);
+  const rows = (univRankAll ? all : all.slice(0, 20)).map((e) => `<tr><td>${e.rank}</td>
+    <td><a href="#" data-univ-go="${esc(e.main.key)}">${esc(e.name)}</a>${!e.branch && e.campuses.length > 1 ? ` <span class="m">캠퍼스 ${e.campuses.length}</span>` : ''}</td>
+    <td class="m">${esc(regionOf(state, zoneProps[e.zone]))}</td><td>${e.score.toFixed(1)}</td><td>${F[e.key] ? formatWon(F[e.key]) : ''}</td></tr>`).join('');
+  return `<h3 style="margin-top:16px">대학 순위</h3>
+    <table class="cmp"><tr><th>순위</th><th>대학</th><th>지역</th><th>평판</th><th>재정/년</th></tr>${rows}</table>
+    ${all.length > 20 ? `<button class="small" data-univ-more>${univRankAll ? '상위 20곳만 보기' : `전체 보기 (${all.length}곳)`}</button>` : ''}
+    <p class="hint">평판은 게임 속 가정값에서 출발해 재정 투입과(북측은) 남북 통합도를 따라 해마다 오르내립니다. 분교(고려대 세종·연세대 미래·동국대 경주·건국대 글로컬·한양대 ERICA·홍익대 세종)는 따로, 이원화 캠퍼스는 본교와 함께 셉니다.${total ? ` 재정 투입 합계 연 ${formatWon(total)}.` : ''}</p>`;
+}   // 정원 어림 (OSM에 없다): 4년제 1만, 전문대·단과대 4천
 /** 기존 대학 정원 어림: 북측은 종합대학만 1만, 나머지 단과대학(교원·사범·농업대학 등)은 3천 */
 const univSeats = (u) => (u.c === 'KP' ? (/종합대학/.test(u.n) ? 10000 : 3000) : UNIV_SEATS[u.k] || UNIV_SEATS.univ);
 const UNIV_TYPES = {
@@ -1559,8 +1669,9 @@ function univPanel(key) {
       <tr><td>종류</td><td>${esc(kindLabel || '')}${u.isNew ? ' · 게임에서 세움' : ''}</td></tr>
       <tr><td>정원 (어림)</td><td>${u.seats.toLocaleString()}명</td></tr>
       ${u.built ? '' : '<tr><td>상태</td><td>설립 중</td></tr>'}
-      ${edu ? `<tr><td>새 대학 효과 (이 시군)</td><td>기대 교육연수 목표 +${edu.toFixed(2)}년</td></tr>` : ''}
+      ${edu ? `<tr><td>새 대학·재정 효과 (이 시군)</td><td>기대 교육연수 목표 +${edu.toFixed(2)}년</td></tr>` : ''}
     </table>
+    ${univRankHTML(u)}
     ${to ? `<h4>이름 되돌리기</h4><p class="hint">인물 이름이 든 대학을 지명 이름으로 바꿉니다: <b>${esc(to)}</b>. 교표·문서·간판을 바꾸는 데 예산이 들고, 끝나면 그 시군 주민 행복도가 오릅니다.</p>
       ${proj ? `<p class="hint">${proj.doneYear}년 완료 예정</p>` : `<button class="small primary" data-univ-restore="${u.idx}">이름 되돌리기 · ${formatWon(UNIV_RENAME.cost)} · ${UNIV_RENAME.years}년 · 행복도 +${UNIV_RENAME.bonus}</button>`}` : ''}
     <h4>이름 바꾸기</h4>
@@ -1569,6 +1680,12 @@ function univPanel(key) {
 }
 
 function bindUnivPanel(el) {
+  el.querySelector('#univ-fund')?.addEventListener('change', (e) => {
+    const k = e.target.dataset.key, v = +e.target.value;
+    if (v) (state.univFund ||= {})[k] = v; else if (state.univFund) delete state.univFund[k];
+    state.log.unshift(`${state.year}년 ${univEntries().find((x) => x.key === k)?.name || '대학'} 재정 투입: 연 ${formatWon(v)}`);
+    save(state); renderSelection(); renderStats();
+  });
   el.querySelector('#univ-rename')?.addEventListener('click', () => {
     const key = selection.id, v = el.querySelector('#univ-name').value.trim();
     if (!v) return;
@@ -3603,6 +3720,7 @@ function renderStats() {
     <h3>광역지자체 인구</h3>
     <table class="cmp"><tr><th>광역지자체</th><th>인구</th><th>${START_YEAR}년 대비</th></tr>${sidoRows}</table>
     <p class="hint">지도 범례에서 "광역지자체 인구 (합계)"를 고르면 지도에서도 볼 수 있습니다. 광역시 승격·북측 도 복원이 바로 반영됩니다.</p>
+    ${univRankTable()}
     <h3 style="margin-top:16px">항공</h3>
     <table class="kv">
       <tr><td>운항 노선</td><td>${air.routes.length}개 (${state.air.auto ? '자동 운영' : '수동'})</td></tr>
@@ -3629,6 +3747,16 @@ function renderStats() {
       ${h.some((r) => r.air) ? chart('항공 분담률 (%)', h.filter((r) => r.air != null).map((r) => [r.year, r.air * 100])) : ''}
       ${chart('지지율 (%)', h.filter((r) => r.approval != null).map((r) => [r.year, r.approval]))}` : '<p class="hint">해를 넘기면 연도별 추이가 쌓입니다.</p>'}`;
   el.querySelectorAll('[data-goto-tab]').forEach((a) => { a.onclick = (e) => { e.preventDefault(); switchTab(a.dataset.gotoTab); }; });
+  el.querySelector('[data-univ-more]')?.addEventListener('click', () => { univRankAll = !univRankAll; renderStats(); });
+  el.querySelectorAll('[data-univ-go]').forEach((a) => {
+    a.onclick = (e) => {
+      e.preventDefault();
+      const u = univList().find((x) => x.key === a.dataset.univGo);
+      if (!u) return;
+      map.easeTo({ center: [u.lon, u.lat], zoom: Math.max(map.getZoom(), 11), duration: 700 });
+      select({ type: 'univ', id: u.key });
+    };
+  });
 }
 
 // ---- 영업계수 패널: 노선별 수지를 나쁜 순으로 보고 감편·폐선·재개통한다
