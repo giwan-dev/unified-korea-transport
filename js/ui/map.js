@@ -155,6 +155,9 @@ function renamed(features, level, idKey) {
 }
 
 let labelGroup = null;
+let unitGroup = null;
+/** 읍면동 묶음: 읍면동 번호 → {key, name}(같은 key끼리 한 면으로: 경계선을 긋지 않고 이름 하나) 또는 null(그대로) */
+export function setUnitGroup(fn) { unitGroup = fn; }
 let extraLabels = [], baseLabels = null;
 /** 분구한 구 이름: 원래 있던 구와 같은 시군구 라벨 층(lb-sgg)에 단다 ({name} 점들). 시군구 라벨은 지난번 것을 그대로 쓴다 */
 export function setExtraLabels(map, feats) {
@@ -188,9 +191,28 @@ export async function refreshNames(map) {
 function setUnits(map) {
   const fs = renamed([...unitFiles.values()].flat(), 'unit', 'id');
   // 읍면동 경계는 같은 시군구 안의 변만: 시군구 경계와 겹치는 변은 시군구·시도 선이 그린다
-  map.getSource('units').setData(borderLines(fs, (f) => f.properties.zone).inner);
-  // 이름은 면마다 점 하나에: 면 도형에 바로 글자를 달면 타일마다 하나씩 찍혀 넓은 면은 이름이 여러 번 뜬다
-  map.getSource('unitLabels').setData({ type: 'FeatureCollection', features: fs.map((f) => ({ type: 'Feature', properties: { name: f.properties.name }, geometry: { type: 'Point', coordinates: labelPoint(f.geometry) } })) });
+  const grp = (f) => (unitGroup ? unitGroup(f.properties.id) : null);
+  map.getSource('units').setData(borderLines(fs, (f) => f.properties.zone, unitGroup ? (f) => grp(f)?.key ?? `u:${f.properties.id}` : null).inner);
+  // 이름은 면마다 점 하나에: 면 도형에 바로 글자를 달면 타일마다 하나씩 찍혀 넓은 면은 이름이 여러 번 뜬다.
+  // 묶은 면(북측 군의 옛 면)은 가장 넓은 리 자리에 면 이름 하나
+  const pt = (name, f) => ({ type: 'Feature', properties: { name }, geometry: { type: 'Point', coordinates: labelPoint(f.geometry) } });
+  const labels = [], groups = new Map();
+  for (const f of fs) {
+    const g = grp(f);
+    if (!g) { labels.push(pt(f.properties.name, f)); continue; }
+    const a = geomArea(f.geometry), e = groups.get(g.key);
+    if (!e || a > e.a) groups.set(g.key, { a, f, name: g.name });
+  }
+  for (const e of groups.values()) labels.push(pt(e.name, e.f));
+  map.getSource('unitLabels').setData({ type: 'FeatureCollection', features: labels });
+}
+
+/** 면 넓이 (바깥 고리들, 도 단위 어림) */
+function geomArea(g) {
+  const polys = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : [];
+  let s = 0;
+  for (const p of polys) { const r = p[0]; let a = 0; for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += (r[j][0] + r[i][0]) * (r[j][1] - r[i][1]); s += Math.abs(a / 2); }
+  return s;
 }
 
 /** 면의 이름 자리: 가장 큰 고리의 무게중심, 그 점이 면 밖이면(ㄷ자 모양 등) 고리 위 점들 가운데 무게중심에 가장 가까운 안쪽 점 */
@@ -720,7 +742,7 @@ export function setBasemap(map, kind) {
   const sat = kind === 'sat';
   // 위성 사진 위에서는 호수·강 색과 시군 색칠을 옅게 (사진이 보이게)
   for (const id of ['bg-lake', 'bg-river']) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', sat ? 'none' : 'visible');
-  if (map.getLayer('zones-fill')) map.setPaintProperty('zones-fill', 'fill-opacity', sat ? 0.3 : 0.55);
+  for (const id of ['zones-fill', 'gu-metric-fill']) if (map.getLayer(id)) map.setPaintProperty(id, 'fill-opacity', sat ? 0.3 : 0.55);
   if (!r) return;
   map.addSource('bg-raster', { type: 'raster', tiles: r.tiles, tileSize: 256, maxzoom: r.maxzoom, attribution: r.attribution });
   // 위성 사진은 육지 면 대신 맨 밑에, 음영기복은 시군 색칠 위에 반투명으로 얹어 산줄기가 보이게

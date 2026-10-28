@@ -524,7 +524,7 @@ export function linksUnderWork(state) {
 }
 
 /** 기존 링크 개량. linkIds는 한 링크 또는 같은 노선의 여러 링크 */
-export function startUpgrade(base, state, linkIds, upgradeId) {
+export function startUpgrade(base, state, linkIds, upgradeId, opts = {}) {
   const ids = Array.isArray(linkIds) ? linkIds : [linkIds];
   const u = UPGRADES.find((x) => x.id === upgradeId);
   const work = linksUnderWork(state);
@@ -532,12 +532,13 @@ export function startUpgrade(base, state, linkIds, upgradeId) {
   if (!targets.length) return { ok: false, reason: '이미 공사 중이거나 적용할 수 없는 구간입니다.' };
   let cost = 0, km = 0;
   for (const id of targets) { const l = linkAt(base, state, id); cost += upgradeCost(u, l); km += l.len; }
+  if (opts.discount) cost = Math.round(cost * opts.discount);   // 노선 일괄처럼 한 사업으로 묶은 할인
   const fund = fundFor(state, targets.map((id) => linkAt(base, state, id)));
   if (!canAfford(state, cost, u.years, fund)) return { ok: false, reason: fund === 'gov' ? '예산과 차입 한도가 부족합니다.' : '운영사 잔액이 부족합니다.' };
   const first = linkAt(base, state, targets[0]);
   startProject(state, {
     id: crypto.randomUUID(), kind: 'upgrade', upgrade: u.id, links: targets, cost, years: u.years, fund,
-    label: `${first.name || '무명 구간'} ${resolve(u.label, first)} (${km.toFixed(0)}km)`,
+    label: opts.label ? `${opts.label} (${km.toFixed(0)}km)` : `${first.name || '무명 구간'} ${resolve(u.label, first)} (${km.toFixed(0)}km)`,
     // 폐도·폐선은 완공 때 걷어 낼 구간 (직선화의 옛 구간과 같이 처리한다: 저장 정리·운행 계통 다시 짜기)
     ...(u.retire ? { retire: targets.slice() } : {}),
   });
@@ -993,7 +994,15 @@ function completeProject(base, state, p) {
   if (p.kind === 'housing') { for (const id of p.links || []) { const l = state.newLinks[id - base.links.length]; if (l) l.built = true; } return; }
   if (p.kind === 'vehicles' || p.kind === 'devel' || p.kind === 'sez') return;   // 역세권 개발은 해 넘길 때 main이 정산한다 (settleDevels)
   if (p.kind === 'mega') { applyMega(base, state, p.mega); return; }
-  if (p.kind === 'osm') { for (const i of p.links) state.osm.opened[i] = true; return; }   // 계통 차량 추가 구입 (편성 수는 고칠 때 이미 바뀌었다)
+  if (p.kind === 'osm') {
+    // 중간역 자리를 넣으려고 나눈 구간(새 구간)도 함께 열고, 그 역들도 연다
+    for (const i of p.links) {
+      if (i < base.links.length) state.osm.opened[i] = true;
+      else { const nl = state.newLinks[i - base.links.length]; if (nl) nl.built = true; }
+    }
+    for (const n of p.stations || []) if (!state.newStations.includes(n)) state.newStations.push(n);
+    return;
+  }   // 계통 차량 추가 구입 (편성 수는 고칠 때 이미 바뀌었다)
   if (p.kind === 'airRoute') {
     state.air.routes[p.key] = { a: p.a, b: p.b, freq: AIR.manualFreq, origin: 'manual', low: 0 };
     state.air.banned = state.air.banned.filter((k) => k !== p.key);

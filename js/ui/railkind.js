@@ -35,5 +35,10 @@ export function railKindLegend() {
 /** 보기 메뉴(도로만 보기 등)에 맞춰 철도 선로와 같이 켜고 끈다 */
 export function syncRailKind(map) {
   if (!map.getLayer('rails-kpstd') || !map.getLayer('rails')) return;
-  map.setLayoutProperty('rails-kpstd', 'visibility', map.getLayoutProperty('rails', 'visibility') || 'visible');
+  // 철도만 보기는 노선 색 철도(rails)를 숨기고 혼잡도 색 철도(rails-vc)를 그린다: 그때도 점선을 그 위에 보인다
+  const vis = (id) => map.getLayer(id) && (map.getLayoutProperty(id, 'visibility') || 'visible') === 'visible';
+  const vc = vis('rails-vc');
+  map.setLayoutProperty('rails-kpstd', 'visibility', vis('rails') || vc ? 'visible' : 'none');
+  const above = vc ? 'metro-vc' : 'metro';
+  if (map.getLayer(above)) map.moveLayer('rails-kpstd', above);
 }

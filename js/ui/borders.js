@@ -17,18 +17,18 @@ const pk = (p) => `${p[0]},${p[1]}`;
  * @param {(f:object)=>string|number} groupOf 묶음 (같은 묶음끼리 맞닿은 변은 안쪽 경계)
  * @returns {{inner: object, outer: object}} 안쪽 경계·바깥 경계(묶음 사이, 해안·국경) 선 FeatureCollection
  */
-export function borderLines(features, groupOf) {
-  // 변마다 붙은 면의 묶음
+export function borderLines(features, groupOf, sameOf = null) {
+  // 변마다 붙은 면의 묶음 (sameOf: 같은 묶음 안에서 이 값이 같은 면끼리 맞닿은 변은 긋지 않는다 — 북측 군의 리를 옛 면으로 묶을 때)
   const seg = new Map();
   for (const f of features) {
-    const gk = groupOf(f);
+    const gk = groupOf(f), sk = sameOf ? sameOf(f) : null;
     for (const r of rings(f.geometry)) {
       for (let k = 1; k < r.length; k++) {
         const a = pk(r[k - 1]), b = pk(r[k]);
         if (a === b) continue;
         const key = a < b ? `${a}|${b}` : `${b}|${a}`;
         const s = seg.get(key);
-        if (s) { s.n++; if (s.g !== gk) s.mixed = true; } else seg.set(key, { n: 1, g: gk, mixed: false, done: false });
+        if (s) { s.n++; if (s.g !== gk) s.mixed = true; if (s.s !== sk) s.sMixed = true; } else seg.set(key, { n: 1, g: gk, s: sk, mixed: false, sMixed: false, done: false });
       }
     }
   }
@@ -45,6 +45,7 @@ export function borderLines(features, groupOf) {
         if (s.done) { flush(); continue; }
         s.done = true;
         const isOuter = s.n === 1 || s.mixed;
+        if (!isOuter && sameOf && !s.sMixed) { flush(); continue; }   // 같은 옛 면 안의 리 경계
         if (run && runOuter === isOuter) run.push(r[k]);
         else { flush(); run = [r[k - 1], r[k]]; runOuter = isOuter; }
       }

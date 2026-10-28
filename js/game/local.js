@@ -71,7 +71,8 @@ export function countyDisplayName(state, z) {
   const L = state.local, pn = promotedName(state, z), base = state.adminNames?.[`z:${z.id}`] || z.name;
   const own = pn !== z.name ? base.replace(/군$/, '시') : base;
   if (!L || z.ext) return own;
-  if (!z.city && /시$/.test(pn) && L.independent?.includes(pn) && z.province !== pn) return '중구';
+  // 광역시로 승격한 시 자리: 분구하지 않았으면 구가 없다 (광역시 그 자체, 기초단체장 없음). 분구했으면 구 이름이 따로 붙는다
+  if (!z.city && /시$/.test(pn) && L.independent?.includes(pn) && z.province !== pn) return L.bungu?.[pn] ? '중구' : metroName(pn);
   // 광역시 아래에 시는 없다: 광역시에 든 시(편입한 시, 승격한 뒤 편입한 군)는 구로 (벽성시 → 벽성구)
   if (!z.city && z.name !== z.province && /시$/.test(own) && isMetroCity(regionOf(state, z))) return own.replace(/시$/, '구');
   // 광역시 산하 군을 구로 바꾼 곳 (기장군 → 기장구)
@@ -289,7 +290,7 @@ export function governorTitle(region) {
 /** 시군 단체장 직함. 광역시로 승격한 도시 전체가 한 시군(존)이면 따로 뽑는 기초단체장이 없다
  *  (청진시 → 청진광역시: 그 땅의 단체장은 청진광역시장뿐, "청진광역시 구청장"은 없는 직책): null */
 export function countyTitle(name, region) {
-  if (/광역시$/.test(region) && name.replace(/시$/, '') === region.replace(/광역시$/, '')) return null;
+  if (/광역시$/.test(region) && (name === region || name.replace(/시$/, '') === region.replace(/광역시$/, ''))) return null;
   return mayorTitle(name);
 }
 
@@ -353,9 +354,11 @@ export function runElection(lean, office, rnd, mood = 0, third = null) {
  * 시군의 정당 지지율 (합 1): 기본 성향(leanP: 두 큰 정당 몫) 위에 광역 단체별 변동(%p, 제안을 받아 주거나 거절해 오르내림)을 더한다
  * @param {object} delta 그 광역 단체의 {D, P, R, J, I} 변동 (%p)
  */
-export function partySupport(z, delta = {}) {
+export function partySupport(z, delta = {}, mayorParty = null) {
   const lp = leanP(z);
   const s = { D: 0.86 * (1 - lp), P: 0.86 * lp, R: 0.05, J: 0.04, I: 0.05 };
+  // 3당·무소속 단체장이 있는 시군은 그 정당 지지가 다른 시군보다 높다 (현직 텃밭)
+  if (THIRD.includes(mayorParty)) s[mayorParty] += 0.1;
   for (const k of Object.keys(s)) s[k] = Math.max(0.005, s[k] + (delta[k] || 0) / 100);
   const t = Object.values(s).reduce((a, b) => a + b, 0);
   for (const k of Object.keys(s)) s[k] /= t;
