@@ -19,6 +19,7 @@ import { startGuide, guideShouldAutoShow, guideOnNewGame, getGuideMode, setGuide
 import { DIFFICULTY, KP_COST_FACTOR, resolve, formatWon, upgradeAttrs } from './game/catalog.js';
 import { kmBetween, routeKey } from './sim/model.js';
 import { decodeNetwork } from './data/netpack.js';
+import { fixNetwork } from './data/netfix.js';
 import { helperPorts } from './sim/pool.js';
 import { smoothSegments, polylineKm, splineLine, tangentCurve, easeCurves } from './game/curve.js';
 import { loadTerrain, terrainReady, terrainRoute, terrainProfile, terrainRule, terrainCostFactor, terrainAt } from './game/terrain.js';
@@ -58,7 +59,7 @@ startI18n();
 import { buildReport, reportHTML, downloadReportImage, TIME_PAIRS, GOALS } from './ui/report.js';
 import { openGazette } from './ui/gazette.js';
 
-const APP_VERSION = 'Alpha 0.4.3';
+const APP_VERSION = 'Alpha 0.4.4';
 const BUG_MAIL = 'evrgrn0528@gmail.com';
 // 오류 제보에 함께 보낼 최근 오류 (화면에 안 보이는 것도)
 const errLog = [];
@@ -121,6 +122,8 @@ async function init() {
   ]);
   mark('data fetched');
   zoneProps = z; base = decodeNetwork(nmeta, nbin); grid = new Float32Array(g);
+  // 노드 자리 바로잡기: 고속도로 본선이 엉뚱한 분기점 노드로 꺾이던 곳(금토분기점 등), 역에서 엇갈리는 노선의 갈고리(GTX-A 성남·신분당선 판교)
+  fixNetwork(base, await fetch('data/node_fix.json').then((r) => (r.ok ? r.json() : {})).catch(() => ({})));
   mark('network decoded');
   // 국외 거점·국경 연결·여객선 항로·공항
   extendWorld(base, zoneProps, world);
@@ -1273,9 +1276,14 @@ function dongMyeons(z) { return new Set(state.local?.dongMyeon?.[unitId(state, z
 /** 북측 시군의 단위: 'gun'(군: 읍면으로), 'si'(시: 동, 리는 면으로), null(구·구역·광역시 등: 그대로) */
 function kpUnitKind(z) {
   const zp = zoneProps[z];
-  if (!zp || zp.ext || zp.country !== 'KP' || (guNamesOfZone(z) && !isGeneralGu(z))) return null;
-  const n = countyDisplayName(state, zp);
-  return /군$/.test(n) ? 'gun' : /시$/.test(n) ? 'si' : null;
+  if (!zp || zp.ext || zp.country !== 'KP') return null;
+  const split = guNamesOfZone(z) && !isGeneralGu(z), n = countyDisplayName(state, zp);
+  if (!split && /군$/.test(n)) return 'gun';
+  if (!split && /시$/.test(n)) return 'si';
+  // 광역시로 승격한 시 자리(구 없는 광역시 그 자체, 자치구로 나눈 구, 편입한 시의 구): 시처럼 동은 그대로, 리는 면으로.
+  // 북측 직할시의 ○○구역은 처음부터 동 단위라 그대로
+  if (isMetroCity(regionOf(state, zp)) && !/구역$/.test(zp.name) && (split || /(광역시|구)$/.test(n))) return 'si';
+  return null;
 }
 
 /** 읍면동 번호의 옛 면 묶음 {key, name} (지도에서 한 면으로 그린다). 그대로 보일 것이면 null */
@@ -1381,6 +1389,29 @@ function subAnnexTargets(i) {
  * → [{name, kind: 'do'|'si'|'gun'|'gu', lon, lat}]
  */
 let halls = [];
+/** 승격·편입 전의 광역 단체 (도청이 원래 속한 도) */
+function homeRegion(z) {
+  const L = state.local, sv = [L.independent, L.annex];
+  L.independent = []; L.annex = {};
+  try { return regionOf(state, z); } finally { [L.independent, L.annex] = sv; }
+}
+
+/** 도청을 옮길 자리: 그 도에 남은 가장 큰 시(없으면 가장 큰 시군)의 시청 곁 */
+function provinceSeat(r) {
+  const pops = new Map();
+  zoneProps.forEach((z, i) => {
+    if (z.ext || regionOf(state, z) !== r) return;
+    const k = countyRep(i);
+    pops.set(k, (pops.get(k) || 0) + (result ? result.zones.pop[i] : z.pop));
+  });
+  const cand = [...pops].sort((a, b) => b[1] - a[1]);
+  const best = (cand.find(([k]) => /시$/.test(countyDisplayName(state, zoneProps[k]))) || cand[0])?.[0];
+  if (best == null) return null;
+  const h = halls.find((x) => countyRep(x.z) === best && x.k !== 'do' && x.k !== 'gu');
+  const c = h ? [h.x, h.y] : [zoneProps[best].cx, zoneProps[best].cy];
+  return [c[0] + 0.004, c[1] + 0.002];
+}
+
 function hallList() {
   if (!state || !zoneProps) return [];
   const L = state.local || {};
@@ -1389,12 +1420,19 @@ function hallList() {
   for (const h of halls) {
     const z = zoneProps[h.z];
     if (!z || z.ext) continue;
-    let name;
-    if (h.k === 'do') name = `${regionOf(state, z)}청`;
-    else {
+    let name, kind = h.k, lon = h.x, lat = h.y;
+    if (h.k === 'do') {
+      const home = homeRegion(z), now = regionOf(state, z);
+      if (home !== now && !isMetroCity(home)) {
+        // 도청 소재지가 광역시로 떨어져 나갔다 (함흥 → 함흥광역시): 그 도에 남은 가장 큰 시로 옮긴다 (경북도청이 대구에서 나간 것처럼)
+        const seat = provinceSeat(home);
+        if (!seat) continue;
+        name = `${home}청`; lon = seat[0]; lat = seat[1];
+      } else name = `${now}청`;
+    } else {
       const own = promotedName(state, z);
       const metro = L.independent?.includes(own) && !z.city;
-      if (metro) name = `${metroName(own)}청`;   // 광역시로 승격한 시의 청사는 광역시청
+      if (metro) { name = `${metroName(own)}청`; kind = 'do'; }   // 광역시로 승격한 시의 청사는 광역시청 (도청처럼 늘 보이게)
       else if (h.k === 'si' && z.city) name = `${placeName(state, 'zone', h.z, z.city)}청`;   // 일반구가 있는 시(수원시)의 시청
       else if (h.k === 'gu' && (z.city || /시$/.test(z.name)) && h.osm) name = h.osm;   // 시에 딸린 일반구 구청 (장안구청): 게임에서는 시 하나라 OSM 이름 그대로
       else if (bunguZones.has(h.z) && !isGeneralGu(h.z)) {
@@ -1402,7 +1440,7 @@ function hallList() {
         name = g ? `${g[0]}청` : `${officeName(h.z)}청`;   // 분구한 시군의 원래 청사는 가운데 구의 구청
       } else name = `${officeName(h.z)}청`;
     }
-    out.push({ name, kind: h.k, lon: h.x, lat: h.y, rank: (h.src === 'osm' ? 2 : 0) + (countyRep(h.z) === h.z ? 1 : 0), region: regionOf(state, z),
+    out.push({ name, kind, lon, lat, rank: (kind === 'do' ? 10 : 0) + (h.src === 'osm' ? 2 : 0) + (countyRep(h.z) === h.z ? 1 : 0), region: regionOf(state, z),
       unit: h.k === 'gun' || (h.k === 'si' && !z.city) ? unitId(state, z) : null });
   }
   // 한 시군에 청사 하나: 분단 전 경계로 합친 군(연안·배천 → 연백군, 남북 철원)은 옛 군청이 같은 이름으로 둘 남는다 → OSM 청사, 대표 존 쪽만
@@ -1691,7 +1729,7 @@ function paintZones() {
   };
   const sumOf = (i, f) => grp.get(countyRep(i)).reduce((t, j) => t + f(j), 0);
   const sido = metric === 'popSido' ? provincePops() : null;
-  const guZ = GU_METRIC[metric] ? new Set(Object.entries(state.local?.bungu || {}).filter(([, b]) => !b.general).flatMap(([u]) => unitZones(u))) : null;
+  const guZ = GU_METRIC[metric] || GU_POP[metric] ? new Set(Object.entries(state.local?.bungu || {}).filter(([, b]) => !b.general || GU_POP[metric]).flatMap(([u]) => unitZones(u))) : null;
   for (let i = 0; i < zoneProps.length; i++) {
     let v = null;
     if (metric === 'pop') v = sumOf(i, (j) => z.pop[j]);
@@ -6820,22 +6858,26 @@ function officeParty(off) {
  * (시군 색은 가운데 구 구청장 것이라 다른 구의 선거 결과가 지도에 보이지 않았다). 일반구는 시장 하나라 그대로
  */
 const GU_METRIC = { partyMayor: officeParty, voteMayor: (o) => pShare(o), mayorApproval: (o) => o?.approval ?? null };
+/** 구마다 칠하는 인구 지표 (구의 읍면동 인구로): 일반구도 (예전에는 광역시 승격 뒤 분구해도 시군구 인구가 광역시 전체로 나왔다) */
+const GU_POP = { pop: (p) => p, popChange: (p, p0) => p / Math.max(p0, 1) - 1 };
 function drawGuMetric() {
   if (!map?.getSource('zones')) return;
   if (!map.getSource('gu-metric')) {
     map.addSource('gu-metric', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     map.addLayer({ id: 'gu-metric-fill', type: 'fill', source: 'gu-metric', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.55, 'fill-antialias': false } }, map.getLayer('zones-line') ? 'zones-line' : undefined);
   }
-  const f = GU_METRIC[metric], feats = [];
-  if (f && state.local?.bungu) {
+  const f = GU_METRIC[metric], fp = result ? GU_POP[metric] : null, feats = [];
+  if ((f || fp) && state.local?.bungu) {
     let missing = false;
     for (const [unit, b] of Object.entries(state.local.bungu)) {
-      if (b.general) continue;
+      if (b.general && !fp) continue;
       for (const r of new Set(unitZones(unit).map((z) => countyRep(z)))) {
         const us = guUnits.get(r);
         if (!us) { missing = true; continue; }
+        const popOf = new Map();
+        if (fp) for (const g of new Set(us.map((u) => u.gu))) { const ss = guSubs(r, g); popOf.set(g, fp(ss.reduce((t, i) => t + result.subs.pop[i], 0), ss.reduce((t, i) => t + (subPop0[i] || 0), 0))); }
         for (const u of us) {
-          const c = colorFor(metric, f(state.local.offices[guKey(r, u.gu)]));
+          const c = colorFor(metric, fp ? popOf.get(u.gu) : f(state.local.offices[guKey(r, u.gu)]));
           for (const poly of u.polys) feats.push({ type: 'Feature', properties: { color: c }, geometry: { type: 'Polygon', coordinates: poly } });
         }
       }
@@ -9355,6 +9397,24 @@ function drawServices() {
       canonMemo.set(i, v);
       return v;
     };
+    // 계통 칸 정하기: 긴 계통부터, 칸을 둘 넘게 함께 쓰는(나란히 가는) 계통이 아직 쓰지 않은 가장 작은 칸
+    const slotOf = new Array(list.length).fill(0);
+    {
+      const order = list.map((_, t) => t).sort((x, y) => svcCells[y].size - svcCells[x].size);
+      const done = [];
+      for (const t of order) {
+        const used = new Set();
+        for (const u of done) {
+          let shared = 0;
+          for (const cc of svcCells[t]) if (svcCells[u].has(cc) && ++shared >= 2) break;
+          if (shared >= 2) used.add(slotOf[u]);
+        }
+        let k = 0;
+        while (used.has(k)) k++;
+        slotOf[t] = k;
+        done.push(t);
+      }
+    }
     // 구간을 함께 지나는 계통: 그 구간 칸의 절반 넘게에 있는 계통 (구간마다 한 번)
     const groupMemo = new Map();
     const linkGroup = (i) => {
@@ -9387,11 +9447,9 @@ function drawServices() {
           const fwd = l.a === node;
           node = fwd ? l.b : l.a;
           const sign = fwd === canon(i) ? 1 : -1;
-          // 칸은 구간(링크)마다 하나: 그 구간 칸의 절반 넘게를 함께 지나는 계통들 사이에서 정한다. 칸이 바뀌는 곳은 역·분기점뿐이라
-          // 이어진 노선이 한 줄로 그려진다 (예전에는 300m 조각마다 둘레 칸의 계통으로 정해 칸이 자꾸 바뀌어 계통 선이 토막토막 끊겨 보였다)
-          const group = linkGroup(i).filter((t) => t !== j).concat(j).sort((x, y) => x - y);
-          const off = sign * (group.indexOf(j) - (group.length - 1) / 2);
-          for (let m = 0; m + 1 < c.length; m++) put(c[m], c[m + 1], off);
+          // 계통마다 칸 하나를 처음부터 끝까지 (함께 지나는 계통끼리 다른 칸): 칸이 바뀌지 않아 계통 하나가 끊기지 않은 한 줄이 된다.
+          // 칸은 진행 방향 오른쪽으로 센다 (예전에는 구간 방향(동서)마다 칸과 쪽이 바뀌어 남북으로 가는 경강선 등이 토막토막 끊겨 보였다)
+          for (let m = 0; m + 1 < c.length; m++) put(c[m], c[m + 1], slotOf[j]);
         }
       }
       flush();

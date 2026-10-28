@@ -104,7 +104,7 @@ def main():
             nb[a].add(b)
             nb[b].add(a)
     old = load_1945()
-    out, stats = {}, collections.Counter()
+    out, single, stats = {}, {}, collections.Counter()
     for zi, z in enumerate(zones):
         if z.get("ext") or z["country"] != "KP":
             continue
@@ -143,6 +143,22 @@ def main():
                     changed = True
             if not changed:
                 break
+        # 리 하나뿐인 면(1952년에 이웃 군에서 넘어온 옛 리 등): 지금 행정구역을 따르면 가장 길게 맞닿은 이웃 면으로 묶는다
+        # (옛 면 이름은 single에 남겨 두어, 1945년 행정구역을 되살릴 때 옛 군으로 보낼 수 있게)
+        for _ in range(3):
+            cnt = collections.Counter(got[i] for i in idxs if i in got)
+            singles = [i for i in idxs if i in got and cnt[got[i]] == 1]
+            if not singles or len(cnt) <= 1:
+                break
+            for i in singles:
+                votes = collections.Counter()
+                for j, c in adj[i].items():
+                    if j in got and got[j] != got[i] and cnt[got[j]] > 1:
+                        votes[got[j]] += c
+                if votes:
+                    single[str(i)] = got[i]
+                    got[i] = votes.most_common(1)[0][0]
+                    stats["single_merged"] += 1
         for i in idxs:
             if i in got:
                 out[str(i)] = got[i]
@@ -150,7 +166,7 @@ def main():
                 stats["left"] += 1
         stats["zones"] += 1
     res = {"source": "국사편찬위원회 역사지리정보DB 행정구역 데이터(1910~1945년), 1945-08-14 기준 (공공누리 제1유형)",
-           "subs": out, "stats": dict(stats)}
+           "subs": out, "single": single, "stats": dict(stats)}
     (DATA / "kp_myeon.json").write_text(json.dumps(res, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(json.dumps(dict(stats), ensure_ascii=False), len(out), file=sys.stderr)
 
