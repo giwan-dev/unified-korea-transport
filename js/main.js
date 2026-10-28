@@ -1406,6 +1406,20 @@ function settleUniv(done) {
   if (done.some((p) => p.kind === 'univ' || p.kind === 'univRename')) drawUnivs();
 }
 
+/**
+ * 광역 단체 이름 줄임 (대학 이름용): 황해남도 → 황남, 평안북도 → 평북, 충청남도 → 충남, 경기도 → 경기, 강원특별자치도 → 강원,
+ * 북측 강원(강원북도) → 북강원, 평양광역시 → 평양
+ */
+function regionAbbr(r) {
+  if (r === '강원북도') return '북강원';
+  if (r === '강원남도') return '강원';
+  const m = r.match(/^(.)[^남북]*(남|북)도$/);
+  if (m) return m[1] + m[2];
+  const t = r.replace(/(특별자치도|특별자치시|특별시|광역시|직할시|통합특별시)$/, '');
+  if (t !== r) return stem(t) || t;
+  return r.replace(/도$/, '').replace(/시$/, '');
+}
+
 // 대학 설립: 지도에서 자리를 누르면 종류를 고르는 창
 let univPick = false;
 function startUnivPick() {
@@ -1424,12 +1438,15 @@ function univPickClick(ll) {
   const place = namer?.nearbyPlaces(ll.lng, ll.lat, 8, 1)[0];
   const base0 = place ? stem(place[0]) : stem(zoneName(zi));
   const used = new Set(univList().map((u) => u.name));
-  let nm = `${base0}대학교`;
-  for (const pre of ['', '국립', '제2']) { if (!used.has(`${pre}${base0}대학교`)) { nm = `${pre}${base0}대학교`; break; } }
+  // 이름 후보: 도 이름 줄임(충남대학교·경북대학교처럼 황남대학교·평북대학교), 지명, 국립 지명. 아직 쓰이지 않은 첫 후보가 기본
+  const prov = regionAbbr(regionOf(state, zoneProps[zi]));
+  const cands = [...new Set([`${prov}대학교`, `${base0}대학교`, `국립${base0}대학교`, `국립${prov}대학교`, `${prov}과학기술원`])].filter((n) => !used.has(n));
+  const nm = cands[0] || `${base0}${prov}대학교`;
   const kp = isKP(ll.lat, ll.lng);
   const wrap = document.createElement('div');
   wrap.className = 'setup-wrap';
-  wrap.innerHTML = `<div class="setup" role="dialog" aria-modal="true"><h2>대학 설립 · <input type="text" id="u-name" value="${esc(nm)}" style="font:inherit;width:11em"></h2>
+  wrap.innerHTML = `<div class="setup" role="dialog" aria-modal="true"><h2>대학 설립 · <input type="text" id="u-name" value="${esc(nm)}" list="u-names" style="font:inherit;width:11em"><datalist id="u-names">${cands.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></h2>
+    <p class="hint">이름 후보: ${cands.map(esc).join(' · ')} (칸을 눌러 고르거나 직접 쓰세요)</p>
     <p class="setup-intro hint">${esc(regionOf(state, zoneProps[zi]))} ${esc(zoneName(zi))}. 개교하면 이 시군과 90분 안팎에 닿는 시군의 기대 교육연수가 오르고(최대 +1.5년, 정원이 모자란 곳일수록 크게), 평균 교육연수·HDI가 수십 년에 걸쳐 따라 오릅니다. 교통망이 좋을수록 효과가 멀리 퍼집니다.</p>
     <div class="setup-body"><div class="list">${Object.entries(UNIV_TYPES).map(([k, t]) => {
       const cost = Math.round(t.cost * (kp ? KP_COST_FACTOR : 1));
