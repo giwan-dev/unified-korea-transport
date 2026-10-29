@@ -142,6 +142,9 @@ table.cmp th.asc, table.cmp th.desc { color: var(--ink); }
 .item.line { display: flex; align-items: center; gap: var(--s3); padding: var(--s2) var(--s3); }
 .item.line .n { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .item.line .n b { font-size: 13px; font-weight: 600; }
+/* 노선 이름 옆 단계 표시 (1단계·2단계): 이름과 한 줄에 (예전에는 세로로 쌓는 칸이라 한 줄 아래, 오른쪽 끝으로 밀렸다) */
+.item.line .n .t-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+details.fold-sub .item.line .n .t-row .phase-tag { margin-left: 0; }
 .item.decided { border-style: dashed; background: var(--panel-2); }
 .item.decided.accepted { border-color: var(--good); background: var(--good-soft); border-style: solid; animation: settle .9s ease-out; }
 .item.decided.rejected { opacity: .75; }
@@ -188,6 +191,9 @@ table.cmp th.asc, table.cmp th.desc { color: var(--ink); }
 #legend .ticks span:last-child { transform: translateX(-100%); }
 #legend select { width: 100%; margin-bottom: 6px; font-size: 12px; }
 #legend .lg-t { margin-top: 6px; font-weight: 600; }
+#legend .lv-tabs { display: flex; gap: 2px; margin: 4px 0; }
+#legend .lv-tabs button { flex: 1; padding: 2px 0; }
+#legend .lv-tabs button.on { background: #1d4e89; color: #fff; border-color: transparent; }
 #legend .lg-rows { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; color: var(--ink); }
 #legend .lg-rows > div { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 4px; }
 .sw { display: inline-block; width: 18px; height: 4px; background: var(--c); border-radius: 2px; flex: none; }
@@ -261,6 +267,7 @@ table.cmp th.asc, table.cmp th.desc { color: var(--ink); }
 .ld-steps li.now, .ld-steps li.ok { color: var(--ink); }
 .ld-steps li.ok .p { width: 100% !important; background: var(--good); }
 .ld-tip { font-size: 12px; color: var(--muted); }
+.ld-fail { margin-top: 8px; display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
 #btn-next5 { white-space: nowrap; }
 .lg-toggle { display: none; }
 #btn-next5.on { background: var(--accent-soft); border-color: var(--accent); }
@@ -508,6 +515,7 @@ details > summary.flash { animation: flash 1.4s ease-out; }
 .setup h2 { margin: 0; padding: 18px 20px 4px; font-size: 18px; }
 .setup-intro { margin: 0; padding: 0 20px 10px; font-size: 13px; line-height: 1.6; }
 .setup-body { overflow-y: auto; padding: 0 20px 8px; border-top: 1px solid var(--line, #e3e6ea); }
+.setup-quick { padding: 0 20px 10px; margin: 0; justify-content: flex-start; }
 .setup section { padding: 10px 0 4px; }
 .setup h3 { margin: 4px 0 6px; font-size: 14px; }
 .setup-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 13px; }
@@ -557,3 +565,10 @@ button.danger:hover:not(:disabled) { background: #fdecea; }
 .network-label .sw { width: 16px; }
 .network-label .sw.dot { width: 10px; margin-right: 6px; }
 .network-label .sw.congestion { height: 6px; }
+
+/* 분구 미리보기 창: 지도를 가리지 않게 왼쪽 위에 떠 있다 (지도에서 동을 눌러 구를 바꾼다) */
+.gu-float { position: fixed; left: 12px; top: 64px; z-index: 1500; width: min(340px, calc(100vw - 24px)); max-height: calc(100vh - 90px); overflow: auto;
+  background: var(--panel, #fff); color: var(--ink, #1d232b); border: 1px solid var(--line, #ccc); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.22); padding: 10px 12px; }
+.gu-float h3 { margin: 0 0 4px; font-size: 15px; }
+.gu-float .item { padding: 6px 0; border-bottom: 1px solid var(--line, #eee); }
+.gu-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; flex: none; margin-right: 6px; align-self: center; }

@@ -3,10 +3,10 @@ import { DIFFICULTY, UPGRADES, NEW_BUILDS, KP_COST_FACTOR, AIRPORT, upgradeCost,
 import { findRailReuse } from './reuse.js';
 import { P } from '../sim/params.js';
 import { routeKey } from '../sim/model.js';
-import { smoothSegments, polylineKm } from './curve.js';
+import { smoothSegments, polylineKm, minRadiusKm, curveSpeed } from './curve.js';
 import { serviceLinks } from './services.js';
 import { initRail, operatorOf, OPERATORS, OP_FACTORS, MERGE_MIN_INTEGRATION, EQUITY_STEP } from './operators.js';
-import { MEGA, applyMega, TSR_FREIGHT } from './mega.js';
+import { MEGA, applyMega, TSR_FREIGHT, kpACYear } from './mega.js';
 import { dueum } from './local.js';
 import { saveAuto, loadAuto, clearAuto } from './savestore.js';
 
@@ -21,6 +21,7 @@ export function newGame(difficulty = 'normal') {
     version: 1,
     difficulty,
     year: START_YEAR,
+    devAnchored: 1,     // 새 게임은 입주 인구를 처음부터 제자리에 붙든다 (예전 저장만 한 번 되돌린다)
     budget: d.annualBudget,
     debt: 0,
     approval: 60,
@@ -81,27 +82,59 @@ export function baseTransfers(base) {
   let out = transferCache.get(base.stations);
   if (out) return out;
   out = [];
-  const metro = (base.metro_stations || []).map(([nm, n]) => [stName(nm), n, base.nodes[n]]);
+  // 위도순으로 놓고 ±0.01° 안만 본다 (모든 짝을 견주면 불러올 때 0.4초). 짝은 예전처럼 도시철도역 목록 순서로 넣는다
+  const metro = (base.metro_stations || []).map(([nm, n], o) => [stName(nm), n, base.nodes[n], o]).filter((x) => x[2]).sort((x, y) => x[2][1] - y[2][1]);
+  const lat = metro.map((x) => x[2][1]);
   const km = (p, q) => Math.hypot((p[0] - q[0]) * 88.4, (p[1] - q[1]) * 111);
   const seen = new Set();
   for (const [nm, r] of base.stations) {
     const pr = base.nodes[r];
     if (!pr) continue;
-    for (const [mn, m, pm] of metro) {
-      if (m === r || !pm || Math.abs(pm[1] - pr[1]) > 0.01) continue;
+    let lo = 0, hi = lat.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (lat[mid] < pr[1] - 0.01) lo = mid + 1; else hi = mid; }
+    const sn = stName(nm), hits = [];
+    for (let q = lo; q < metro.length && metro[q][2][1] <= pr[1] + 0.01; q++) {
+      const [mn, m, pm, o] = metro[q];
+      if (m === r) continue;
       const d = km(pr, pm);
-      if ((mn === stName(nm) && d <= 1) || d <= 0.25) {
-        const k = `${r}-${m}`;
-        if (!seen.has(k)) { seen.add(k); out.push([r, m]); }
-      }
+      if ((mn === sn && d <= 1) || d <= 0.25) hits.push([o, m]);
+    }
+    hits.sort((x, y) => x[0] - y[0]);
+    for (const [, m] of hits) {
+      const k = `${r}-${m}`;
+      if (!seen.has(k)) { seen.add(k); out.push([r, m]); }
     }
   }
   transferCache.set(base.stations, out);
   return out;
 }
 
-/** 기본 네트워크 + 개량 + 신설을 합친, 시뮬레이션에 넘길 네트워크 */
+/**
+ * 망을 바꾸는 상태 값의 지문: 같으면 지난번 망을 그대로 돌려준다 (화면 하나 그리는 데 여러 번 불러 해마다 수십 번 망 전체를 만들었다).
+ * 사업 상태·신설 구간·개량·운행 계통·폐선·감편·공항·환승 연결처럼 effectiveNetwork가 읽는 것을 모두 넣는다
+ */
+function netKey(state) {
+  let p = 0;
+  for (const x of state.projects) p = (Math.imul(p, 31) + (x.status === 'building' ? 1 : x.status === 'done' ? 2 : 3) + (x.kind === 'upgrade' ? 4 : 0)) | 0;
+  let nl = 0;
+  for (const l of state.newLinks) nl = (Math.imul(nl, 31) + (l.built ? 1 : 0) + (l.replaced ? 2 : 0) + l.a * 7 + l.b) | 0;
+  const osm = state.osm ? `${Object.keys(state.osm.opened || {}).length}:${Object.keys(state.osm.auto || {}).length}` : '';
+  return JSON.stringify([state.year, state.projects.length, p, state.newNodes.length, state.newLinks.length, nl, state.overrides, osm, state.replaced ?? null,
+    state.closedLines ?? null, state.lineFreq ?? null, state.newStations, (state.newAirports || []).map((a) => [a.id, !!a.built]), state.airportCap ?? null,
+    state.airportIntl ?? null, state.air?.routes ?? null, state.air?.banned ?? null, state.services ?? null, state.closedStations ?? null, state.transfers ?? null]);
+}
+const netMemo = new WeakMap();   // state → {base, key, net}
+
+/** 기본 네트워크 + 개량 + 신설을 합친, 시뮬레이션에 넘길 네트워크 (돌려받은 망은 고치지 말 것: 다음 호출이 같은 것을 받는다) */
 export function effectiveNetwork(base, state) {
+  const key = netKey(state), m = netMemo.get(state);
+  if (m && m.base === base && m.key === key) return m.net;
+  const net = buildNetwork(base, state);
+  netMemo.set(state, { base, key, net });
+  return net;
+}
+
+function buildNetwork(base, state) {
   const nodes = base.nodes.concat(state.newNodes);
   const building = new Set();
   for (const p of state.projects) if (p.status === 'building' && p.kind === 'upgrade') p.links.forEach((id) => building.add(id));
@@ -124,7 +157,7 @@ export function effectiveNetwork(base, state) {
   const stations = base.stations.map((s) => s[1])
     .concat((base.metro_stations || []).map((s) => s[1]), state.newStations);
   const airports = (base.airports || []).map((a) => ({ ...a, cap: state.airportCap?.[a.id] ?? a.cap }))
-    .concat((state.newAirports || []).filter((a) => a.built).map((a) => ({ ...a, cap: state.airportCap?.[a.id] ?? a.cap, intl: true })));
+    .concat((state.newAirports || []).filter((a) => a.built).map((a) => ({ ...a, cap: state.airportCap?.[a.id] ?? a.cap, intl: !!state.airportIntl?.[a.id] })));
   const airRoutes = Object.values(state.air?.routes || {}).map((r) => ({ a: r.a, b: r.b, freq: r.freq }));
   // 운행 계통(특급·급행·보통)은 실제 링크 뒤에 가상 링크로 붙는다
   const physCount = links.length;
@@ -279,13 +312,90 @@ export function cancelProject(base, state, id) {
     }
   }
   if (p.kind === 'airport') state.newAirports = (state.newAirports || []).filter((a) => a.id !== p.airport || a.built);
-  for (const k of ['devels', 'housing', 'sez', 'transfers']) if (state[k]) state[k] = state[k].filter((x) => x.id !== p.id);
-  if (state.restAreas) state.restAreas = state.restAreas.filter((r) => r.built || !(p.links || []).includes(r.links[0]));
+  for (const k of ['devels', 'sez', 'transfers']) if (state[k]) state[k] = state[k].filter((x) => x.id !== p.id);
+  if (p.kind === 'housing') cancelHousingPhase(state, p);
+  if (state.restAreas) state.restAreas = state.restAreas.filter((r) => r.built || (r.project !== p.id && !(p.links || []).includes(r.links[0])));
   // 시민들은 짓다 만 사업을 반기지 않는다: 큰 사업일수록 지지율이 조금 내린다
   const hit = p.cost >= 50000 ? 2 : p.cost >= 10000 ? 1 : 0;
   state.approval = Math.max(0, state.approval - hit);
   state.log.unshift(`${state.year}년 사업 취소: ${p.label} (투입한 ${formatWon(p.paid)}은 돌려받지 못합니다, 남은 ${formatWon(Math.max(0, p.cost - p.paid))} 절감${hit ? `, 지지율 −${hit}` : ''})`);
-  return { ok: true, hit };
+  // 짓다 만 노선의 IC·역 이름은 착공할 때 붙어, 취소해도 지도에 남았다 (잔여 IC): 이 사업이 붙인 이름은 그 전 이름으로 되돌리고,
+  // 지나는 구간이 없어진 새 노드의 이름은 지운다
+  const dropped = [];
+  for (const [n, prev] of p.named || []) {
+    if (state.projects.some((q) => q !== p && q.status !== 'cancelled' && (q.named || []).some(([m]) => m === n))) continue;   // 다른 사업도 이 노드에 이름을 붙였다
+    const cur = state.names[n];
+    if (!cur) continue;
+    dropped.push(cur);
+    if (prev) state.names[n] = prev; else delete state.names[n];
+  }
+  dropped.push(...dropOrphanNames(base, state));
+  return { ok: true, hit, dropped };
+}
+
+/**
+ * 지나는 구간이 없는 새 노드의 이름(취소한 사업이 남긴 IC·역)을 지운다. 지운 이름 [{name, kind}]
+ * 자료 노드(기존 IC·역의 이름 바꾸기)는 그대로 둔다
+ */
+export function dropOrphanNames(base, state) {
+  const used = new Set();
+  base.links.forEach((l, i) => { if (!state.replaced?.[i]) { used.add(l.a); used.add(l.b); } });
+  for (const nl of state.newLinks) if (!nl.replaced) { used.add(nl.a); used.add(nl.b); }
+  const out = [];
+  for (const [k, v] of Object.entries(state.names || {})) {
+    if (+k < base.nodes.length || used.has(+k)) continue;
+    out.push(v);
+    delete state.names[k];
+  }
+  return out;
+}
+
+export const IC_REMOVE_COST = 20;   // 새로 놓은 IC·JCT 철거 (억원)
+
+/**
+ * 게임에서 놓은 IC·JCT를 철거한다: 이름을 지우고 그 노드에서 나가는 연결도로·연결로를 걷어 낸다
+ * (짓는 중인 IC 사업이면 취소한다). 고속도로 본선은 그대로 둔다.
+ * 예전 판에서 사업을 취소해 기존 도로 노드에 이름만 남은 IC도 이것으로 걷는다 (연결도로가 없으면 이름만)
+ */
+export function removeIC(base, state, node) {
+  const nm = state.names[node];
+  if (!nm || !/^(IC|JCT)$/.test(nm.kind)) return { ok: false, reason: '게임에서 놓은 IC·JCT만 철거할 수 있습니다.' };
+  if (state.budget < IC_REMOVE_COST) return { ok: false, reason: '예산이 부족합니다.' };
+  const ramps = [];
+  state.newLinks.forEach((nl, k) => { if (!nl.replaced && (nl.a === node || nl.b === node) && nl.mode === 0 && /연결(도로|로)$/.test(nl.name || '')) ramps.push(base.links.length + k); });
+  for (const p of state.projects) {
+    if (p.status === 'building' && (p.type === 'ic' || p.type === 'jct') && (p.links || []).some((id) => ramps.includes(id))) { p.status = 'cancelled'; p.cancelYear = state.year; }
+  }
+  for (const id of ramps) { const nl = state.newLinks[id - base.links.length]; nl.replaced = true; nl.removed = true; }
+  delete state.names[node];
+  state.budget -= IC_REMOVE_COST;
+  state.log.unshift(`${state.year}년 ${nm.name} 철거 (연결도로 ${ramps.length}곳, ${formatWon(IC_REMOVE_COST)})`);
+  return { ok: true, name: nm, ramps: ramps.length };
+}
+
+/**
+ * 택지지구 단계 취소: 1단계를 접으면 지구 전체(2단계 공사도 함께), 2단계만 접으면 1단계 세대만 남긴다
+ * (예전에는 지구 번호가 1단계 사업 번호와만 같아, 2단계를 접으면 지구가 끝나지 않고 1단계를 접으면 2단계가 돈만 쓰고 입주하지 않았다)
+ */
+function cancelHousingPhase(state, p) {
+  const h = (state.housing || []).find((x) => x.id === p.id || x.phases?.some((q) => q.id === p.id));
+  if (!h) return;
+  const first = h.id === p.id;
+  if (first || !h.phases) {
+    for (const q of h.phases || []) {
+      const other = q.id !== p.id && state.projects.find((x) => x.id === q.id && x.status === 'building');
+      if (other) { other.status = 'cancelled'; other.cancelYear = state.year; }
+    }
+    state.housing = state.housing.filter((x) => x !== h);
+    return;
+  }
+  const q = h.phases.find((x) => x.id === p.id);
+  const share = q.households / h.households;
+  h.phases = h.phases.filter((x) => x !== q);
+  h.persons = Math.round(h.persons * (1 - share));
+  h.net = h.persons;
+  h.revenue = Math.round(h.revenue * (1 - share));
+  h.households -= q.households;
 }
 
 // ------------------------------------------------------------ 철도 운영사 (코레일·KPRail)
@@ -429,7 +539,40 @@ export const AIR = {
   targetLoad: 0.75,     // 운항 횟수는 탑승률 75%를 목표로 맞춘다
   maxFreq: 150,
   maxNewPerYear: 5,
+  fullVC: 1.1,          // 이 혼잡도(V/C)를 넘는 공항에는 항공사가 새 노선을 내지 않는다 (활주로·터미널 슬롯)
+  intlCost: 300,        // 새 공항 국제공항 지정 (세관·출입국·검역 시설, 억원)
 };
+
+/** 새 공항 국제공항 지정: 지정하기 전에는 국내선만 뜬다 */
+export function designateIntl(state, id) {
+  if (state.airportIntl?.[id]) return { ok: false, reason: '이미 국제공항입니다.' };
+  if (!canAfford(state, AIR.intlCost, 1)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
+  state.budget -= AIR.intlCost;
+  if (state.budget < 0) { state.debt += -state.budget; state.budget = 0; }
+  (state.airportIntl ||= {})[id] = 1;
+  return { ok: true };
+}
+
+/**
+ * 예전 저장 손보기 (한 번): 장거리 기본 노선(인천–방콕·LA 등)을 넣고, 국제공항으로 지정하지 않은 새 공항의 국제선은 거둔다
+ * (예전에는 새 공항이 저절로 국제공항이 되어 서울 둘레 국제선 수요를 빨아들였다)
+ */
+export function migrateAir(state, longhaul, foreignIds) {
+  if (state.air?.longhaul) return;
+  state.air.longhaul = 1;
+  for (const [a, b, f] of longhaul) {
+    const key = routeKey(a, b);
+    if (!state.air.routes[key] && !state.air.banned.includes(key)) state.air.routes[key] = { a, b, freq: f, origin: 'base', low: 0, keep: true };
+    else if (state.air.routes[key]) state.air.routes[key].keep = true;
+  }
+  const fresh = new Set((state.newAirports || []).filter((a) => !state.airportIntl?.[a.id]).map((a) => a.id));
+  for (const [key, r] of Object.entries(state.air.routes)) {
+    if ((fresh.has(r.a) && foreignIds.has(r.b)) || (fresh.has(r.b) && foreignIds.has(r.a))) {
+      delete state.air.routes[key];
+      state.log.unshift(`${state.year}년 국제선 정리: 국제공항으로 지정하지 않은 공항의 국제선을 거둡니다`);
+    }
+  }
+}
 
 /** 처음 시작할 때 기본 노선표(data/air_sea.json routes)로 채운다 */
 export function initAirRoutes(state, defaults) {
@@ -437,6 +580,7 @@ export function initAirRoutes(state, defaults) {
   if (state.air.routes) return;
   state.air.routes = {};
   for (const [a, b, f] of defaults) state.air.routes[routeKey(a, b)] = { a, b, freq: f, origin: 'base', low: 0 };
+  state.air.longhaul = 1;
 }
 
 function targetFreq(pax, seats) {
@@ -462,8 +606,10 @@ export function updateAirRoutes(state, air, name) {
   }
   if (!state.air.auto) return;
   let opened = 0;
+  const full = (k) => air.pax && air.cap && air.pax[k] > AIR.fullVC * air.cap[k];
   for (const [ai, bi, pax] of air.latent) {
     if (pax < AIR.openPax || opened >= AIR.maxNewPerYear) break;
+    if (full(ai) || full(bi)) continue;
     const a = air.ids[ai], b = air.ids[bi], key = routeKey(a, b);
     if (routes[key] || state.air.banned.includes(key)) continue;
     routes[key] = { a, b, freq: targetFreq(pax, air.seats), origin: 'auto', low: 0 };
@@ -477,6 +623,8 @@ export function startOpenRoute(state, apA, apB) {
   const key = routeKey(apA.id, apB.id);
   if (state.air.routes[key]) return { ok: false, reason: '이미 운항 중인 노선입니다.' };
   if (state.projects.some((p) => p.status === 'building' && p.key === key)) return { ok: false, reason: '이미 준비 중인 노선입니다.' };
+  if ((apA.ext || apB.ext) && !(apA.intl && apB.intl)) return { ok: false, reason: '국내공항입니다. 먼저 국제공항으로 지정하세요.' };
+  if ((apA.longhaul && !apB.hub) || (apB.longhaul && !apA.hub)) return { ok: false, reason: '장거리 노선은 허브 공항(인천)에서만 뜹니다.' };
   const cost = Math.round(AIR.openCost * (apA.country !== apB.country ? 1.5 : 1));
   if (!canAfford(state, cost, 1)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
   startProject(state, { id: crypto.randomUUID(), kind: 'airRoute', key, a: apA.id, b: apB.id, links: [], cost, years: 1,
@@ -498,7 +646,7 @@ export function linksUnderWork(state) {
 }
 
 /** 기존 링크 개량. linkIds는 한 링크 또는 같은 노선의 여러 링크 */
-export function startUpgrade(base, state, linkIds, upgradeId) {
+export function startUpgrade(base, state, linkIds, upgradeId, opts = {}) {
   const ids = Array.isArray(linkIds) ? linkIds : [linkIds];
   const u = UPGRADES.find((x) => x.id === upgradeId);
   const work = linksUnderWork(state);
@@ -506,12 +654,13 @@ export function startUpgrade(base, state, linkIds, upgradeId) {
   if (!targets.length) return { ok: false, reason: '이미 공사 중이거나 적용할 수 없는 구간입니다.' };
   let cost = 0, km = 0;
   for (const id of targets) { const l = linkAt(base, state, id); cost += upgradeCost(u, l); km += l.len; }
+  if (opts.discount) cost = Math.round(cost * opts.discount);   // 노선 일괄처럼 한 사업으로 묶은 할인
   const fund = fundFor(state, targets.map((id) => linkAt(base, state, id)));
   if (!canAfford(state, cost, u.years, fund)) return { ok: false, reason: fund === 'gov' ? '예산과 차입 한도가 부족합니다.' : '운영사 잔액이 부족합니다.' };
   const first = linkAt(base, state, targets[0]);
   startProject(state, {
     id: crypto.randomUUID(), kind: 'upgrade', upgrade: u.id, links: targets, cost, years: u.years, fund,
-    label: `${first.name || '무명 구간'} ${resolve(u.label, first)} (${km.toFixed(0)}km)`,
+    label: opts.label ? `${opts.label} (${km.toFixed(0)}km)` : `${first.name || '무명 구간'} ${resolve(u.label, first)} (${km.toFixed(0)}km)`,
     // 폐도·폐선은 완공 때 걷어 낼 구간 (직선화의 옛 구간과 같이 처리한다: 저장 정리·운행 계통 다시 짜기)
     ...(u.retire ? { retire: targets.slice() } : {}),
   });
@@ -702,9 +851,14 @@ export function startNewBuild(base, state, plan) {
     const a = plan.points[i0], b = plan.points[i1];
     const kp = isKP(a.lat, a.lon) && isKP(b.lat, b.lon) ? 1 : 0;
     total += Math.round(cost); kmTotal += len;
+    // 선형이 급하게 굽은 구간은 설계 속도를 곡선 반경에 맞춰 낮춘다 (도시철도는 표정 속도라 그대로)
+    const lim = spec.mode === 2 ? Infinity : curveSpeed(minRadiusKm(geom), spec.mode);
     links.push({
       id: firstId + links.length, a: nodeIds[i0], b: nodeIds[i1], mode: spec.mode, len: Math.round(len * 100) / 100,
       kp, name: plan.lineName || '', built: false, geom: geom.flat().map((v) => Math.round(v * 1e5) / 1e5), ...spec.attrs,
+      // 새로 놓는 선로는 북측 땅이라도 남측 규격(표준궤·남측 설계 기준)으로 짓는다: '남측 규격 일괄 개량' 대상이 아니고 북측 규격 표시도 없다
+      ...(spec.mode >= 1 ? { sstd: 1, std: 1 } : {}),
+      ...(lim < spec.attrs.speed ? { speed: Math.max(lim, 30) } : {}),
     });
   }
   total += plan.extraCost || 0;   // 중간 IC·역·휴게소 설치비
@@ -716,9 +870,13 @@ export function startNewBuild(base, state, plan) {
   }
   if (spec.mode === 2) { const c = metroColour(base, state, plan.lineName || '', plan.points); if (c) for (const l of links) l.colour = c; }
   state.newLinks.push(...links);
+  // 이 사업이 이름을 붙인 노드와 그 전 이름: 사업을 취소하면 되돌린다 (기존 도로 노드를 IC·JCT로 쓴 곳도)
+  const named = [];
   plan.points.forEach((pt, i) => {
     const nm = plan.names[i];
-    if (nm && nodeIds[i] != null) state.names[nodeIds[i]] = { name: nm.name, kind: nm.kind, auto: nm.auto !== false };
+    if (!nm || nodeIds[i] == null) return;
+    named.push([nodeIds[i], state.names[nodeIds[i]] || null]);
+    state.names[nodeIds[i]] = { name: nm.name, kind: nm.kind, auto: nm.auto !== false };
   });
   for (const r of plan.restAreas || []) (state.restAreas ||= []).push({ ...r, built: false, links: links.map((l) => l.id) });
   const endName = (i) => plan.points[i].name || nameOf(state, nodeIds[i]) || '';
@@ -730,7 +888,7 @@ export function startNewBuild(base, state, plan) {
   startProject(state, {
     id: crypto.randomUUID(), kind: 'new', type: plan.type, links: links.map((l) => l.id), extension: !!plan.extendOf,
     stations: spec.mode >= 1 ? nodeIds.filter((n, i) => n != null && plan.names[i]?.kind === 'station') : [],
-    cost: total, years: spec.years, label, fund, plan: plan.plan, govShare: plan.ppp ? plan.ppp.subsidy : undefined,
+    cost: total, years: spec.years, label, fund, plan: plan.plan, govShare: plan.ppp ? plan.ppp.subsidy : undefined, named,
     reusedLinks: [...new Set(reuse.flatMap((r) => r.links))],
   });
   return { ok: true };
@@ -775,9 +933,9 @@ export function placeName(state, level, id, original) {
   const key = placeKey(level, id);
   const name = state.placeNames?.[key] || state.adminNames?.[key];
   if (name) return name;
-  // 노동자구 폐지(행정구역 정리): 읍면동 단위 '…노동자구'를 '…리'로
+  // 노동자구 폐지(행정구역 정리): 읍면동 단위 '…노동자구'를 '…리'로 (자료는 북측 표기 '로동자구')
   let out = original;
-  if (level === 'unit' && state.local?.admin?.workers === 'abolish' && /노동자구$/.test(out || '')) out = out.replace(/노동자구$/, '리');
+  if (level === 'unit' && state.local?.admin?.workers === 'abolish' && /[노로]동자구$/.test(out || '')) out = out.replace(/[노로]동자구$/, '리');
   // 두음법칙(행정구역 정리): 남측 지명은 이미 맞춰져 있어 바뀌지 않는다
   if (level === 'unit' && state.local?.admin?.dueum === 'apply') out = dueum(out);
   return out;
@@ -868,6 +1026,17 @@ function applyLinePolicy(links, state) {
   }
 }
 
+export const REPAY_SHARES = [0, 0.2, 0.5, 1];   // 해마다 남은 예산에서 자동으로 갚는 몫
+
+/** 지금 가진 예산으로 빚을 갚는다 (예산·부채 모두 줄고, 이자도 그만큼 준다). 실제로 갚은 금액 */
+export function repayDebt(state, amount) {
+  const r = Math.round(Math.min(state.debt, Math.max(0, state.budget), Math.max(0, amount)));
+  if (r <= 0) return 0;
+  state.debt -= r; state.budget -= r;
+  state.log.unshift(`${state.year}년 부채 상환: ${formatWon(r)} (남은 부채 ${formatWon(state.debt)})`);
+  return r;
+}
+
 export function closeLine(state, name) {
   (state.closedLines ||= {})[name] = state.year;
   delete state.lineFreq?.[name];
@@ -893,6 +1062,7 @@ export function setLineFreq(state, name, f) {
 export function startMega(state, id) {
   const m = MEGA.find((x) => x.id === id);
   if (!m || !m.ready(state)) return { ok: false, reason: m?.need ? `조건: ${m.need}` : '시작할 수 없습니다.' };
+  if (!(m.cost > 0)) return { ok: false, reason: '할 일이 없습니다 (이미 모두 교류입니다).' };
   if (state.projects.some((p) => p.kind === 'mega' && p.mega === id)) return { ok: false, reason: '이미 착공했습니다.' };
   if (!canAfford(state, m.cost, m.years)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
   startProject(state, { id: crypto.randomUUID(), kind: 'mega', mega: id, links: [], cost: m.cost, years: m.years, label: m.label });
@@ -900,7 +1070,13 @@ export function startMega(state, id) {
 }
 
 /** 시베리아 횡단철도: 해마다 대륙 통과 화물 수입을 북측(합병 뒤 통합) 철도 운영사가 얻는다 */
-export function settleMega(state) {
+export function settleMega(state, base) {
+  // 북측 철도 교류화: 공사 중 해마다 긴 노선부터 차례로 교류 개통
+  for (const p of state.projects) {
+    if (p.status !== 'building' || p.kind !== 'mega' || p.mega !== 'kp-ac' || !base) continue;
+    const names = kpACYear(base, state, p);
+    if (names.length) state.log.unshift(`${state.year}년 교류 25kV 개통: ${names.slice(0, 4).join('·')}${names.length > 4 ? ` 등 ${names.length}개 노선` : ''}`);
+  }
   if (!state.mega?.tsr) return;
   const ops = railOps(state);
   const op = state.rail?.merged ? 'merged' : 'kprail';
@@ -935,15 +1111,15 @@ export function advanceBudgetYear(base, state) {
       p.paid += amt;
     }
   }
-  // 상환: 남은 예산의 일부로 빚을 갚는다
+  // 자동 상환: 남은 예산의 일부(사업 탭에서 고른 몫, 기본 20%)로 빚을 갚는다
   if (state.debt > 0 && state.budget > 0) {
-    const r = Math.min(state.debt, Math.round(state.budget * 0.2));
+    const r = Math.min(state.debt, Math.round(state.budget * (state.repayShare ?? 0.2)));
     state.debt -= r; state.budget -= r;
   }
   state.integration = Math.min(1, state.integration + P.integrationPerYear);
   for (const k of Object.keys(state.happyBonus || {})) {
     state.happyBonus[k] *= 0.9;
-    if (state.happyBonus[k] < 0.2) delete state.happyBonus[k];
+    if (Math.abs(state.happyBonus[k]) < 0.2) delete state.happyBonus[k];   // 감점(음수)도 서서히 줄어 없어진다
   }
   for (const p of done) state.log.unshift(`${state.year}년 ${p.kind === 'osm' ? '개통' : '완공'}: ${p.label.replace(', 공사 중', '')}`);
   // 예전 저장 게임(진행 중 사업 없음): OSM 개통 예정 연도에 저절로 연다
@@ -971,7 +1147,15 @@ function completeProject(base, state, p) {
   if (p.kind === 'housing') { for (const id of p.links || []) { const l = state.newLinks[id - base.links.length]; if (l) l.built = true; } return; }
   if (p.kind === 'vehicles' || p.kind === 'devel' || p.kind === 'sez') return;   // 역세권 개발은 해 넘길 때 main이 정산한다 (settleDevels)
   if (p.kind === 'mega') { applyMega(base, state, p.mega); return; }
-  if (p.kind === 'osm') { for (const i of p.links) state.osm.opened[i] = true; return; }   // 계통 차량 추가 구입 (편성 수는 고칠 때 이미 바뀌었다)
+  if (p.kind === 'osm') {
+    // 중간역 자리를 넣으려고 나눈 구간(새 구간)도 함께 열고, 그 역들도 연다
+    for (const i of p.links) {
+      if (i < base.links.length) state.osm.opened[i] = true;
+      else { const nl = state.newLinks[i - base.links.length]; if (nl) nl.built = true; }
+    }
+    for (const n of p.stations || []) if (!state.newStations.includes(n)) state.newStations.push(n);
+    return;
+  }   // 계통 차량 추가 구입 (편성 수는 고칠 때 이미 바뀌었다)
   if (p.kind === 'airRoute') {
     state.air.routes[p.key] = { a: p.a, b: p.b, freq: AIR.manualFreq, origin: 'manual', low: 0 };
     state.air.banned = state.air.banned.filter((k) => k !== p.key);
@@ -1021,9 +1205,15 @@ function completeProject(base, state, p) {
       if (id < base.links.length) (state.replaced ||= {})[id] = true;
       else state.newLinks[id - base.links.length].replaced = true;
     }
-    if (p.stationMap) (state.closedStations ||= []).push(...Object.keys(p.stationMap).map(Number));
-    if (p.dropStations?.length) (state.closedStations ||= []).push(...p.dropStations);   // 직선화 때 폐역으로 고른 역
-    for (const r of state.restAreas || []) if (p.links.includes(r.links[0])) r.built = true;
+    // 다른 선로(다른 노선, 그사이 놓은 새 노선)가 아직 닿는 역은 닫지 않는다: 새 노선이 옛 역에 서서 다시 연 것을 또 닫던 것
+    const shut = [...Object.keys(p.stationMap || {}).map(Number), ...(p.dropStations || [])];
+    if (shut.length) {
+      const want = new Set(shut), live = new Set();
+      base.links.forEach((l, i) => { if (l.mode >= 1 && (want.has(l.a) || want.has(l.b)) && !state.replaced?.[i]) { live.add(l.a); live.add(l.b); } });
+      for (const l of state.newLinks) if (l.mode >= 1 && !l.replaced && (want.has(l.a) || want.has(l.b))) { live.add(l.a); live.add(l.b); }
+      (state.closedStations ||= []).push(...shut.filter((n) => !live.has(n)));
+    }
+    for (const r of state.restAreas || []) if (r.project === p.id || p.links.includes(r.links[0])) r.built = true;
     for (const s of p.stations) if (!state.newStations.includes(s)) state.newStations.push(s);
   }
 }

@@ -21,20 +21,25 @@ async function makePool() {
   try {
     await Promise.all(ports.map((p) => call(p, { type: 'init', zones: inputs.zones, grid: inputs.grid }, 120000)));
     return {
-      size: ports.length, netSent: null,
+      size: ports.length, netSent: null, gridSent: inputs.grid,
       // 망을 보낼 때는 주 워커가 그 망으로 구한 역세권 결과도 함께 보낸다 (보조 워커가 다시 계산하지 않게).
       // 그래서 sync·preNet은 늘 주 워커가 같은 망을 setNetwork한 뒤에 부른다
       async sync(net, snapshot, groups) {
         const send = this.netSent !== net;
         const access = send ? model.accessPack() : null;
-        await Promise.all(ports.map((p) => call(p, { type: 'sync', net: send ? net : null, access, snapshot, groups }, 60000)));
+        // 격자가 바뀌었으면(택지지구 입주 등) 보조 워커 모델도 같은 격자로
+        const grid = this.gridSent !== inputs.grid ? inputs.grid : null;
+        await Promise.all(ports.map((p) => call(p, { type: 'sync', net: send ? net : null, access, snapshot, groups, grid }, 60000)));
         this.netSent = net;
+        this.gridSent = inputs.grid;
       },
       // 망만 먼저 보내 보조 워커가 망을 짜게 한다 (주 워커가 경제·인구를 갱신하는 동안 함께)
       async preNet(net) {
         if (this.netSent === net) return;
+        const t0 = performance.now();
         const access = model.accessPack();
-        await Promise.all(ports.map((p) => call(p, { type: 'sync', net, access, snapshot: null }, 60000)));
+        const rs = await Promise.all(ports.map((p) => call(p, { type: 'sync', net, access, snapshot: null }, 60000)));
+        wmark(`helpers net: post+build ${Math.round(performance.now() - t0)}ms, build ${rs.map((r) => r.ms).join('/')}ms`);
         this.netSent = net;
       },
       run: (mk) => Promise.all(ports.map((p, k) => call(p, mk(k), 120000))),
@@ -77,6 +82,9 @@ const wmark = (name) => wperf.push([name, Math.round(performance.now())]);
 function results(totals, { withState = true } = {}) {
   lastTotals = totals;
   wmark('results start');
+  // 존 안 통행 수단 분담 (도시철도 구 안 이용 포함): 분담률과 도시철도 이용객에 더한다
+  try { totals.local = model.updateLocalTrips(); } catch (e) { console.warn('local trips', e); }
+  wmark('local trips');
   const links = model.linkResults();
   const zones = model.zoneResults();
   const stations = model.stationResults();
@@ -105,20 +113,30 @@ function calibrateFresh(ctx) {
 
 // 메시지는 하나씩 차례로 처리한다 (배정 도중 다른 요청이 상태를 건드리지 않게)
 let queue = Promise.resolve();
-self.onmessage = (ev) => { queue = queue.then(() => handle(ev.data)); };
+self.onmessage = (ev) => {
+  queue = queue.then(() => handle(ev.data));
+  // 첫 결과를 보낸 뒤 보조 워커의 모델을 미리 만들어 둔다: 첫해 넘기기가 그만큼 빨라진다
+  // (망은 해마다 바뀌어 넘길 때 보낸다)
+  if (ev.data?.type === 'init') queue = queue.then(async () => { if (pool === undefined) pool = await makePool(); });
+};
 
 async function handle(msg) {
   try {
+    // 택지지구가 덮는 읍면동: 존 안 통행에서 도시철도를 더 탄다 (model.localTransitCost)
+    const hs = () => { if (model && msg.ctx?.housingSubs) model.housingSubs = new Set(msg.ctx.housingSubs); };
+    hs();
     if (msg.type === 'init') {
       wmark('init received');
       post('progress', { label: '시뮬레이션 준비 중', value: 0 });
       model = new Model(msg.zones, new Float32Array(msg.grid));
+      hs();
       wmark('model built');
       if (msg.baseline?.json.access) model.preloadAccess(msg.baseline.json, msg.baseline.bin);
+      if (msg.gridEff) model.setGrid(new Float32Array(msg.gridEff));   // 택지지구 등 입주 인구를 더한 격자
       model.setNetwork(msg.net);
-      wmark('network set');
+      wmark(`network set (역세권 ${model.accessReused ? '기준선 것' : '다시 계산'})`);
       lastNet = msg.net;
-      inputs = { zones: msg.zones, grid: msg.grid, ports: msg.ports };
+      inputs = { zones: msg.zones, grid: msg.gridEff || msg.grid, ports: msg.ports };
       const bl = msg.baseline;
       if (!msg.snapshot) {
         // 새 게임: 미리 계산한 기준 연도가 있으면 그대로 쓴다
@@ -147,17 +165,38 @@ async function handle(msg) {
         model.computeAccess();
         results(totals);
       }
+    } else if (msg.type === 'resub') {
+      // 남측 법정리를 새 소구역으로 뗐다 (js/app/risplit.js): 소구역 구성이 바뀌어 모형을 새로 만든다.
+      // 존 상태(인구·소득·보정 상수)와 교통량은 그대로 옮기고, 읍면동 몫만 from(예전 모형 번호)·factor(몫)로 나눈다
+      const ex = model.exportBaseline(lastTotals, null), snap = ex.json.snapshot;
+      const pick = (arr, f) => Array.from(msg.from, (o, k) => (o >= 0 ? arr[o] * (f ? msg.factor[k] : 1) : 0));
+      snap.subW = pick(snap.subW, true);
+      snap.subAmenity = pick(snap.subAmenity, false);
+      model = new Model(msg.zones, new Float32Array(msg.grid));
+      hs();
+      if (msg.gridEff) model.setGrid(new Float32Array(msg.gridEff));
+      model.setNetwork(lastNet);
+      model.importBaseline({ ...ex.json, snapshot: snap }, ex.bin);
+      inputs = { ...inputs, zones: msg.zones, grid: msg.gridEff || msg.grid };
+      // 보조 워커도 새 구성으로: 다음 배정 때 같은 포트로 모형을 다시 만든다 (포트는 닫지 않는다)
+      pool = undefined;
+      beforeCache = null;
+      results(lastTotals);
     } else if (msg.type === 'step') {
       wmark('step received');
+      // 택지지구·역세권 개발 입주로 바뀐 1km 격자 (망을 짜기 전에: 바뀐 소구역의 역세권을 다시 구한다)
+      if (msg.ctx.grid) { model.setGrid(new Float32Array(msg.ctx.grid)); inputs.grid = msg.ctx.grid; }
       model.setNetwork(msg.net);
       wmark(model.netRebuilt ? 'network set (full rebuild)' : 'network set');
       const pre = pool ? pool.preNet(msg.net).catch(() => {}) : null;   // 보조 워커 망 짜기(역세권은 받아 씀)를 경제·인구 갱신과 함께
       lastNet = msg.net;
       // 지난 1년의 교통 조건으로 경제·인구를 갱신한 뒤 새 해의 통행을 배정한다 (완공된 역세권 개발 인구를 먼저 옮긴다)
       if (msg.ctx.dev?.length) model.applyDevelopments(msg.ctx.dev);
+      if (msg.ctx.anchor?.length) model.anchorDevelopments(msg.ctx.anchor);
+      if (msg.ctx.spread?.length) model.spreadDevelopments(msg.ctx.spread);   // 예전 저장: 한 읍면동에 몰린 택지지구 인구를 지구가 덮는 읍면동으로 (한 번)   // 예전 저장의 입주 인구를 제자리로 (한 번)
       // 열린 북측 관광지만 관광 수요를 끈다 (해금)
       if (msg.ctx.tourKP?.length === model.tourKP.length) model.tourKP.set(msg.ctx.tourKP);
-      model.advanceYear(msg.ctx.integration, msg.ctx.policy, msg.ctx.sez || []);
+      model.advanceYear(msg.ctx.integration, msg.ctx.policy, msg.ctx.sez || [], msg.ctx.univ || []);
       wmark('advanced');
       if (pre) await pre;
       beforeCache = null;

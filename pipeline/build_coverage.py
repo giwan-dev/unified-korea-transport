@@ -11,6 +11,7 @@
 끝나면 build_borders.py를 다시 돌려 data/admin/edges.geojson을 새로 만든다.
 
   .venv/Scripts/python -X utf8 pipeline/build_coverage.py
+  (build_admin.py --kp-only 뒤에는 build_coverage.py --kp-only: 시군구·시도 경계와 남측 읍면동은 그대로 두고 북측만 맞춘다)
   .venv/Scripts/python -X utf8 pipeline/build_borders.py
 """
 from __future__ import annotations
@@ -82,10 +83,44 @@ def snap(gs):
     return [clean(shapely.set_precision(g, GRID)) if not g.is_empty else g for g in gs]
 
 
-def main():
+def kp_only_units(master, sgg):
+    """--kp-only: 시군구 경계(sgg.geojson)와 남측 읍면동 도형은 그대로 두고, 북측 읍면동만 각 시군구 경계 안에 맞춰 단순화한다.
+    존 바깥 경계는 단순화하지 않아(simplify_boundary=False) 남측·이웃 시군과 맞물린 선이 그대로다"""
+    zone_simple = {int(f["properties"]["id"]): clean(shape(f["geometry"])) for f in sgg["features"]}
+    unit_geom = {}
+    index = json.loads((ADMIN / "units" / "index.json").read_text(encoding="utf-8"))
+    for e in index:
+        if e["country"] == "KR":
+            for f in json.loads((ADMIN / "units" / e["file"]).read_text(encoding="utf-8"))["features"]:
+                unit_geom[f["properties"]["id"]] = shape(f["geometry"])
+    by_zone = defaultdict(list)
+    for u in master["units"]:
+        if u["country"] == "KP":
+            by_zone[int(u["zone_id"])].append(u)
+    for zid, us in by_zone.items():
+        Z = zone_simple[zid]
+        parts = partition([wkb.loads(u["geom"]) for u in us], Z)
+        keep = [k for k, g in enumerate(parts) if not g.is_empty]
+        simp = list(shapely.coverage_simplify(snap([parts[k] for k in keep]), TOL, simplify_boundary=False))
+        for k, g in zip(keep, simp):
+            unit_geom[us[k]["id"]] = clean(g)
+    print("kp-only: KP units", sum(len(v) for v in by_zone.values()), "in", len(by_zone), "zones")
+    return zone_simple, unit_geom
+
+
+def main(kp_only=False):
     master = pickle.load((RAW / "admin_master.pkl").open("rb"))
     sgg = json.loads((ADMIN / "sgg.geojson").read_text(encoding="utf-8"))
     sido = json.loads((ADMIN / "sido.geojson").read_text(encoding="utf-8"))
+    units = master["units"]
+    if kp_only:
+        zone_simple, unit_geom = kp_only_units(master, sgg)
+    else:
+        zone_simple, unit_geom = rebuild_all(master, sgg, sido)
+    write_units_and_subs(units, zone_simple, unit_geom)
+
+
+def rebuild_all(master, sgg, sido):
     zones_raw = {int(f["properties"]["id"]): clean(shape(f["geometry"]))
                  for f in json.loads((RAW / "zones.geojson").read_text(encoding="utf-8"))["features"]}
     units = master["units"]
@@ -161,7 +196,10 @@ def main():
     (ADMIN / "sgg.geojson").write_text(json.dumps(sgg, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     (ADMIN / "sido.geojson").write_text(json.dumps(sido, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print("sgg", round((ADMIN / "sgg.geojson").stat().st_size / 1e6, 2), "MB, sido", round((ADMIN / "sido.geojson").stat().st_size / 1e6, 2), "MB")
+    return zone_simple, unit_geom
 
+
+def write_units_and_subs(units, zone_simple, unit_geom):
     # 4) 읍면동 경계 파일(시도별)
     index = json.loads((ADMIN / "units" / "index.json").read_text(encoding="utf-8"))
     for e in index:
@@ -216,4 +254,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    main(kp_only="--kp-only" in sys.argv[1:])

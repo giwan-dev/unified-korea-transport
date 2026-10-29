@@ -1,10 +1,9 @@
 """1km 인구 격자와 존 내부 소구역을 만든다 (build_data.py 다음에 실행).
 
-- 모든 존(시군구)은 build_admin.py의 읍면동(남: 행정동, 북: 보로노이 구역)을 소구역으로 쓴다.
+- 모든 존(시군구)은 build_admin.py의 읍면동(남: 행정동, 북: 리·동·읍·노동자구)을 소구역으로 쓴다.
   1km 격자 인구는 읍면동과 겹치는 면적 비율로 나눈다. 같은 시군구 안에서도 읍면동마다 인구가 달라
   역·도로 접속 지점과 통과 교통량이 위치에 따라 달라진다.
-- 북측 구역은 남측 행정동보다 훨씬 넓어서(중앙값 약 47km² 대 8km²), 넓거나 인구가 많은 구역은
-  인구 격자를 가중 k-평균으로 다시 나눈다 (KP_SPLIT_*).
+  (예전에는 북측 구역이 인구 묶음 보로노이라 넓어서 여기서 k-평균으로 더 나눴지만, 지금은 실제 리·동 단위라 그대로 쓴다)
 - 읍면동 경계가 존을 충분히 덮지 못하면 인구 격자를 가중 k-평균으로 묶어 소구역을 만든다.
 
 게임은 소구역마다 역·정류장 접근시간을 따지고, 해마다 소구역 사이 인구 이동을 계산한다.
@@ -49,9 +48,6 @@ METRO_PROVINCES = {"서울특별시", "부산광역시", "대구광역시", "인
 METRO_MIN_POP = 300_000
 METRO_MIN_DENSITY = 2000
 MIN_COVERAGE = 0.6        # 읍면동 경계가 존 면적의 이만큼은 덮어야 쓴다
-KP_SPLIT_AREA = 40        # 북측 구역을 나누는 기준 면적 (km²): 이 넓이마다 한 조각
-KP_SPLIT_POP = 25_000     # 북측 구역을 나누는 기준 인구: 이 인구마다 한 조각
-KP_SPLIT_MAX = 6          # 한 구역을 나누는 최대 조각 수
 KM_PER_DEG = 111.32
 
 
@@ -60,7 +56,7 @@ def log(*a):
 
 
 def load_master_units():
-    """build_admin.py의 읍면동(남: 행정동, 북: 보로노이 구역)을 존 번호별로 묶는다"""
+    """build_admin.py의 읍면동(남: 행정동, 북: 리·동·읍·노동자구)을 존 번호별로 묶는다"""
     m = pickle.load((RAW / "admin_master.pkl").open("rb"))
     out = {}
     for u in m["units"]:
@@ -158,8 +154,6 @@ def main():
             cover = sum(area_km2(g) for _, g in dongs) / max(p["area"], 1e-6)
             if not dongs or cover < MIN_COVERAGE:
                 dongs = []
-            elif c == "KP":
-                dongs = split_large_units(dongs, cx, cy, w, places)
             if len(dongs) == 1:
                 dongs = [(p["name"], dongs[0][1])]
             if dongs:
@@ -185,7 +179,7 @@ def main():
     (OUT / "zones.json").write_text(
         json.dumps([f["properties"] for f in fc["features"]], ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     # 이웃 소구역이 경계를 함께 쓰도록 한꺼번에 단순화한다 (하나씩 단순화하면 사이에 틈이 벌어진다)
-    geoms = shapely.coverage_simplify([f.pop("_geom") for f in sub_feats], 0.0007)
+    geoms = shapely.coverage_simplify([polygonal(f.pop("_geom")) for f in sub_feats], 0.0007)
     for f, g in zip(sub_feats, geoms):
         f["geometry"] = mapping(shapely.set_precision(g, 0.00001))
     (OUT / "subzones.geojson").write_text(
@@ -234,43 +228,6 @@ def split_by_dongs(dongs, cx, cy, w, res, sub0):
     return subs, recs
 
 
-def split_large_units(dongs, cx, cy, w, places):
-    """북측 구역 가운데 넓거나 인구가 많은 것을 인구 격자의 가중 k-평균으로 나눈다.
-    조각 경계는 k-평균 중심의 보로노이 칸을 구역 도형으로 자른 것이고, 이름은 조각 안이나 가까운 마을 이름(없으면 '구역 이름 n')."""
-    out = []
-    pts = shapely.points(cx, cy)
-    for name, g in dongs:
-        inside = shapely.contains_xy(g, cx, cy)
-        a, pop = area_km2(g), float(w[inside].sum())
-        k = int(min(KP_SPLIT_MAX, max(math.ceil(a / KP_SPLIT_AREA), math.ceil(pop / KP_SPLIT_POP))))
-        k = min(k, int(inside.sum()))
-        if k < 2:
-            out.append((name, g))
-            continue
-        lat = g.centroid.y
-        scale = np.array([math.cos(math.radians(lat)), 1.0])
-        xy = np.column_stack([cx[inside], cy[inside]])
-        centers, _ = weighted_kmeans(xy * scale, np.maximum(w[inside], 1e-3), k)
-        centers = centers / scale
-        cells = shapely.voronoi_polygons(shapely.MultiPoint([tuple(c) for c in centers]), extend_to=g.envelope.buffer(0.05))
-        used = set()
-        pieces = []
-        for cell in cells.geoms:
-            piece = g.intersection(cell)
-            if piece.is_empty or piece.area <= 0:
-                continue
-            piece = piece if piece.geom_type in ("Polygon", "MultiPolygon") else shapely.unary_union(
-                [x for x in getattr(piece, "geoms", [piece]) if x.geom_type in ("Polygon", "MultiPolygon")])
-            if piece.is_empty:
-                continue
-            rp = piece.representative_point()
-            nm = place_name(places, rp.x, rp.y, used, max_km=3)
-            pieces.append((nm if nm and nm != name else None, piece))
-        for j, (nm, piece) in enumerate(pieces):
-            out.append((nm or f"{name} {j + 1}", piece))
-    return out
-
-
 def place_name(places, x, y, used, max_km=4):
     """소구역 중심에서 가까운 동·마을 이름 (이미 쓴 이름은 피한다)"""
     best, bd = None, max_km
@@ -309,6 +266,14 @@ def split_kmeans(p, cx, cy, w, res, sub0, metro=False):
         shapes.append(unary_union(sq) if sq else shapely.Point(centers[j]).buffer(0.01))
     recs = [(x, y, pw, sub0 + j) for x, y, pw, j in zip(cx, cy, w, lab)]
     return subs, recs, shapes
+
+
+def polygonal(g):
+    """교차 연산 뒤 섞여 나오는 선·점을 버리고 면만 남긴다 (coverage_simplify는 면만 받는다)"""
+    if g.geom_type in ("Polygon", "MultiPolygon"):
+        return g
+    parts = [x for x in getattr(g, "geoms", []) if x.geom_type in ("Polygon", "MultiPolygon")]
+    return unary_union(parts) if parts else shapely.Polygon()
 
 
 def sub_feature(sid, zone, name, geom):

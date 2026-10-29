@@ -28,6 +28,56 @@ export function rememberNetwork(stamp, base, zones) {
   });
 }
 
+/**
+ * 지금 망에서 앞의 N개 노드·L개 구간만 있던 것으로 친 좌표표: 자료 판 표시는 같은데 기본 노드·구간 수가 다른 저장
+ * (판을 올린 뒤 브라우저가 예전 파일 일부를 캐시에서 써서 구간 고치기가 빠진 채 저장한 경우 등)을 옮길 때 쓴다
+ */
+export function refFromBase(base, zones, N, L) {
+  const xy = new Float64Array(N * 2).fill(NaN);
+  for (let i = 0; i < Math.min(N, base.nodes.length); i++) { xy[2 * i] = base.nodes[i][0]; xy[2 * i + 1] = base.nodes[i][1]; }
+  const ab = new Int32Array(L * 3).fill(-1);
+  for (let i = 0; i < Math.min(L, base.links.length); i++) { const l = base.links[i]; ab[3 * i] = l.a; ab[3 * i + 1] = l.b; ab[3 * i + 2] = l.mode; }
+  const modes = modesOf(N, base.links.filter((l) => l.a < N && l.b < N));
+  return { N, L, xy, ab, modes, zones: zones.map((z) => [z.name, z.country, z.cx, z.cy, (z.subs || [1]).length]) };
+}
+
+/**
+ * 예전 저장(기본 노드·구간 수를 적지 않던 0.5.2 전)의 그때 기본 노드·구간 수를 되짚는다: 새로 놓은 구간 도형의 양 끝이
+ * 새 노드 자리(newNodes[번호 − 기본 노드 수])와 맞는 기본 노드 수 (구간 수는 첫 새 구간의 번호).
+ * 브라우저가 국외 거점 자료(data/air_sea.json)를 예전 것으로 캐시에서 쓰면 기본 노드 수가 달라져(국외 거점 13곳 차이),
+ * 자료 판 표시는 같은데 새 노드 번호가 밀려 IC·역 이름과 새 노선 연결이 엉뚱한 노드에 붙었다.
+ * @returns {[number, number]|null} 끝이 9할 넘게 맞는 수가 하나로 나오면 [기본 노드 수, 기본 구간 수]
+ */
+export function inferNetSize(state, near) {
+  const nn = state?.newNodes || [], ends = [];
+  for (const nl of state?.newLinks || []) {
+    const g = nl.geom;
+    if (nl.replaced || !g || g.length < 4 || Number.isNaN(g[0]) || Number.isNaN(g[g.length - 1])) continue;
+    ends.push([nl.a, g[0], g[1]], [nl.b, g[g.length - 2], g[g.length - 1]]);
+  }
+  if (!nn.length || ends.length < 10) return null;
+  let best = null;
+  for (let N = near - 300; N <= near + 300; N++) {
+    let m = 0, t = 0;
+    for (const [id, x, y] of ends) {
+      const k = id - N;
+      if (k < 0 || k >= nn.length) continue;
+      t++;
+      if (Math.abs(nn[k][0] - x) < 5e-4 && Math.abs(nn[k][1] - y) < 5e-4) m++;
+    }
+    if (t >= 10 && m >= 0.9 * t && (!best || m > best.m)) best = { N, m };
+  }
+  const L = state.newLinks[0]?.id;
+  return best && L != null ? [best.N, L] : null;
+}
+
+/** 예전 판 좌표표를 그때의 기본 노드·구간 수로 자른다 (모자라는 구간은 모르는 것으로) */
+export function sliceRef(ref, [N, L]) {
+  const ab = new Int32Array(L * 3).fill(-1);
+  ab.set(ref.ab.subarray(0, Math.min(L, ref.L) * 3));
+  return { ...ref, N: Math.min(N, ref.N), L, xy: ref.xy.slice(0, Math.min(N, ref.N) * 2), modes: ref.modes.slice(0, Math.min(N, ref.N)), ab };
+}
+
 /** 좌표 격자 색인 */
 function grid(xy, n, cell) {
   const m = new Map();
@@ -54,8 +104,8 @@ function grid(xy, n, cell) {
  * @returns {Promise<{ok:true, state:object, note:string} | {ok:false, reason:string}>}
  * state는 고친 사본. 운행 계통 경로(segs)는 main이 새 망에서 다시 짠다 (replanServices 표시).
  */
-export async function migrateState(old, { base, zones }) {
-  const ref = await getRef(old.dataStamp);
+export async function migrateState(old, { base, zones, ref: given = null }) {
+  const ref = given || await getRef(old.dataStamp);
   if (!ref) return { ok: false, reason: '예전 자료의 좌표표가 없습니다' };
   const s = JSON.parse(JSON.stringify(old));
   const N0 = ref.N, L0 = ref.L, N1 = base.nodes.length, L1 = base.links.length;
@@ -133,6 +183,7 @@ export async function migrateState(old, { base, zones }) {
   s.replaced = rekey(s.replaced, mL);
   s.newStations = mapArr(s.newStations, mN);
   s.closedStations = mapArr(s.closedStations, mN);
+  s.reopenedStations = mapArr(s.reopenedStations, mN);
   s.names = rekey(s.names, (k) => mN(+k));
   for (const r of s.restAreas || []) r.links = mapArr(r.links, mL);
   if (s.osm) { s.osm.opened = rekey(s.osm.opened, mL); s.osm.auto = rekey(s.osm.auto, mL); }
@@ -152,7 +203,12 @@ export async function migrateState(old, { base, zones }) {
   for (const sv of s.services || []) { sv.stops = mapArr(sv.stops, mN); sv.replan = true; }
   for (const p of s.ppp || []) p.links = mapArr(p.links, mL);
   if (s.local) {
-    const office = (k) => (k.startsWith('m:') ? (mZ(+k.slice(2)) >= 0 ? `m:${mZ(+k.slice(2))}` : null) : k);
+    // 'm:존' 또는 분구한 구의 'm:존#구'
+    const office = (k) => {
+      if (!k.startsWith('m:')) return k;
+      const [id, gu] = k.slice(2).split('#');
+      return mZ(+id) >= 0 ? `m:${mZ(+id)}${gu ? `#${gu}` : ''}` : null;
+    };
     s.local.offices = rekey(s.local.offices, office);
     for (const o of Object.values(s.local.offices)) if (o.zone != null) o.zone = mZ(o.zone);
     s.local.proposals = (s.local.proposals || []).filter((pr) => office(pr.office || '') !== null);
@@ -165,6 +221,7 @@ export async function migrateState(old, { base, zones }) {
       if (p.kind === 'upgrade' && p.status === 'building') lost.links += n0 - p.links.length;
     }
     if (p.stations) p.stations = mapArr(p.stations, mN);
+    if (p.dropStations) p.dropStations = mapArr(p.dropStations, mN);
     if (p.retire) p.retire = mapArr(p.retire, mL);
     if (p.relinks) p.relinks = mapArr(p.relinks, mL);
     if (p.stationMap) p.stationMap = Object.fromEntries(Object.entries(p.stationMap).map(([a, b]) => [mN(+a), mN(b)]).filter(([a, b]) => a >= 0 && b >= 0));
@@ -186,7 +243,7 @@ export async function migrateState(old, { base, zones }) {
       return b > 0 ? a / b : 1;
     })();
     const pop0 = Array.isArray(snap.pop) ? snap.pop.slice() : null;
-    for (const key of ['pop', 'income', 'le', 'mys', 'eys', 'hdi', 'amenity', 'tourKP']) {
+    for (const key of ['pop', 'income', 'le', 'mys', 'eys', 'hdi', 'amenity', 'amenExcess', 'inc0', 'tourKP']) {
       const arr = snap[key];
       if (!Array.isArray(arr) || arr.length !== Z0) { if (arr && arr.length !== Z1) delete snap[key]; continue; }
       const out = new Array(Z1);

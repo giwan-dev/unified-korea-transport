@@ -5,6 +5,8 @@ OSM에는 2029년 개통 예정으로 적힌 북측 고속도로 공사 구간�
 - 원산–함흥 고속도로(동경 127°대, 원산 북쪽~함흥 남쪽): 실제 공사 진척이 확인되지 않아 뺀다 (계획 사업으로만 둔다).
 - 향산–희천: 평양희천고속도로의 남은 구간이라 이름을 붙여 기존 고속도로와 한 노선으로 잇는다
   (평양–강계 고속도로 계획이 이 노선의 연장이 된다).
+- 개통 예정(공사 중) 북측 도로의 막다른 끝은 가까운 도로(2km 안)에 잇고, 평양희천고속도로가 다른 도로와 만나는 곳에는 IC 이름을 단다
+  (완공되어도 나들목이 하나도 없고 희천 쪽 끝이 어디에도 닿지 않던 것).
 링크가 빠지므로 data/meta.json의 데이터 표지(stamp)를 새로 하고 기준 연도 계산(tools/baseline.html)을 다시 돌린다.
 
   .venv/Scripts/python -X utf8 pipeline/kp_roads.py --check
@@ -89,10 +91,105 @@ def rename_kp_gyeongui(meta, nodes, cols, geoms, check):
     return n
 
 
+JOIN_KM = 2.0     # 공사 중 도로의 막다른 끝을 이 거리 안의 도로 노드에 잇는다
+
+
+def km(a, b):
+    import math
+    c = math.cos(math.radians((a[1] + b[1]) / 2))
+    return math.hypot((a[0] - b[0]) * c, a[1] - b[1]) * 111.32
+
+
+def join_open_dead_ends(meta, nodes, cols, geoms, check):
+    """북측 공사 중 도로(open > 0)의 막다른 끝을 가장 가까운 다른 도로 노드에 짧은 링크로 잇는다 (같은 해 개통)"""
+    from collections import defaultdict
+    L = len(geoms)
+    adj = defaultdict(set)
+    for i in range(L):
+        if cols["mode"][i] == 0:
+            a, b = int(cols["a"][i]), int(cols["b"][i])
+            adj[a].add(b); adj[b].add(a)
+    road_nodes = list(adj)
+    xy = np.array([nodes[n] for n in road_nodes])
+    add = []
+    for i in range(L):
+        if cols["mode"][i] != 0 or int(cols["open"][i]) <= 0 or int(cols["kp"][i]) != 1:
+            continue
+        for end, other in (("a", "b"), ("b", "a")):
+            n, o = int(cols[end][i]), int(cols[other][i])
+            if len(adj[n]) != 1:
+                continue
+            p = nodes[n]
+            d = np.hypot((xy[:, 0] - p[0]) * np.cos(np.radians(p[1])), xy[:, 1] - p[1]) * 111.32
+            for k in np.argsort(d)[:12]:
+                m = road_nodes[k]
+                if m in (n, o) or d[k] > JOIN_KM:
+                    continue
+                add.append((i, n, m, float(d[k])))
+                adj[n].add(m); adj[m].add(n)
+                break
+    for i, n, m, d in add:
+        print(f"막다른 끝 잇기: 링크 {i} 노드 {n} ({nodes[n][0]:.3f},{nodes[n][1]:.3f}) → {m}, {d:.2f}km")
+    if check or not add:
+        return len(add)
+    for i, n, m, d in add:
+        for k in cols:
+            cols[k] = np.append(cols[k], cols[k][i])
+        j = len(geoms)
+        cols["a"][j], cols["b"][j], cols["len"][j] = n, m, max(d, 0.01)
+        if cols["cls"][j] == MOTORWAY:   # 고속도로 끝에서 일반도로로 내려가는 연결로 (IC)
+            cols["cls"][j], cols["lanes"][j], cols["speed"][j] = netpack.CLASSES.index("trunk"), 2, 60
+            cols["name"][j] = 0
+        geoms.append([tuple(nodes[n]), tuple(nodes[m])])
+    return len(add)
+
+
+def name_kp_ics(meta, nodes, cols, geoms, check):
+    """평양희천고속도로 공사 구간이 다른 도로와 만나는 노드에 IC 이름 (가까운 지명 + IC)"""
+    import re
+    from collections import defaultdict
+    names = meta["names"]
+    if NAME[2] not in names:
+        return 0
+    k = names.index(NAME[2])
+    L = len(geoms)
+    mw = [i for i in range(L) if cols["mode"][i] == 0 and cols["name"][i] == k and int(cols["open"][i]) > 0]
+    on = {int(cols[e][i]) for i in mw for e in ("a", "b")}
+    other = defaultdict(int)
+    for i in range(L):
+        if cols["mode"][i] == 0 and cols["cls"][i] != MOTORWAY:
+            for e in ("a", "b"):
+                if int(cols[e][i]) in on:
+                    other[int(cols[e][i])] += 1
+    have = {n for _, n in meta["junctions"]}
+    places = [p for p in json.loads((DATA / "places.json").read_text(encoding="utf-8")) if p[1] in ("city", "town", "village", "suburb")]
+    used = {nm for nm, _ in meta["junctions"]}
+    out = []
+    # 서로 1.5km 안의 노드는 한 IC로 친다 (가장 많이 닿는 노드)
+    cand = sorted((n for n in on if other[n] and n not in have), key=lambda n: -other[n])
+    for n in cand:
+        if any(km(nodes[n], nodes[m]) < 1.5 for m, _ in out) or any(km(nodes[n], nodes[m]) < 1.5 for m in have & on):
+            continue
+        near = min(places, key=lambda p: km(nodes[n], (p[2], p[3])))
+        stem = re.sub(r"(시|군|구|읍|면|동|리|[노로]동자구)$", "", near[0]) or near[0]
+        nm = stem + "IC"
+        if nm in used:
+            continue
+        used.add(nm)
+        out.append((n, nm))
+    for n, nm in out:
+        print(f"IC: {nm} 노드 {n} ({nodes[n][0]:.3f},{nodes[n][1]:.3f})")
+    if not check:
+        meta["junctions"].extend([nm, int(n)] for n, nm in out)
+    return len(out)
+
+
 def main():
     check = "--check" in sys.argv
     meta, nodes, cols, geoms = read_raw()
     renamed = rename_kp_gyeongui(meta, nodes, cols, geoms, check)
+    renamed += join_open_dead_ends(meta, nodes, cols, geoms, check)
+    renamed += name_kp_ics(meta, nodes, cols, geoms, check)
     names = meta["names"]
     L = len(geoms)
     building = [i for i in range(L) if cols["mode"][i] == 0 and cols["cls"][i] == MOTORWAY and int(cols["open"][i]) > 0]

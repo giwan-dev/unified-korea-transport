@@ -18,7 +18,48 @@ export const MEGA = [
     desc: '두만강–하산 국경 철도를 현대화하고 궤간이 다른 러시아 철도와의 환적 시설을 지어 시베리아 횡단철도와 잇는다. 완공되면 국경 철도가 빨라지고, 철도 운영사가 해마다 대륙 통과 화물 수입을 얻는다.',
     ready: (state) => state.integration >= 0.5, need: '남북 통합도 50% 이상',
   },
+  {
+    id: 'kp-ac', name: '북측 철도 교류화', label: '북측 철도 교류화 (직류 3kV → 교류 25kV 전국 승압)', cost: 0, years: 6,   // 사업비는 직류 구간 연장으로 (kpACCost)
+    desc: '북측의 직류 3kV 전철 구간을 모두 남측과 같은 교류 25kV로 바꾸는 국가 사업. 변전소·가선을 한꺼번에 바꿔 구간마다 할 때보다 20% 덜 든다. 공사 기간 동안 긴 노선부터 해마다 차례로 교류로 개통하고, 남북 열차가 기관차를 바꾸지 않고 다닌다.',
+    ready: (state) => state.integration >= 0.7, need: '남북 통합도 70% 이상',
+  },
 ];
+
+/** 북측 직류 구간을 노선 이름별로 [{name, ids, km}] (긴 노선부터) */
+export function kpDCLines(base, state) {
+  const by = new Map();
+  base.links.forEach((l, i) => {
+    if (l.mode !== 1 || !l.kp || l.ext || state.replaced?.[i]) return;
+    if ((state.overrides?.[i]?.power ?? l.power) !== 'DC') return;
+    const k = l.name || '이름 없는 선';
+    if (!by.has(k)) by.set(k, { name: k, ids: [], km: 0 });
+    const g = by.get(k); g.ids.push(i); g.km += l.len;
+  });
+  return [...by.values()].sort((a, b) => b.km - a.km);
+}
+
+/** 교류화 사업비 (억원): 직류 구간 km당 15억(구간 승압과 같다)에서 20% 덜 */
+export function kpACCost(base, state) {
+  const km = kpDCLines(base, state).reduce((s, g) => s + g.km, 0);
+  return Math.max(1000, Math.round((km * 15 * 0.8) / 100) * 100);
+}
+
+/** 교류화 공사 중: 해마다 공사 진척만큼 긴 노선부터 교류로 바꾼다. 바꾼 노선 이름 목록 */
+export function kpACYear(base, state, p) {
+  const lines = kpDCLines(base, state);
+  p.acTotal ||= lines.reduce((s, g) => s + g.km, 0) || 1;
+  const left = lines.reduce((s, g) => s + g.km, 0);
+  const goal = p.acTotal * Math.min(1, (state.year - p.startYear) / p.years);
+  const out = [];
+  let done = p.acTotal - left;
+  for (const g of lines) {
+    if (done >= goal) break;
+    for (const i of g.ids) state.overrides[i] = { ...(state.overrides[i] || {}), power: 'AC' };
+    done += g.km;
+    out.push(g.name);
+  }
+  return out;
+}
 
 export const TSR_FREIGHT = 5000;   // 대륙 통과 화물 수입 (억원/년, 북측 철도 운영사)
 
@@ -63,6 +104,11 @@ export function megaGeometry(base, id) {
 /** 완공된 대형 사업을 네트워크에 붙인다. 붙이거나 바꾼 링크 id 목록을 돌려준다 */
 export function applyMega(base, state, id) {
   (state.mega ||= {})[id] = state.year;
+  if (id === 'kp-ac') {
+    const ids = kpDCLines(base, state).flatMap((g) => g.ids);
+    for (const i of ids) state.overrides[i] = { ...(state.overrides[i] || {}), power: 'AC' };
+    return ids;
+  }
   const geo = megaGeometry(base, id);
   if (!geo) return [];
   if (id === 'kj-tunnel') {

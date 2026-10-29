@@ -15,7 +15,9 @@ export function addPlansLayer(map) {
   map.addSource('plans', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   const color = ['match', ['get', 'type'], ...Object.entries(PLAN_COLORS).flat(), '#555'];
   // 흰 바탕 위 굵은 점선: 기존 노선 사이에서도 계획 노선이 눈에 띄게
-  const isLine = ['==', ['geometry-type'], 'LineString'], isStop = ['==', ['geometry-type'], 'Point'];
+  const isLine = ['==', ['geometry-type'], 'LineString'];
+  // 도시철도 계획 역은 확대(9 이상)해야 보인다: 축소하면 점이 노선을 덮는다
+  const isStop = ['all', ['==', ['geometry-type'], 'Point'], ['any', ['!', ['in', ['get', 'type'], ['literal', ['metro', 'lrt', 'lrtug']]]], ['>=', ['zoom'], 9]]];
   map.addLayer({
     id: 'plans-casing', type: 'line', source: 'plans', filter: isLine, layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: { 'line-color': '#ffffff', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 4.5, 10, 8], 'line-opacity': 0.9 },

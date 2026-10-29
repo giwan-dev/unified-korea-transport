@@ -11,7 +11,7 @@
   - labels.geojson    시도·시군구·주변국 도시 라벨 점
   - data/admin/units/{n}.geojson + index.json  읍면동 경계를 시도별로 나눈 파일 (확대할 때만 받는다)
 
-실행: python pipeline/build_basemap.py
+실행: python pipeline/build_basemap.py          (읍면동 파일만: python pipeline/build_basemap.py units)
 """
 
 from __future__ import annotations
@@ -141,10 +141,15 @@ def main():
             continue
         labels.append(feat(r.geometry, {"name": FOREIGN_KO.get(r.get("name"), r.get("name") or ""), "rank": 1 if r["pop_max"] > 5e6 else 2, "foreign": 1}))
     write(OUT / "labels.geojson", fc(labels))
+    split_units()
 
-    # 읍면동: 시도별 파일 + 범위 색인 (build_admin.py를 다시 돌려 units.geojson이 새로 생겼을 때만)
+
+def split_units():
+    """읍면동: 시도별 파일 + 범위 색인 (build_admin.py를 다시 돌려 units.geojson이 새로 생겼을 때만).
+    배경지도는 그대로 두고 이것만 다시 하려면: python pipeline/build_basemap.py units"""
     if not (ADMIN / "units.geojson").exists():
         return
+    sgg = json.loads((ADMIN / "sgg.geojson").read_text(encoding="utf-8"))["features"]
     units = json.loads((ADMIN / "units.geojson").read_text(encoding="utf-8"))["features"]
     zone_prov = {f["properties"]["id"]: (f["properties"]["country"], f["properties"]["province"]) for f in sgg}
     groups = defaultdict(list)
@@ -169,4 +174,4 @@ def short_sido(name):
 
 
 if __name__ == "__main__":
-    main()
+    split_units() if sys.argv[1:] == ["units"] else main()

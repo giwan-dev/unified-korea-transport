@@ -101,6 +101,11 @@ test('fork retains original rules and supports station selection, reuse and inse
   await expect(page.locator('#draft-ok')).toBeDisabled();
   await expect(page.locator('#draft-ok')).toHaveText('전 구간 기존선 이용');
   expect(await page.evaluate(() => ukt.map.getSource('draft')._data.features.filter(f => f.properties.reused === 1).length)).toBeGreaterThan(0);
+  // Reused track has no new construction speed limits or sharp-curve warnings.
+  expect(await page.evaluate(async () => {
+    const {draftCost} = await import('/js/app/route.js');
+    return {limits: draftCost().lims.length, sharp: ukt.map.getSource('draft')._data.features.filter(f => f.properties.sharp).length};
+  })).toEqual({limits: 0, sharp: 0});
   const before = await page.evaluate(() => ({projects: ukt.state.projects.length, links: ukt.state.newLinks.length, budget: ukt.state.budget}));
   await page.evaluate(() => ukt.addDraftPoint({lng: 126.7, lat: 37.72}));
   await expect(page.locator('#draft-ok')).toBeEnabled();
@@ -136,6 +141,16 @@ test('fork retains original rules and supports station selection, reuse and inse
     return reusableRailSegments(ukt.base, ukt.state, 'hsr', points).length;
   });
   expect(mismatch).toBe(0);
+  // Upstream Shift waypoints and point movement still work alongside station snapping.
+  const waypoint = await page.evaluate(async () => {
+    const {moveDraftPoint} = await import('/js/app/route.js');
+    ukt.cancelDraft(); ukt.startDraft('hsr');
+    ukt.addDraftPoint({lng: 126.5, lat: 38.1}, {pass: true});
+    moveDraftPoint(0, {lng: 126.55, lat: 38.12});
+    const p = ukt.draft.points[0];
+    return {lon: p.lon, lat: p.lat, node: p.node, name: p.name, kind: p.kind};
+  });
+  expect(waypoint).toEqual({lon: 126.55, lat: 38.12, node: null, name: null, kind: null});
   expect(errors).toEqual([]);
   await page.screenshot({path:'test-results/fork-planning.png'});
 });

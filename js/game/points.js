@@ -11,6 +11,8 @@ export const POINT_ADD = {
     2: { label: '도시철도역 신설 (지하)', cost: 1000, years: 3 },
   },
   ic: { label: 'IC 신설', cost: 300, years: 2, connectorPerKm: 150, maxKm: 6 },
+  jct: { label: 'JCT 신설', cost: 800, years: 3 },
+  rest: { label: '휴게소 신설', cost: 150, years: 1 },
 };
 
 function nodeXY(base, state, n) {
@@ -61,6 +63,52 @@ export function nearestLocalRoad(base, state, links, lon, lat) {
 export function icCost(km, lat, lon) {
   const s = POINT_ADD.ic;
   return { ...s, cost: Math.round((s.cost + s.connectorPerKm * km * 1.2) * (isKP(lat, lon) ? KP_COST_FACTOR : 1)) };
+}
+
+export function jctCost(lat, lon) {
+  const s = POINT_ADD.jct;
+  return { ...s, cost: Math.round(s.cost * (isKP(lat, lon) ? KP_COST_FACTOR : 1)) };
+}
+
+/**
+ * 엇갈리는 두 고속도로를 잇는 JCT: 두 고속도로를 각각 그 자리에서 자르고 연결로(램프, 2차로 60km/h)로 잇는다.
+ * (OSM에서 JCT 없이 겹쳐 지나가거나, 게임에서 그은 고속도로가 기존 고속도로와 이어지지 않은 곳)
+ */
+export function startJCTAdd(base, state, { link, link2, lon, lat, lon2, lat2, name }) {
+  const l = linkAt(base, state, link), l2 = linkAt(base, state, link2);
+  const c = jctCost(lat, lon);
+  if (!canAfford(state, c.cost, c.years)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
+  const n1 = splitLink(base, state, link, lon, lat);
+  const n2 = splitLink(base, state, link2, lon2, lat2);
+  const p1 = nodeXY(base, state, n1), p2 = nodeXY(base, state, n2);
+  const id = base.links.length + state.newLinks.length;
+  state.newLinks.push({
+    id, a: n1, b: n2, mode: 0, cls: 'motorway', lanes: 2, speed: 60, paved: 1, len: Math.max(0.3, Math.round(kmBetween(p1[0], p1[1], p2[0], p2[1]) * 100) / 100),
+    kp: isKP(lat, lon) ? 1 : 0, name: `${name} 연결로`, built: false,
+    geom: [p1[0], p1[1], p2[0], p2[1]].map((v) => Math.round(v * 1e5) / 1e5),
+  });
+  startProject(state, {
+    id: crypto.randomUUID(), kind: 'new', type: 'ic', links: [id], stations: [], cost: c.cost, years: c.years,
+    newNames: { [n1]: { name, kind: 'JCT', auto: false }, [n2]: { name, kind: 'JCT', auto: false } },
+    label: `${l.name || '고속도로'} × ${l2.name || '고속도로'} ${name} 신설`,
+  });
+  return { ok: true, node: n1 };
+}
+
+export function restCost(lat, lon) {
+  const s = POINT_ADD.rest;
+  return { ...s, cost: Math.round(s.cost * (isKP(lat, lon) ? KP_COST_FACTOR : 1)) };
+}
+
+/** 고속도로 위 한 점에 휴게소 (지도의 휴게소 점. 다 지으면 '공사 중'이 빠진다) */
+export function startRestAdd(base, state, { link, lon, lat, name }) {
+  const l = linkAt(base, state, link);
+  const c = restCost(lat, lon);
+  if (!canAfford(state, c.cost, c.years)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
+  const id = crypto.randomUUID();
+  (state.restAreas ||= []).push({ lon, lat, name, built: false, links: [], project: id });
+  startProject(state, { id, kind: 'new', type: 'rest', links: [], stations: [], cost: c.cost, years: c.years, label: `${l.name || '고속도로'} ${name} 신설` });
+  return { ok: true };
 }
 
 export function startICAdd(base, state, { link, lon, lat, road, name }) {

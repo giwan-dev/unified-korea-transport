@@ -46,7 +46,25 @@
  },
  {
   "level": "unit",
-  "id": 3808,
+  "id": 4331,
+  "zone": 270,
+  "current": "김정숙읍",
+  "historic": "신파읍",
+  "year": 1981,
+  "reason": "군 개칭과 함께 읍 이름 변경"
+ },
+ {
+  "level": "unit",
+  "id": 4375,
+  "zone": 272,
+  "current": "김형직읍",
+  "historic": "후창읍",
+  "year": 1988,
+  "reason": "군 개칭과 함께 읍 이름 변경"
+ },
+ {
+  "level": "unit",
+  "id": 4355,
   "zone": 271,
   "current": "김형권읍",
   "historic": "풍산읍",

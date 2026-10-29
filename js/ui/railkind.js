@@ -5,7 +5,7 @@ export const KP_STD_COLOR = '#c0392b';
 
 /** 링크가 북측 규격인지 (선로 피처의 rstd 속성) */
 export function railStd(eff) {
-  if (!eff || eff.mode !== 1 || eff.ext) return 0;
+  if (!eff || eff.mode !== 1 || eff.ext || eff.sstd) return 0;   // 새로 놓은 선로는 남측 규격 (비전철이어도)
   return eff.kp && eff.power !== 'AC' ? 1 : 0;
 }
 
@@ -35,5 +35,10 @@ export function railKindLegend() {
 /** 보기 메뉴(도로만 보기 등)에 맞춰 철도 선로와 같이 켜고 끈다 */
 export function syncRailKind(map) {
   if (!map.getLayer('rails-kpstd') || !map.getLayer('rails')) return;
-  map.setLayoutProperty('rails-kpstd', 'visibility', map.getLayoutProperty('rails', 'visibility') || 'visible');
+  // 철도만 보기는 노선 색 철도(rails)를 숨기고 혼잡도 색 철도(rails-vc)를 그린다: 그때도 점선을 그 위에 보인다
+  const vis = (id) => map.getLayer(id) && (map.getLayoutProperty(id, 'visibility') || 'visible') === 'visible';
+  const vc = vis('rails-vc');
+  map.setLayoutProperty('rails-kpstd', 'visibility', vis('rails') || vc ? 'visible' : 'none');
+  const above = vc ? 'metro-vc' : 'metro';
+  if (map.getLayer(above)) map.moveLayer('rails-kpstd', above);
 }

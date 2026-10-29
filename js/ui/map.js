@@ -37,6 +37,8 @@ function baseStyle() {
       { id: 'bg-world', type: 'fill', source: 'world', paint: { 'fill-color': c.world } },
       // 육지 면은 시군구 도형으로: 해안선(시군구 경계선 조각)과 같은 도형이라 어긋나지 않는다
       { id: 'bg-land', type: 'fill', source: 'sgg', paint: { 'fill-color': c.land, 'fill-antialias': false } },
+      // 시군구 면 사이 틈(hairline)으로 바다 색이 비쳐 육지 안에 파란 점·선이 보였다: 같은 도형의 테두리를 육지 색 선으로 덮는다
+      { id: 'bg-land-seam', type: 'line', source: 'sgg', paint: { 'line-color': c.land, 'line-width': 1.2 } },
       // 비무장지대: 어느 시군구에도 속하지 않는 땅이라 따로 육지 색으로 채운다 (경계선은 군사분계선 하나만)
       { id: 'bg-dmz', type: 'fill', source: 'dmz', paint: { 'fill-color': c.land, 'fill-antialias': false } },
       { id: 'bg-lake', type: 'fill', source: 'water', filter: ['==', ['get', 'kind'], 'lake'], paint: { 'fill-color': c.water } },
@@ -52,7 +54,8 @@ function baseStyle() {
       // 해안·국경선(가늘게)과 광역 단체 경계(굵게). 광역 경계는 setRegions가 지금 행정구역(개편·광역시 승격 반영)으로 고른다
       { id: 'bg-coast', type: 'line', source: 'edges', filter: ['==', ['get', 'b'], -1], paint: { 'line-color': c.sido, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.5, 10, 1] } },
       { id: 'bg-sido', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1],
-        layout: { 'line-join': 'round' }, paint: { 'line-color': c.sido, 'line-opacity': 0.85, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.6, 10, 3.2] } },
+        // 경계선 조각마다 끝을 둥글게: 조각 끝이 몇 m씩 어긋난 곳(남북·시도 자료가 만나는 곳)이 끊겨 보이지 않게
+        layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': c.sido, 'line-opacity': 0.85, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.6, 10, 3.2] } },
       // 바다·강 위 도 경계: 점선 (해안에서 약 12km 안, 가장 가까운 시군을 따라 나눈 선)
       { id: 'bg-sido-water', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1],
         paint: { 'line-color': c.sido, 'line-opacity': 0.7, 'line-dasharray': [3, 2], 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1, 10, 2] } },
@@ -81,6 +84,26 @@ const unitFiles = new Map();
 export function setNameResolver(fn) { nameResolver = fn; }
 
 let regionKey = '';
+let lastInner = null, lastSido = null, mixedZones = [];
+/** 시군 경계선: 같은 광역 단체 안 변 가운데, 양쪽 존이 모두 소속이 바뀐 존(편입·시군구 신설)인 변은 빼고 (그 자리는 읍면동 경계로 다시 긋는다) */
+function applyZoneLineFilter(map) {
+  if (!lastInner || !map.getLayer('zones-line')) return;
+  // 소속이 바뀐 읍면동이 있는 존에 닿은 조각은 긋지 않는다: 그 존 안팎의 시군·광역 경계는 drawAdmin이 읍면동 경계로 긋는다
+  // (예전에는 시군 경계만 다시 그어, 구 하나를 다른 광역시로 옮겨도 굵은 광역 경계가 옛 자리에 남았다)
+  const off = ['any', ['in', ['get', 'a'], ['literal', mixedZones]], ['in', ['get', 'b'], ['literal', mixedZones]]];
+  const base = ['in', ['get', 'i'], ['literal', lastInner]];
+  map.setFilter('zones-line', mixedZones.length ? ['all', base, ['!', off]] : base);
+  if (lastSido && map.getLayer('bg-sido')) {
+    const sido = ['in', ['get', 'i'], ['literal', lastSido]];
+    map.setFilter('bg-sido', mixedZones.length ? ['all', sido, ['!', off]] : sido);
+  }
+}
+export function setMixedZones(map, zones) {
+  const k = zones.join(',');
+  if (k === mixedZones.join(',')) return;
+  mixedZones = zones;
+  applyZoneLineFilter(map);
+}
 /**
  * 광역 단체 경계와 이름을 지금 행정구역으로 다시 그린다.
  * @param {string[]} regionOfZone 존 id → 광역 단체 이름 (북측 도 복원·광역시 승격 반영)
@@ -103,9 +126,9 @@ export function setRegions(map, regionOfZone, countryOfZone, zoneCenter, short =
       if (same && countyOfZone && countyOfZone[a] === countyOfZone[b]) continue;
       (same ? inner : ids).push(i);
     }
-    map.setFilter('bg-sido', ['in', ['get', 'i'], ['literal', ids]]);
     map.setFilter('bg-sido-water', ['in', ['get', 'i'], ['literal', water]]);
-    if (map.getLayer('zones-line')) map.setFilter('zones-line', ['in', ['get', 'i'], ['literal', inner]]);
+    lastInner = inner; lastSido = ids;
+    applyZoneLineFilter(map);
   });
   // 이름 자리: 단체에 속한 존 중심들의 가운데에 가장 가까운 존 중심 (바다·다른 도 위에 뜨지 않게)
   const groups = new Map();
@@ -139,7 +162,8 @@ export function setZoneOutline(map, zoneIds) {
 }
 
 let edgeData = null;
-function fetchEdges() {
+/** 시군 경계 조각 (a·b: 맞닿은 두 존, b < 0이면 해안·국경) */
+export function fetchEdges() {
   edgeData ||= fetch('data/admin/edges.geojson').then((r) => r.json()).then((d) => d.features);
   return edgeData;
 }
@@ -154,6 +178,17 @@ function renamed(features, level, idKey) {
 }
 
 let labelGroup = null;
+let unitGroup = null;
+/** 읍면동 묶음: 읍면동 번호 → {key, name}(같은 key끼리 한 면으로: 경계선을 긋지 않고 이름 하나) 또는 null(그대로) */
+export function setUnitGroup(fn) { unitGroup = fn; }
+let extraLabels = [], baseLabels = null;
+/** 분구한 구 이름: 원래 있던 구와 같은 시군구 라벨 층(lb-sgg)에 단다 ({name} 점들). 시군구 라벨은 지난번 것을 그대로 쓴다 */
+export function setExtraLabels(map, feats) {
+  extraLabels = feats.map((f) => ({ ...f, properties: { ...f.properties, rank: 2 } }));
+  if (!baseLabels) return refreshNames(map);
+  map.getSource('labels')?.setData({ type: 'FeatureCollection', features: [...baseLabels, ...extraLabels] });
+  return Promise.resolve();
+}
 /** 시군 라벨 묶기: 존 번호 → {key, weight}. 같은 key(한 시군으로 보이는 존들)는 weight가 가장 큰 존에만 이름을 단다 */
 export function setLabelGroup(fn) { labelGroup = fn; }
 
@@ -171,16 +206,36 @@ export async function refreshNames(map) {
     }
     feats = feats.filter((f) => f.properties.zone == null || best.get(labelGroup(f.properties.zone).key).zone === f.properties.zone);
   }
-  map.getSource('labels').setData({ type: 'FeatureCollection', features: feats });
+  baseLabels = feats;
+  map.getSource('labels').setData({ type: 'FeatureCollection', features: [...feats, ...extraLabels] });
   setUnits(map);
 }
 
 function setUnits(map) {
   const fs = renamed([...unitFiles.values()].flat(), 'unit', 'id');
   // 읍면동 경계는 같은 시군구 안의 변만: 시군구 경계와 겹치는 변은 시군구·시도 선이 그린다
-  map.getSource('units').setData(borderLines(fs, (f) => f.properties.zone).inner);
-  // 이름은 면마다 점 하나에: 면 도형에 바로 글자를 달면 타일마다 하나씩 찍혀 넓은 면은 이름이 여러 번 뜬다
-  map.getSource('unitLabels').setData({ type: 'FeatureCollection', features: fs.map((f) => ({ type: 'Feature', properties: { name: f.properties.name }, geometry: { type: 'Point', coordinates: labelPoint(f.geometry) } })) });
+  const grp = (f) => (unitGroup ? unitGroup(f.properties.id) : null);
+  map.getSource('units').setData(borderLines(fs, (f) => f.properties.zone, unitGroup ? (f) => grp(f)?.key ?? `u:${f.properties.id}` : null).inner);
+  // 이름은 면마다 점 하나에: 면 도형에 바로 글자를 달면 타일마다 하나씩 찍혀 넓은 면은 이름이 여러 번 뜬다.
+  // 묶은 면(북측 군의 옛 면)은 가장 넓은 리 자리에 면 이름 하나
+  const pt = (name, f) => ({ type: 'Feature', properties: { name }, geometry: { type: 'Point', coordinates: labelPoint(f.geometry) } });
+  const labels = [], groups = new Map();
+  for (const f of fs) {
+    const g = grp(f);
+    if (!g) { labels.push(pt(f.properties.name, f)); continue; }
+    const a = geomArea(f.geometry), e = groups.get(g.key);
+    if (!e || a > e.a) groups.set(g.key, { a, f, name: g.name });
+  }
+  for (const e of groups.values()) labels.push(pt(e.name, e.f));
+  map.getSource('unitLabels').setData({ type: 'FeatureCollection', features: labels });
+}
+
+/** 면 넓이 (바깥 고리들, 도 단위 어림) */
+function geomArea(g) {
+  const polys = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : [];
+  let s = 0;
+  for (const p of polys) { const r = p[0]; let a = 0; for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += (r[j][0] + r[i][0]) * (r[j][1] - r[i][1]); s += Math.abs(a / 2); }
+  return s;
 }
 
 /** 면의 이름 자리: 가장 큰 고리의 무게중심, 그 점이 면 밖이면(ㄷ자 모양 등) 고리 위 점들 가운데 무게중심에 가장 가까운 안쪽 점 */
@@ -235,27 +290,51 @@ function enableRoads(map) {
     if (!need.length && !dropped) return;
     await Promise.all(need.map(async (e) => {
       loaded.set(e.file, []);
-      loaded.set(e.file, (await fetch(`data/base/roads/${e.file}`).then((r) => r.json())).features);
+      const fc = await fetch(`data/base/roads/${e.file}`).then((r) => r.json()).catch(() => null);
+      if (fc) loaded.set(e.file, fc.features); else loaded.delete(e.file);   // 실패하면 다음에 다시 받는다
     }));
     map.getSource('osmroads').setData({ type: 'FeatureCollection', features: [...loaded.values()].flat() });
   };
   map.on('moveend', update);
 }
 
+let unitIndex = null;
+
+/**
+ * 이 범위에 걸친 시도의 자세한 읍면동 경계 (data/admin/units). 지도 경계선과 같은 저장소를 쓰므로 두 번 받지 않고, 받으면 경계선도 그린다.
+ * 계산용 소구역(subzones.geojson)은 크게 단순화돼 있어, 그 모양으로 칠하면 지도 경계와 어긋나 쐐기·조각처럼 보인다
+ */
+export async function unitFeaturesIn(map, x0, y0, x1, y1) {
+  if (!unitIndex) unitIndex = await fetch('data/admin/units/index.json').then((r) => r.json()).catch(() => null);
+  if (!unitIndex) return [];
+  const need = unitIndex.filter(({ bbox: [a, b, c, d] }) => c >= x0 && a <= x1 && d >= y0 && b <= y1);
+  let added = false;
+  await Promise.all(need.map(async (e) => {
+    if (unitFiles.get(e.file)?.length) return;
+    const fc = await fetch(`data/admin/units/${e.file}`).then((r) => r.json()).catch(() => null);
+    if (fc) { unitFiles.set(e.file, fc.features); added = true; }
+  }));
+  if (added && map) setUnits(map);
+  return need.flatMap((e) => unitFiles.get(e.file) || []);
+}
+
 /** 9배 이상 확대하면 화면에 들어온 시도의 읍면동 경계 파일만 받아 그린다 */
 function enableUnits(map) {
-  let index = null;
   const loaded = unitFiles;
   const update = async () => {
     if (map.getZoom() < 8.5) return;
-    if (!index) index = await fetch('data/admin/units/index.json').then((r) => r.json());
+    // 받기에 실패하면(연결 끊김 등) 다음에 지도를 옮길 때 다시 받는다
+    if (!unitIndex) unitIndex = await fetch('data/admin/units/index.json').then((r) => r.json()).catch(() => null);
+    const index = unitIndex;
+    if (!index) return;
     const b = map.getBounds();
     const need = index.filter(({ bbox: [x0, y0, x1, y1] }) => x1 >= b.getWest() && x0 <= b.getEast() && y1 >= b.getSouth() && y0 <= b.getNorth())
       .filter((e) => !loaded.has(e.file));
     if (!need.length) return;
     await Promise.all(need.map(async (e) => {
       loaded.set(e.file, []);
-      loaded.set(e.file, (await fetch(`data/admin/units/${e.file}`).then((r) => r.json())).features);
+      const fc = await fetch(`data/admin/units/${e.file}`).then((r) => r.json()).catch(() => null);
+      if (fc) loaded.set(e.file, fc.features); else loaded.delete(e.file);
     }));
     setUnits(map);
   };
@@ -265,20 +344,40 @@ function enableUnits(map) {
 /** 도로 혼잡도(V/C) 색 단계 */
 export const VC_STOPS = [[0, '#3f9e63'], [0.6, '#c5c23a'], [1, '#f0a030'], [2, '#e0582c'], [4, '#c21f2f'], [7, '#7e1048'], [10, '#2e0a3f']];
 
+const PARTY_NAMES = ['민주당', '국민의힘', '개혁신당', '정의당', '무소속', '관선 (임명)'];
+const PARTY_MAP = { ramp: ['#1f5fd1', '#e0383e', '#ff7210', '#e6b800', '#7d848d', '#4b5563'], stops: [0, 1, 2, 3, 4, 5], categorical: PARTY_NAMES, fmt: (v) => PARTY_NAMES[Math.round(v)] || '' };
+
 export const METRICS = {
   none: { label: '기본 배경 (남북 같은 색)' },
   density: { label: '인구 밀도 (1km 격자)' },
   pop: { label: '시군구 인구 (합계)', ramp: ['#f7f4ea', '#f2c48d', '#d9682e', '#8f2318'], stops: [0, 100000, 400000, 1000000], fmt: (v) => `${Math.round(v / 1000).toLocaleString()}천` },
-  subDensity: { label: '읍면동 인구 밀도 (노선 놓을 곳 찾기)', sub: true, ramp: ['#f7f4ea', '#f6c27a', '#e0662c', '#9b1d14', '#4a0c0a'], stops: [100, 1000, 5000, 15000, 30000], fmt: (v) => `${Math.round(v).toLocaleString()}/km²` },
-  subChange: { label: '읍면동 인구 변화 (시작 대비)', sub: true, ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-0.2, -0.05, 0, 0.05, 0.2], fmt: (v) => `${(v * 100).toFixed(0)}%` },
-  subTransit: { label: '읍면동 대중교통 접근 (분)', sub: true, ramp: ['#1d5c3a', '#5aa36b', '#f5e08a', '#e88a3c', '#8f2318'], stops: [5, 10, 20, 35, 60], fmt: (v) => `${Math.round(v)}분` },
+  popSido: { label: '광역지자체 인구 (합계)', ramp: ['#f7f4ea', '#f2c48d', '#d9682e', '#8f2318', '#4a0c0a'], stops: [0, 1500000, 3000000, 6000000, 13000000],
+    fmt: (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(1)}백만` : `${Math.round(v / 1e4).toLocaleString()}만`) },
+  subDensity: { label: '리 인구 밀도 (노선 놓을 곳 찾기)', sub: true, ramp: ['#f7f4ea', '#f6c27a', '#e0662c', '#9b1d14', '#4a0c0a'], stops: [100, 1000, 5000, 15000, 30000], fmt: (v) => `${Math.round(v).toLocaleString()}/km²` },
+  subChange: { label: '리 인구 변화 (시작 대비)', sub: true, ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-0.2, -0.05, 0, 0.05, 0.2], fmt: (v) => `${(v * 100).toFixed(0)}%` },
+  subTransit: { label: '리 대중교통 접근 (분)', sub: true, ramp: ['#1d5c3a', '#5aa36b', '#f5e08a', '#e88a3c', '#8f2318'], stops: [5, 10, 20, 35, 60], fmt: (v) => `${Math.round(v)}분` },
   popChange: { label: '인구 변화 (시작 대비)', ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-0.3, -0.1, 0, 0.1, 0.3], fmt: (v) => `${(v * 100).toFixed(0)}%` },
   hdi: { label: '인간개발지수 (HDI)', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [0.55, 0.65, 0.75, 0.85, 0.95], fmt: (v) => v.toFixed(2) },
   income: { label: '1인당 소득 (PPP $)', ramp: ['#f7f4ea', '#c7d9ee', '#5b8fd1', '#1d3f8f'], stops: [2000, 10000, 30000, 60000], fmt: (v) => `$${Math.round(v / 1000)}k` },
   happiness: { label: '주민 행복도', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [40, 50, 60, 70, 80], fmt: (v) => v.toFixed(0) },
-  partyMayor: { label: '정당 지도 (시군구청장)', ramp: ['#1f5fd1', '#f2f2f2', '#e0383e'], stops: [0, 0.5, 1], fmt: (v) => (v < 0.5 ? '민주당' : '국민의힘') },
-  partyGov: { label: '정당 지도 (광역단체장)', ramp: ['#1f5fd1', '#f2f2f2', '#e0383e'], stops: [0, 0.5, 1], fmt: (v) => (v < 0.5 ? '민주당' : '국민의힘') },
+  // 지자체장 소속 정당: 정당마다 한 색 (값은 정당 번호: 민주당 0, 국민의힘 1, 개혁신당 2, 정의당 3, 무소속 4, 관선 5)
+  partyMayor: { label: '지자체장 소속 정당 (시군구청장)', ...PARTY_MAP },
+  partyGov: { label: '지자체장 소속 정당 (광역단체장)', ...PARTY_MAP },
   access: { label: '접근성 (상대)', ramp: ['#f7f4ea', '#c8e0b4', '#5aa36b', '#1d5c3a'], stops: [0.2, 0.6, 1.2, 2.5], fmt: (v) => v.toFixed(1) },
+  // 광역 단체 단위
+  sidoChange: { label: '인구 변화 (시작 대비)', ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-0.2, -0.05, 0, 0.05, 0.2], fmt: (v) => `${(v * 100).toFixed(0)}%` },
+  sidoDensity: { label: '인구 밀도 (명/km²)', ramp: ['#f7f4ea', '#f6c27a', '#e0662c', '#9b1d14', '#4a0c0a'], stops: [50, 150, 400, 2000, 16000], fmt: (v) => Math.round(v).toLocaleString() },
+  sidoHdi: { label: '인간개발지수 (HDI)', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [0.55, 0.65, 0.75, 0.85, 0.95], fmt: (v) => v.toFixed(2) },
+  sidoIncome: { label: '1인당 소득 (PPP $)', ramp: ['#f7f4ea', '#c7d9ee', '#5b8fd1', '#1d3f8f'], stops: [2000, 10000, 30000, 60000], fmt: (v) => `$${Math.round(v / 1000)}k` },
+  sidoHappy: { label: '주민 행복도', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [40, 50, 60, 70, 80], fmt: (v) => v.toFixed(0) },
+  // 읍면동 단위 (북측은 1945년 면: 그 리들을 합친 값)
+  emdPop: { label: '읍면동 인구', sub: true, ramp: ['#f7f4ea', '#f2c48d', '#d9682e', '#8f2318'], stops: [0, 5000, 20000, 60000], fmt: (v) => `${Math.round(v / 1000)}천` },
+  emdDensity: { label: '읍면동 인구 밀도', sub: true, ramp: ['#f7f4ea', '#f6c27a', '#e0662c', '#9b1d14', '#4a0c0a'], stops: [100, 1000, 5000, 15000, 30000], fmt: (v) => Math.round(v).toLocaleString() },
+  emdChange: { label: '읍면동 인구 변화 (시작 대비)', sub: true, ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-0.2, -0.05, 0, 0.05, 0.2], fmt: (v) => `${(v * 100).toFixed(0)}%` },
+  emdTransit: { label: '읍면동 대중교통 접근 (분)', sub: true, ramp: ['#1d5c3a', '#5aa36b', '#f5e08a', '#e88a3c', '#8f2318'], stops: [5, 10, 20, 35, 60], fmt: (v) => `${Math.round(v)}분` },
+  emdHappy: { label: '읍면동 주민 행복도', sub: true, ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [40, 50, 60, 70, 80], fmt: (v) => v.toFixed(0) },
+  // 리 단위 (남측은 읍면동과 같다)
+  subPop: { label: '리 인구', sub: true, ramp: ['#f7f4ea', '#f2c48d', '#d9682e', '#8f2318'], stops: [0, 1000, 5000, 20000], fmt: (v) => `${Math.round(v / 1000)}천` },
 };
 
 const MAP_VIEW_KEY = 'ukt-map-view';
@@ -293,6 +392,25 @@ function savedMapView() {
       bearing: Number.isFinite(v.bearing) ? v.bearing : 0,
       pitch: Number.isFinite(v.pitch) && v.pitch >= 0 && v.pitch <= 60 ? v.pitch : 0};
   } catch { return {}; }
+}
+
+/** 지도 층위: 광역 > 기초 > 읍면동 > 리. 지표마다 층위(lv)와 같은 뜻의 다른 층위 지표를 찾는 바탕 이름(base) */
+export const MAP_LEVELS = { sido: '광역', sgg: '기초', emd: '읍면동', ri: '리' };
+const LV = {
+  none: ['all'], density: ['all'],
+  popSido: ['sido', 'pop'], sidoChange: ['sido', 'change'], sidoDensity: ['sido', 'dens'], sidoHdi: ['sido', 'hdi'], sidoIncome: ['sido', 'income'], sidoHappy: ['sido', 'happy'], partyGov: ['sido', 'party'],
+  pop: ['sgg', 'pop'], popChange: ['sgg', 'change'], hdi: ['sgg', 'hdi'], income: ['sgg', 'income'], happiness: ['sgg', 'happy'], partyMayor: ['sgg', 'party'], access: ['sgg', 'access'],
+  emdPop: ['emd', 'pop'], emdDensity: ['emd', 'dens'], emdChange: ['emd', 'change'], emdTransit: ['emd', 'transit'], emdHappy: ['emd', 'happy'],
+  subPop: ['ri', 'pop'], subDensity: ['ri', 'dens'], subChange: ['ri', 'change'], subTransit: ['ri', 'transit'],
+  voteGov: ['sido', 'vote'], voteMayor: ['sgg', 'vote'], mayorApproval: ['sgg', 'approval'], subHappy: ['ri', 'happy'], subApproval: ['ri', 'approval'], subGain: ['ri', 'gain'],
+};
+export function metricLevel(k) { return LV[k]?.[0] || 'sgg'; }
+/** 다른 층위로 바꿀 때 같은 뜻의 지표 (없으면 그 층위의 첫 지표) */
+export function metricForLevel(k, lv) {
+  if (metricLevel(k) === 'all') return k;
+  const base = LV[k]?.[1];
+  const keys = Object.keys(METRICS).filter((m) => metricLevel(m) === lv);
+  return keys.find((m) => LV[m]?.[1] === base) || keys[0] || k;
 }
 
 export async function createMap(container) {
@@ -358,7 +476,25 @@ const idleOpacity = (on) => ['case', ['>', vol, 0], on, 0.45];
 
 let linksCache = null;
 /** 계산망 선 자료를 바꾼다 (혼잡 주의 표시를 다시 만들 때 쓰려고 기억해 둔다) */
-const HOUSING_R = { s: 0.6, m: 1.0, l: 1.6 };   // 택지지구 반지름 (km): 소규모·중규모·신도시급
+const HOUSING_R = { s: 0.6, m: 1.0, l: 1.6, xl: 2.6 };
+
+/**
+ * 닫힌 꺾은선을 곡선으로 (차이킨 모서리 깎기 3번: 꼭짓점 하나가 8개로)
+ * @param {[number,number][]} pts 닫지 않은 꼭짓점들
+ */
+export function smoothRing(pts, rounds = 3) {
+  if (!pts || pts.length < 3) return pts;
+  let r = pts;
+  for (let k = 0; k < rounds; k++) {
+    const out = [];
+    for (let i = 0; i < r.length; i++) {
+      const a = r[i], b = r[(i + 1) % r.length];
+      out.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25], [a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+    }
+    r = out;
+  }
+  return r;
+}   // 택지지구 반지름 (km): 보통은 main.js가 h.R로 넘긴다
 
 /**
  * 택지지구를 배경 지도에 그린다. 다 지은 곳은 시가지 면과 150m 간격 격자 도로(지구마다 방향이 다르다), 공사 중은 점선 경계
@@ -381,7 +517,9 @@ export function setHousing(map, list) {
     const kx = 111.32 * Math.cos((h.lat * Math.PI) / 180), ky = 110.57;
     const at = (x, y) => [h.lon + x / kx, h.lat + y / ky];
     const seed = [...h.id].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 11);
-    let ring = h.ring ? [...h.ring, h.ring[0]] : null;
+    // 직접 그린 경계는 곡선으로 지었다(h.smooth). 예전 저장의 꺾은선 경계도 곡선으로 그린다
+    let ring = h.ring ? (h.smooth ? h.ring : smoothRing(h.ring)) : null;
+    if (ring) ring = [...ring, ring[0]];
     if (!ring) {
       // 둥근 단지가 아니라 조금 일그러진 모양 (지구마다 고정)
       ring = [];
@@ -389,28 +527,9 @@ export function setHousing(map, list) {
       for (let k = 0; k <= 36; k++) { const t = (k / 36) * 2 * Math.PI; ring.push(at(R * wob(t) * Math.cos(t), R * wob(t) * Math.sin(t))); }
     }
     const built = h.built || h.done;
-    features.push({ type: 'Feature', properties: { k: 'area', done: !!built }, geometry: { type: 'Polygon', coordinates: [ring] } });
+    features.push({ type: 'Feature', properties: { k: 'area', done: !!built, id: h.id }, geometry: { type: 'Polygon', coordinates: [ring] } });
     features.push({ type: 'Feature', properties: { k: 'label', name: h.done ? h.name : built ? `${h.name} (입주 중)` : `${h.name} (공사 중)` }, geometry: { type: 'Point', coordinates: [h.lon, h.lat] } });
-    if (!built) continue;
-    // 150m 간격 격자 도로 (지구마다 방향이 다르다), 경계 안 조각만
-    const ang = ((seed % 90) * Math.PI) / 180, c = Math.cos(ang), sn = Math.sin(ang);
-    const r = R * (h.ring ? 1.8 : 0.92);
-    for (let off = -r + 0.075; off < r; off += 0.15) {
-      const half = h.ring ? r : Math.sqrt(Math.max(0, r * r - off * off));
-      for (const [ux, uy, vx, vy] of [[c, sn, -sn, c], [-sn, c, c, sn]]) {
-        if (!h.ring) {
-          features.push({ type: 'Feature', properties: { k: 'street' }, geometry: { type: 'LineString', coordinates: [at(vx * off - ux * half, vy * off - uy * half), at(vx * off + ux * half, vy * off + uy * half)] } });
-          continue;
-        }
-        let seg = null;
-        for (let t = -half; t <= half; t += 0.05) {
-          const p = at(vx * off + ux * t, vy * off + uy * t);
-          if (inRing(p[0], p[1], h.ring)) (seg ||= []).push(p);
-          else if (seg) { if (seg.length > 1) features.push({ type: 'Feature', properties: { k: 'street' }, geometry: { type: 'LineString', coordinates: seg } }); seg = null; }
-        }
-        if (seg?.length > 1) features.push({ type: 'Feature', properties: { k: 'street' }, geometry: { type: 'LineString', coordinates: seg } });
-      }
-    }
+    // (예전에는 다 지은 지구 안에 150m 간격 격자 도로를 그렸다: 확대하면 지저분해 뺐다. 단지 간선도로는 실제 도로망에 있다)
   }
   src.setData({ type: 'FeatureCollection', features });
 }
@@ -435,8 +554,8 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   }, below);
   map.addLayer({
     // 시군구 경계: 경계선 조각(edges) 가운데 같은 광역 단체 안의 변만 (도 경계는 bg-sido, 해안은 bg-coast가 한 번씩 그린다)
-    id: 'zones-line', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1], layout: { 'line-join': 'round' },
-    paint: { 'line-color': '#7a7f86', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.2, 9, 0.8], 'line-opacity': 0.7 },
+    id: 'zones-line', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1], layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: { 'line-color': '#686d74', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.2, 9, 0.9, 12, 1.6], 'line-opacity': 0.8 },
   }, below);
   map.addLayer({
     id: 'zones-sel-edge', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1], layout: { 'line-join': 'round', 'line-cap': 'round' },
@@ -488,11 +607,10 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addSource('housing', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   const dark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
   map.addLayer({ id: 'housing-fill', type: 'fill', source: 'housing', filter: ['==', ['get', 'k'], 'area'],
-    paint: { 'fill-color': dark ? '#4a4540' : '#e9dfcf', 'fill-opacity': ['case', ['get', 'done'], 0.92, 0.25] } }, below);
-  map.addLayer({ id: 'housing-street', type: 'line', source: 'housing', filter: ['==', ['get', 'k'], 'street'], minzoom: 11,
-    paint: { 'line-color': dark ? '#6b6560' : '#ffffff', 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 0.6, 14, 2.2] } }, below);
+    // 밑의 인구 분포(시군구·읍면동 색)가 비쳐 보이게 옅게: 경계선과 단지 안 도로로 지구를 알아본다
+    paint: { 'fill-color': dark ? '#4a4540' : '#e9dfcf', 'fill-opacity': ['case', ['get', 'done'], 0.35, 0.15] } }, below);
   map.addLayer({ id: 'housing-edge', type: 'line', source: 'housing', filter: ['all', ['==', ['get', 'k'], 'area'], ['get', 'done']],
-    paint: { 'line-color': dark ? '#a39a8c' : '#b8a888', 'line-width': 1.2 } }, below);
+    paint: { 'line-color': dark ? '#a39a8c' : '#8a7550', 'line-width': 1.6 } }, below);
   map.addLayer({ id: 'housing-edge-building', type: 'line', source: 'housing', filter: ['all', ['==', ['get', 'k'], 'area'], ['!', ['get', 'done']]],
     paint: { 'line-color': dark ? '#a39a8c' : '#a08a60', 'line-width': 1.4, 'line-dasharray': [3, 2] } }, below);
   map.addLayer({ id: 'housing-label', type: 'symbol', source: 'housing', filter: ['==', ['get', 'k'], 'label'], minzoom: 10,
@@ -601,6 +719,8 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     id: 'points', type: 'circle', source: 'points',
     // 중요도(rank 0~3)에 따라 확대할수록 더 많이: 0 도시·새 시설, 1 큰 역, 2 일반 역·JCT, 3 IC·도시철도역
     filter: POINT_BASE.points,
+    // 겹치면 휴게소를 맨 아래, 그 위에 IC·JCT, 역, 도시 (휴게소가 IC를 가리지 않게)
+    layout: { 'circle-sort-key': ['match', ['get', 'kind'], 'rest', 0, 'station', 2, 'city', 3, 1] },
     paint: {
       'circle-radius': ['match', ['get', 'kind'], 'city', 6, 'station', 4, 'rest', 4, 3],
       'circle-color': ['match', ['get', 'kind'], 'city', '#f2c14e', 'station', '#ffffff', 'rest', '#2f8f5b', '#1d232b'],
@@ -614,6 +734,8 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
     layout: {
       'text-field': ['get', 'name'], 'text-size': ['case', ['==', ['get', 'isNew'], 1], 13, 11],
       'text-offset': [0, 1.0], 'text-anchor': 'top', 'text-font': FONT,
+      // 이름이 겹치면 도시·역·IC를 먼저 놓고 휴게소 이름은 나중에 (작은 값이 먼저)
+      'symbol-sort-key': ['match', ['get', 'kind'], 'city', 0, 'station', 1, 'rest', 3, 2],
     },
     paint: { 'text-color': '#1d232b', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 },
   });
@@ -655,14 +777,23 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addSource('services', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({ id: 'services-line', type: 'line', source: 'services',
     layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': ['get', 'color'], 'line-offset': ['get', 'off'], 'line-opacity': ['case', ['==', ['get', 'built'], 1], 0.9, 0.5],
+    // off: 같은 자리를 함께 지나는 계통 사이 칸 번호 (선 굵기만큼 비켜 나란히)
+    paint: { 'line-color': ['get', 'color'], 'line-offset': ['interpolate', ['linear'], ['zoom'], 6, ['*', ['get', 'off'], 2], 10, ['*', ['get', 'off'], 3.5], 13, ['*', ['get', 'off'], 5]],
+      'line-opacity': ['case', ['==', ['get', 'built'], 1], 0.9, 0.5],
       'line-width': ['interpolate', ['linear'], ['zoom'], 6, 2, 10, 3.5, 13, 5] } }, 'points');
 
   map.addSource('draft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({ id: 'draft-line', type: 'line', source: 'draft', filter: ['==', ['geometry-type'], 'LineString'],
     paint: { 'line-color': ['case', ['==', ['get', 'reused'], 1], '#168565', '#1f5fbf'], 'line-width': ['case', ['==', ['get', 'reused'], 1], 4, 3], 'line-dasharray': [1.5, 1] } });
-  map.addLayer({ id: 'draft-pts', type: 'circle', source: 'draft', filter: ['==', ['geometry-type'], 'Point'],
-    paint: { 'circle-radius': 5, 'circle-color': '#1f5fbf', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
+  // 급곡선 자리 (route.js drawDraft): 역·경유점 밑에
+  map.addLayer({ id: 'draft-sharp', type: 'circle', source: 'draft', filter: ['has', 'sharp'],
+    paint: { 'circle-radius': 5, 'circle-color': '#d62828', 'circle-opacity': 0.85, 'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } });
+  map.addLayer({ id: 'draft-sharp-label', type: 'symbol', source: 'draft', filter: ['has', 'sharp'], minzoom: 8,
+    layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 11, 'text-offset': [0, 1.1], 'text-anchor': 'top' },
+    paint: { 'text-color': '#b01e1e', 'text-halo-color': '#fff', 'text-halo-width': 1.4 } });
+  map.addLayer({ id: 'draft-pts', type: 'circle', source: 'draft', filter: ['all', ['==', ['geometry-type'], 'Point'], ['!', ['has', 'sharp']]],
+    paint: { 'circle-radius': ['case', ['==', ['get', 'pass'], 1], 4, 6], 'circle-color': ['case', ['==', ['get', 'pass'], 1], '#fff', '#1f5fbf'],
+      'circle-stroke-color': ['case', ['==', ['get', 'pass'], 1], '#1f5fbf', '#fff'], 'circle-stroke-width': 2 } });
 }
 
 export function colorFor(metric, v) {
@@ -701,13 +832,20 @@ export function setBasemap(map, kind) {
   const sat = kind === 'sat';
   // 위성 사진 위에서는 호수·강 색과 시군 색칠을 옅게 (사진이 보이게)
   for (const id of ['bg-lake', 'bg-river']) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', sat ? 'none' : 'visible');
-  if (map.getLayer('zones-fill')) map.setPaintProperty('zones-fill', 'fill-opacity', sat ? 0.3 : 0.55);
+  for (const id of ['zones-fill', 'gu-metric-fill']) if (map.getLayer(id)) map.setPaintProperty(id, 'fill-opacity', sat ? 0.3 : 0.55);
   if (!r) return;
   map.addSource('bg-raster', { type: 'raster', tiles: r.tiles, tileSize: 256, maxzoom: r.maxzoom, attribution: r.attribution });
   // 위성 사진은 육지 면 대신 맨 밑에, 음영기복은 시군 색칠 위에 반투명으로 얹어 산줄기가 보이게
   map.addLayer({ id: 'bg-raster', type: 'raster', source: 'bg-raster',
     paint: sat ? { 'raster-opacity': 1 } : { 'raster-opacity': 0.4, 'raster-saturation': -0.5, 'raster-contrast': 0.2 } },
   sat || !map.getLayer('zones-line') ? 'bg-lake' : 'zones-line');
+}
+
+/** 택지지구 표시(면·경계·단지 안 격자 도로·이름)를 켜고 끈다 */
+export function setHousingVisible(map, on) {
+  for (const id of ['housing-fill', 'housing-edge', 'housing-edge-building', 'housing-label']) {
+    if (map?.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+  }
 }
 
 export const NETWORK_GROUPS = {
@@ -757,11 +895,15 @@ export function setNetworkFilters(map, filters) {
 
 const sw = (color, kind = 'line', extra = '') => `<i class="sw ${kind}" style="--c:${color};${extra}"></i>`;
 
-export function legendHTML(metric, filters = DEFAULT_NETWORK_FILTERS, basemap = 'plain') {
+export function legendHTML(metric, filters = DEFAULT_NETWORK_FILTERS, basemap = 'plain', level = 'sgg') {
   const m = METRICS[metric];
-  const opts = Object.entries(METRICS).map(([k, v]) => `<option value="${k}" ${k === metric ? 'selected' : ''}>${v.label}</option>`).join('');
+  // 지금 층위의 지표만 (밀도 격자·표시 안 함은 어느 층위에나)
+  const opts = Object.entries(METRICS).filter(([k]) => [level, 'all'].includes(metricLevel(k))).map(([k, v]) => `<option value="${k}" ${k === metric ? 'selected' : ''}>${v.label}</option>`).join('');
   let ramp = '';
-  if (m.ramp) {
+  if (m.categorical) {
+    // 정당처럼 나뉘는 값은 색 띠 대신 색 칸
+    ramp = `<div style="display:flex;flex-wrap:wrap;gap:4px 8px;font-size:11px;margin-top:4px">${m.categorical.map((n, k) => `<span style="display:inline-flex;align-items:center;gap:3px"><i style="width:10px;height:10px;border-radius:2px;background:${m.ramp[k]};display:inline-block"></i>${n}</span>`).join('')}</div>`;
+  } else if (m.ramp) {
     ramp = `<div class="ramp" style="background:linear-gradient(to right,${m.ramp.join(',')})"></div>
       <div class="ends"><span>${m.fmt(m.stops[0])}</span><span>${m.fmt(m.stops[m.stops.length - 1])}</span></div>`;
   }
@@ -785,6 +927,7 @@ export function legendHTML(metric, filters = DEFAULT_NETWORK_FILTERS, basemap = 
   const groups = Object.entries(NETWORK_GROUPS).map(([key, g]) => `<div class="network-group">${toggle(key, g.label, true)}<div class="network-types">${Object.entries(g.types).map(([k, label]) => toggle(k, label)).join('')}</div></div>`).join('');
   return `<div class="network-filters" aria-label="교통망 필터">${groups}</div>
     <div class="congestion-filters">${toggle('roadCongestion', '도로 혼잡도')}${toggle('railCongestion', '노선 혼잡도')}</div>
+    <div class="lv-tabs" role="tablist" title="지도 층위">${Object.entries(MAP_LEVELS).map(([k, v]) => `<button type="button" class="small ${k === level ? 'on' : ''}" data-maplevel="${k}">${v}</button>`).join('')}</div>
     <select id="metric">${opts}</select>
     <select id="basemap" title="배경 지도">${Object.entries(BASEMAPS).map(([k, v]) => `<option value="${k}" ${k === basemap ? 'selected' : ''}>배경: ${v}</option>`).join('')}</select>${ramp}
     <div class="lg-more">

@@ -22,6 +22,15 @@ test('transport groups, individual types and congestion can be toggled independe
   for (const id of ['airroutes', 'airports', 'airport-labels']) {
     expect(await page.evaluate(id => ukt.map.getLayoutProperty(id, 'visibility'), id)).toBe('none');
   }
+  // Upstream map levels remain independent of the fork's transport filters.
+  await expect(page.locator('[data-maplevel]')).toHaveCount(4);
+  await page.locator('#metric').selectOption('pop');
+  for (const [level, metric] of [['sido', 'popSido'], ['emd', 'emdPop'], ['ri', 'subPop'], ['sgg', 'pop']]) {
+    await page.locator(`[data-maplevel="${level}"]`).click();
+    await expect(page.locator('#metric')).toHaveValue(metric);
+    await expect(toggle('air')).not.toBeChecked();
+  }
+  await page.locator('#metric').selectOption('none');
   await page.screenshot({path: 'test-results/network-filters-default.png'});
   await toggle('air').check();
   await expect(group('air')).toBeChecked();

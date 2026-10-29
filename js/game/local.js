@@ -4,7 +4,13 @@
 export const PARTIES = {
   D: { name: '더불어민주당', short: '민주당', color: '#1f5fd1' },
   P: { name: '국민의힘', short: '국민의힘', color: '#e0383e' },
+  R: { name: '개혁신당', short: '개혁신당', color: '#ff7210' },
+  J: { name: '정의당', short: '정의당', color: '#e6b800' },
+  I: { name: '무소속', short: '무소속', color: '#7d848d' },
 };
+/** 두 큰 정당 밖 (3당·무소속): 접전 지역에서 가끔 이기고, 현직이면 지지율에 따라 지킨다 */
+export const THIRD = ['R', 'J', 'I'];
+const THIRD_W = [['I', 0.45], ['R', 0.3], ['J', 0.25]];
 
 /** 시도별 국민의힘 양당 득표율 어림 (2022 지방선거 광역단체장 기준 단순화). 북측은 반반에서 시작 */
 const LEAN_P = {
@@ -32,7 +38,61 @@ export const HISTORIC_CITIES = ['평양시', '남포시'];
 export const PROMOTE_MIN_POP = 500_000;
 
 export const ELECTION = { firstYear: 2030, every: 4 };
-export const EVENT_COST = { historic: 5000, autonomy: 2000, independence: 1000, admin: 3000 };   // 억원 (표지판·행정 전산·청사)
+export const EVENT_COST = { historic: 5000, autonomy: 2000, independence: 1000, admin: 3000, cityUp: 300, annex: 1000, annexSub: 200 };   // 억원 (표지판·행정 전산·청사)
+export const CITY_UP_MIN_POP = 100_000;   // 군 → 시 승격 인구 (지방자치법 도농복합형태 시 기준 15만을 게임에서는 10만으로: 15만 넘는 남측 군은 모두 광역시 소속)
+
+/** 군→시 승격·광역시 편입의 열쇠: 자료의 도 + 이름 (자료가 바뀌어 존 번호가 달라져도 그대로, 옛 군 땅 조각도 함께) */
+export const countyId = (z) => `${z.province}|${z.name}`;
+
+/**
+ * 승격·편입·분구의 열쇠: 행정구역 정리로 하나로 묶인 시군(분단 전 경계로 합친 철원군, 하나로 합친 고성·옹진)은
+ * 남북·옛 소속 조각이 모두 같은 열쇠를 갖는다 (예전에는 조각마다 열쇠가 달라 편입을 조각 수만큼 눌러야 했다)
+ */
+/**
+ * 예전 저장의 열쇠(자료의 도 + 이름)로도 찾아도 되는지: 옛 군을 되살려 다른 군에 든 조각(연천 신서면 → 되살린 철원군)은
+ * 자료 이름의 군(연천군)을 편입·승격해도 따라가면 안 된다. 그런 조각이면 null
+ */
+function legacyKey(state, z) {
+  return restoredCounty(state, z) ? null : countyId(z);
+}
+
+export function unitId(state, z) {
+  const h = restoredCounty(state, z);
+  if (h) return `${h.province}|${h.name}`;
+  const o = adminOverride(state, z);
+  return o ? `${o.province}|${z.name}` : countyId(z);
+}
+
+/** 시로 승격한 군이면 시 이름 (○○군 → ○○시). 광역 단체를 가리는 데 쓰는 이름 (보이는 이름은 countyDisplayName) */
+export function promotedName(state, z) {
+  const up = state.local?.cityUp;
+  const legacy = legacyKey(state, z);
+  // 되살린 군(연백군: 배천·연안 존)은 그 군 이름으로 (연백시). 예전에는 존 이름으로 '배천시'가 되어 연백시 배천구를 누르면 배천시 → 배천광역시 승격이 떴다
+  return up?.length && (up.includes(unitId(state, z)) || (legacy && up.includes(legacy))) ? (restoredCounty(state, z)?.name || z.name).replace(/군$/, '시') : z.name;
+}
+
+/**
+ * 지도·창에 보이는 시군 이름: 광역시에 편입한 시는 구로 (벽성시 → 벽성구; 광역시 아래에 군은 있어도 시는 없다. 군은 군 그대로),
+ * 광역시로 승격한 시 자체(구로 나뉘지 않은 한 존)는 중구로 (해주시 → 해주광역시 중구)
+ */
+export function countyDisplayName(state, z) {
+  // 바탕 이름은 행정구역 정리 이름(되살린 연백군, 두음법칙 등)부터: 예전에는 정리 이름이 맨 위에 덮여 승격(연백군 → 연백시)·
+  // 광역시 편입(○○시 → ○○구)이 이름에 보이지 않았다
+  const L = state.local, pn = promotedName(state, z), base = state.adminNames?.[`z:${z.id}`] || z.name;
+  const own = pn !== z.name ? base.replace(/군$/, '시') : base;
+  if (!L || z.ext) return own;
+  // 광역시로 승격한 시 자리: 분구하지 않았으면 구가 없다 (광역시 그 자체, 기초단체장 없음: 화면에서는 광역 바로 밑이 동). 분구했으면 구 이름이 따로 붙는다
+  if (!z.city && /시$/.test(pn) && L.independent?.includes(pn) && z.province !== pn) return L.bungu?.[pn] ? '중구' : metroName(pn);
+  // 광역시 아래에 시는 없다: 광역시에 든 시(편입한 시, 승격한 뒤 편입한 군)는 구로 (벽성시 → 벽성구)
+  if (!z.city && z.name !== z.province && /시$/.test(own) && isMetroCity(regionOf(state, z))) return own.replace(/시$/, '구');
+  // 광역시 산하 군을 구로 바꾼 곳 (기장군 → 기장구)
+  if (L.gunToGu?.includes(unitId(state, z)) && /군$/.test(own)) return own.replace(/군$/, '구');
+  // 북측 직할시의 시 본체(개성시 안의 개성시: 개풍·장풍·판문과 나란한 시내)는 중구로. 예전에는 광역단체장과 같은 '개성시장'이 겹치고,
+  // 개성광역시로 바꾸면 '광역시와 같은 이름의 시'라 기초단체장이 없어져 시내에 지방자치가 없었다. 시 전체가 한 시군인 라선은 그대로
+  // (광역시 몸통: 화면에서는 광역 바로 밑이 동)
+  if (!z.city && z.name === z.province && KP_DIRECT_CITIES.includes(z.province) && z.province !== '라선시' && isMetroCity(regionOf(state, z))) return '중구';
+  return own;
+}
 
 /**
  * 남북 행정구역 정리: 게임을 시작할 때 고르고, 진행 중에는 이벤트(비용·선거)로 바꾼다.
@@ -46,6 +106,8 @@ export const ADMIN_OPTIONS = [
   { key: 'goseong', label: '고성군 (강원 남·북)', choices: [['separate', '남북 따로 둔다'], ['ganseong', '남측 고성군을 간성군으로'], ['south', '하나로 합쳐 남측 강원에'], ['north', '하나로 합쳐 북측 강원에']] },
   { key: 'jagang', label: '자강도·량강도 (1945년 이전 도 복원 때)', choices: [['merge', '평안북도·함경남도로 합친다'], ['keep', '도로 남겨 둔다']] },
   { key: 'dueum', label: '북측 지명 두음법칙', choices: [['keep', '북측 표기 그대로 (량강도·룡천)'], ['apply', '남측 표기로 (양강도·용천)']] },
+  { key: 'univ', label: '북측 인물 이름 대학', choices: [['keep', '그대로 둔다'], ['restore', '지명 이름으로 (김일성종합대학 → 평양종합대학)']] },
+  { key: 'guyeok', label: '북측 구역 (평양·남포·개성)', choices: [['keep', '○○구역 그대로'], ['gu', '○○구로 (중구역 → 중구, 보통강구역 → 보통강구)']] },
 ];
 
 /** 두음법칙: 첫 음절의 ㄹ·ㄴ을 남측 표기로 (량강→양강, 룡천→용천, 락원→낙원, 녕변→영변) */
@@ -114,12 +176,31 @@ export function adminOverride(state, z) {
   return null;
 }
 
+// 선전용 지명의 지명 부분 (data/historic_names.json): 역 이름·새 역 이름 후보에도 옛 이름을 쓴다
+export const PROPAGANDA_STEMS = [['김정숙', '신파'], ['김형직', '후창'], ['김형권', '풍산'], ['김책', '성진'], ['금야', '영흥'], ['선봉', '웅기'], ['은덕', '경흥'], ['새별', '경원']];
+
+/**
+ * 북측 지명(역 이름 등)에 행정구역 정리를 적용한다: 선전용 지명 되돌리기(pairs), 노동자구 폐지, 두음법칙.
+ * station이면 역 이름 끝의 '청년'(청년동맹이 지었다며 덧붙인 이름: 사리원청년역 → 사리원역)도 뗀다
+ */
+export function kpPlaceText(admin, name, pairs, station = false) {
+  if (!name) return name;
+  let out = name;
+  for (const [a, b] of pairs || []) out = out.replace(a, b);
+  if (station && admin?.propaganda === 'restore' && out.length >= 3 && out.endsWith('청년')) out = out.slice(0, -2);
+  if (admin?.workers === 'abolish') out = out.replace(/[노로]동자구$/, '리');
+  if (admin?.dueum === 'apply') out = dueum(out);
+  return out;
+}
+
 /** 행정구역 정리로 바뀌는 시군 이름 (존 번호 → 새 이름). 선전용 지명은 targets(data/historic_targets.json)에서 */
 export function adminNames(admin, zones, targets = []) {
   const out = {};
   if (admin.dueum === 'apply') zones.forEach((z, i) => { if (z.country === 'KP' && !z.ext && dueum(z.name) !== z.name) out[`z:${i}`] = dueum(z.name); });
   if (admin.goseong === 'ganseong') zones.forEach((z, i) => { if (isZone(z, '고성군', 'KR', KR_GANGWON)) out[`z:${i}`] = '간성군'; });
   if (admin.propaganda === 'restore') for (const t of targets) out[`${t.level === 'zone' ? 'z' : 'u'}:${t.id}`] = t.historic;
+  // 북측 구역을 남측처럼 구로 (구역장 → 구청장)
+  if (admin.guyeok === 'gu') zones.forEach((z, i) => { const n = out[`z:${i}`] || z.name; if (z.country === 'KP' && !z.ext && /구역$/.test(n)) out[`z:${i}`] = n.replace(/구역$/, '구'); });
   // 되살린 옛 군: 그 군에 속했던 존(떼어 낸 조각 포함)을 모두 그 군 이름으로
   zones.forEach((z, i) => { const h = z.hist && HIST_BY_NAME[z.hist]; if (h && admin[h.key] && h.prov[admin[h.key]]) out[`z:${i}`] = h.name; });
   return out;
@@ -131,36 +212,102 @@ export function initLocal(state) {
   return state.local;
 }
 
-/** 존이 속한 광역 단체 이름 */
+/** 이 시군을 편입한 곳: { prov, side } (편입한 광역 단체의 바탕: 자료의 도·남북, 승격한 도시면 그 도시 이름). 예전 저장은 이름 문자열 */
+/**
+ * 편입·승격·군→구·분구 열쇠를 지금 시군 열쇠(unitId)로 맞춘다. 합친 군(연안·배천 → 연백군)의 한 조각 열쇠로 적혀 있으면
+ * (예전 저장, 편입한 뒤 행정구역 정리를 바꾼 경우) 그 조각만 편입돼 한 군이 두 광역 단체로 갈리고 군청이 둘 찍혔다. 바꿨으면 true
+ */
+export function normalizeUnitKeys(state, zones) {
+  const L = state.local;
+  if (!L) return false;
+  const to = new Map();
+  // 자료 열쇠를 지금 열쇠로 옮긴다. 다른 존이 그 자료 열쇠를 지금도 쓰면 옮기지 않는다
+  // (옛 철원 땅인 연천 신서면만 철원군으로 갔다고 '경기도|연천군' 편입·분구를 철원군으로 옮기면 안 된다)
+  const inUse = new Set();
+  for (const z of zones) if (!z.ext) inUse.add(unitId(state, z));
+  for (const z of zones) if (!z.ext) { const c = countyId(z), u = unitId(state, z); if (c !== u && !inUse.has(c)) to.set(c, u); }
+  let changed = false;
+  for (const f of ['annex', 'bungu']) {
+    const o = L[f];
+    if (!o) continue;
+    for (const [k, v] of Object.entries(o)) {
+      const u = to.get(k);
+      if (!u) continue;
+      if (!(u in o)) o[u] = v;
+      else if (f === 'bungu') Object.assign(o[u].gu, v.gu);
+      delete o[k];
+      changed = true;
+    }
+  }
+  for (const f of ['cityUp', 'gunToGu']) {
+    if (!L[f]) continue;
+    const n = [...new Set(L[f].map((k) => to.get(k) || k))];
+    if (n.join('\n') !== L[f].join('\n')) { L[f] = n; changed = true; }
+  }
+  return changed;
+}
+
+export function annexOf(state, z) {
+  const A = state.local?.annex;
+  if (!A) return null;
+  const legacy = legacyKey(state, z);
+  return A[unitId(state, z)] || (legacy && (A[legacy] || (z.city && A[`${z.province}|${z.city}`]))) || null;
+}
+
+/** 광역 단체를 가리기 전의 바탕: 자료의 도와 남북 (행정구역 정리·편입 반영) */
+export function regionBase(state, z) {
+  const ax = annexOf(state, z);
+  if (ax && typeof ax === 'object') return { prov: ax.prov, side: ax.side, annexed: true };
+  const o = adminOverride(state, z);
+  return { prov: o?.province || z.province || z.name, side: o?.side || z.country };
+}
+
+/**
+ * 존이 속한 광역 단체 이름. 편입한 시군은 편입한 단체의 바탕으로 같은 규칙(광역시 승격, 1945년 도 복원, 두음법칙)을 거친다:
+ * 철원군을 강원도(북)에 편입한 뒤 도를 복원하면 강원북도를 따라간다
+ */
 export function regionOf(state, z) {
   const L = initLocal(state);
-  const o = adminOverride(state, z);
-  const prov = o?.province || z.province || z.name, side = o?.side || z.country;
-  // 독립(승격)한 도시는 그 자체가 광역 단체 (함흥시 → 함흥광역시)
-  for (const c of L.independent) if (prov === c || z.city === c || z.name === c) return metroName(c);
+  const ax = annexOf(state, z);
+  if (typeof ax === 'string') return ax;   // 예전 저장: 편입한 단체 이름 그대로
+  const { prov, side, annexed } = regionBase(state, z);
+  // 독립(승격)한 도시는 그 자체가 광역 단체 (함흥시 → 함흥광역시). 군에서 승격한 시도 (○○군 → ○○시 → ○○광역시)
+  const own = promotedName(state, z);
+  for (const c of L.independent) if (prov === c || (!annexed && (z.city === c || z.name === c || own === c))) return metroName(c);
   const A = L.admin || {};
   let r = prov;
   if (L.historic && !(A.jagang === 'keep' && side === 'KP' && ['자강도', '량강도', '양강도'].includes(prov))) {
     r = (side === 'KP' ? HISTORIC[prov] : HISTORIC_KR[prov]) || prov;
   }
-  return A.dueum === 'apply' && side === 'KP' ? dueum(r) : r;
+  // 통일 뒤 남북에 강원이 둘이므로 북측 강원도는 늘 강원북도 (남측은 강원특별자치도, 도 복원 뒤에는 강원남도)
+  if (side === 'KP' && r === '강원도') r = '강원북도';
+  const out = A.dueum === 'apply' && side === 'KP' ? dueum(r) : r;
+  return L.renamedRegions?.[out] || out;   // 평양시 → 평양광역시처럼 이름만 바꾼 단체
 }
+
+/** 북측 직할시(독립시): 이름을 ○○광역시로 바꿀 수 있다 */
+export const KP_DIRECT_CITIES = ['평양시', '남포시', '개성시', '라선시'];
+
+/** 예전 이름 → 지금 이름 (예전 저장의 단체장 자리를 옮길 때) */
+export const REGION_RENAMED = { 강원도: '강원북도' };
 
 /** 승격한 도시의 광역 단체 이름: 옛 직할시(평양·남포)는 그대로, 나머지 시는 ○○광역시 */
 export function metroName(c) { return isMetroCity(c) ? c : c.replace(/시$/, '광역시'); }
 
-export function isMetroCity(name) { return /(특별시|광역시|직할시|특별자치시)$/.test(name) || ['평양시', '남포시', '라선시', '개성시'].includes(name); }
+export function isMetroCity(name) { return /(특별시|광역시|직할시|특별자치시)$/.test(name) || ['평양시', '남포시', '라선시', '나선시', '개성시'].includes(name); }
 
 export function governorTitle(region) {
   // 특별시·광역시·특별자치시장은 단체 이름 그대로 (함흥광역시장), 옛 직할시는 ○○시장
   if (isMetroCity(region)) return `${region}장`;
-  return `${region.replace(/(특별자치도|도)$/, '')}도지사`;
+  // 특별자치도는 이름 그대로 (강원특별자치도지사): '특별자치'를 떼면 북측 강원도지사와 직함이 같아졌다
+  if (/특별자치도$/.test(region)) return `${region}지사`;
+  return `${region.replace(/도$/, '')}도지사`;
 }
 
 /** 시군 단체장 직함. 광역시로 승격한 도시 전체가 한 시군(존)이면 따로 뽑는 기초단체장이 없다
  *  (청진시 → 청진광역시: 그 땅의 단체장은 청진광역시장뿐, "청진광역시 구청장"은 없는 직책): null */
 export function countyTitle(name, region) {
-  if (/광역시$/.test(region) && name.replace(/시$/, '') === region.replace(/광역시$/, '')) return null;
+  if (/광역시$/.test(region) && (name === region || name.replace(/시$/, '') === region.replace(/광역시$/, ''))) return null;
   return mayorTitle(name);
 }
 
@@ -175,7 +322,7 @@ export function mayorTitle(name) {
  *  남북은 지금 소속 광역 단체 쪽으로 가른다: 북측 도로 옮긴 남측 군(장단 → 개성시, 옹진 → 황해남도)은 북측과 같이,
  *  남측 도로 옮긴 북측 군(개성 → 경기도)은 남측과 같이 */
 export function hasAutonomy(state, z) {
-  const side = adminOverride(state, z)?.side || z.country;
+  const side = regionBase(state, z).side;   // 다른 쪽 도에 편입한 군(철원군 → 강원도)도 그 도를 따른다
   return side === 'KR' || initLocal(state).autonomyKP;
 }
 
@@ -194,15 +341,78 @@ export function leanP(z) {
 
 /** 선거 한 번: 현직 정당의 득표에 지지율(50 기준)과 실적을 반영. rnd: 0~1 난수 함수 */
 /** mood: 이번 선거의 전국 바람 (국민의힘 쪽 +, 모든 지역에 같이 붙는다) */
-export function runElection(lean, office, rnd, mood = 0) {
-  let p = lean + mood;
-  if (office) {
+export function runElection(lean, office, rnd, mood = 0, third = null) {
+  // 3당·무소속: 현직이면 지지율만큼 지키고, 아니면 접전(두 큰 정당 차이 12%p 안)일수록 이변이 난다 (실제로는 드물다).
+  // third: 이 지역 3당·무소속 지지 변동(%p, {R, J, I}): 플레이어가 그 당 제안을 받아 주면 오른다
+  const thirdInc = office && THIRD.includes(office.party);
+  const two = lean + mood;
+  const boost = third ? Math.max(0, (third.R || 0) + (third.J || 0) + (third.I || 0)) / 100 : 0;
+  const chance = thirdInc ? 0.25 + ((office.approval - 50) / 50) * 0.25 : 0.025 + (Math.abs(two - 0.5) < 0.06 ? 0.05 : 0) + boost;
+  if (rnd() < chance) {
+    let party = thirdInc ? office.party : 'I';
+    if (!thirdInc) {
+      const ws = THIRD_W.map(([k, w]) => [k, Math.max(0.01, w + (third?.[k] || 0) / 10)]);
+      let r = rnd() * ws.reduce((t, [, w]) => t + w, 0);
+      for (const [k, w] of ws) { if ((r -= w) < 0) { party = k; break; } }
+    }
+    return { party, share: 0.36 + rnd() * 0.12 };
+  }
+  let p = two;
+  if (office && !thirdInc) {
     const swing = ((office.approval - 50) / 50) * 0.12 + Math.min(0.06, (office.delivered || 0) * 0.015);
     p += office.party === 'P' ? swing : -swing;
   }
-  p += (rnd() - 0.5) * 0.08;
+  p += (rnd() - 0.5) * 0.12;   // 지역마다 후보·쟁점 차이
   p = Math.min(0.97, Math.max(0.03, p));
   return { party: p >= 0.5 ? 'P' : 'D', share: p >= 0.5 ? p : 1 - p };
+}
+
+/**
+ * 시군의 정당 지지율 (합 1): 기본 성향(leanP: 두 큰 정당 몫) 위에 광역 단체별 변동(%p, 제안을 받아 주거나 거절해 오르내림)을 더한다
+ * @param {object} delta 그 광역 단체의 {D, P, R, J, I} 변동 (%p)
+ */
+export function partySupport(z, delta = {}, mayorParty = null) {
+  const lp = leanP(z);
+  const s = { D: 0.86 * (1 - lp), P: 0.86 * lp, R: 0.05, J: 0.04, I: 0.05 };
+  // 3당·무소속 단체장이 있는 시군은 그 정당 지지가 다른 시군보다 높다 (현직 텃밭)
+  if (THIRD.includes(mayorParty)) s[mayorParty] += 0.1;
+  for (const k of Object.keys(s)) s[k] = Math.max(0.005, s[k] + (delta[k] || 0) / 100);
+  const t = Object.values(s).reduce((a, b) => a + b, 0);
+  for (const k of Object.keys(s)) s[k] /= t;
+  return s;
+}
+
+/** 지자체장 연임 한도 (지방자치법: 3기까지) */
+export const TERM_LIMIT = 3;
+/** 현직이 같은 정당 공천을 받지 못하거나 나서지 않을 확률 (선거마다, 연임 한도 전) */
+export const RETIRE_CHANCE = 0.2;
+
+// 지자체장 이름 (게임 속 가상 인물): 성은 대략 인구 비율로, 이름은 1950~70년대생에 흔한 음절로
+const SURNAMES = [['김', 215], ['이', 147], ['박', 84], ['최', 47], ['정', 43], ['강', 24], ['조', 21], ['윤', 21], ['장', 20], ['임', 17], ['한', 15], ['오', 15],
+  ['서', 15], ['신', 14], ['권', 14], ['황', 14], ['안', 13], ['송', 13], ['전', 11], ['홍', 11], ['유', 10], ['고', 9], ['문', 9], ['양', 9], ['손', 9], ['배', 8],
+  ['백', 7], ['허', 6], ['남', 5], ['심', 5], ['노', 4], ['하', 4], ['곽', 4], ['성', 4], ['차', 4], ['주', 4], ['우', 4], ['구', 4], ['민', 3], ['류', 3], ['나', 3],
+  ['진', 3], ['지', 3], ['엄', 3], ['채', 3], ['원', 3], ['천', 2], ['방', 2], ['공', 2], ['현', 2], ['함', 2], ['변', 2], ['염', 2], ['여', 1], ['추', 1], ['도', 1],
+  ['석', 1], ['선', 1], ['설', 1], ['길', 1], ['연', 1], ['위', 1], ['표', 1], ['명', 1], ['반', 1], ['왕', 1], ['금', 1], ['옥', 1], ['육', 1], ['남궁', 1], ['황보', 1]];
+// 북측 표기 (두음법칙 없음)
+const KP_SURNAME = { 이: '리', 임: '림', 노: '로', 유: '류', 나: '라', 양: '량' };
+const GIVEN = {
+  m1: '영성정상동재승진종용병기경광명현준태석수철형대인규창학호원만세흥', m2: '수호철민식준훈석진기영우환혁일규남섭근길국현태성용배',
+  f1: '영정미은혜경순명현숙희옥선', f2: '숙자옥순미경희영정화애',
+  k1: '영성광명철정룡학경일혁남국춘', k2: '철혁룡남일국성수호진식명학',
+};
+const pick = (s, rnd) => s[Math.floor(rnd() * s.length)];
+
+/** 가상 지자체장 이름. side: 'KP'면 북측 표기·이름 결 */
+export function personName(rnd, side = 'KR') {
+  const tot = SURNAMES.reduce((t, [, w]) => t + w, 0);
+  let r = rnd() * tot, sur = '김';
+  for (const [s, w] of SURNAMES) { if ((r -= w) < 0) { sur = s; break; } }
+  if (side === 'KP') sur = KP_SURNAME[sur] || sur;
+  const female = rnd() < 0.15;
+  const a = female ? pick(GIVEN.f1, rnd) : side === 'KP' ? pick(GIVEN.k1, rnd) : pick(GIVEN.m1, rnd);
+  let b = female ? pick(GIVEN.f2, rnd) : side === 'KP' ? pick(GIVEN.k2, rnd) : pick(GIVEN.m2, rnd);
+  if (b === a) b = pick(female ? GIVEN.f2 : GIVEN.m2, rnd);
+  return sur + a + b;
 }
 
 /** 단체장 지지율 변화: 받아들인 제안 +3, 완공 +6, 거절 -4 (0~100) */

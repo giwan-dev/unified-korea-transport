@@ -84,8 +84,9 @@ function locationSVG(doc) {
   for (const ring of doc.context.boundaries) out.push(`<polyline points="${path(ring)}" fill="none" stroke="#b9b4a8" stroke-width="0.8"/>`);
   for (const l of doc.context.lines) out.push(`<polyline points="${path(l.pts)}" fill="none" stroke="${l.color}" stroke-width="${l.w}" stroke-opacity="0.75"/>`);
   for (const lab of doc.context.labels) out.push(`<text x="${P(lab.at).split(',')[0]}" y="${P(lab.at).split(',')[1]}" font-size="11" fill="#8a857a" text-anchor="middle" font-family="sans-serif">${esc(lab.name)}</text>`);
-  out.push(`<polyline points="${path(doc.path)}" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>`);
-  out.push(`<polyline points="${path(doc.path)}" fill="none" stroke="${doc.color}" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>`);
+  // 사업 구간 (개량 사업은 떨어진 구간이 여럿일 수 있다)
+  for (const pts of doc.paths || [doc.path]) out.push(`<polyline points="${path(pts)}" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>`);
+  for (const pts of doc.paths || [doc.path]) out.push(`<polyline points="${path(pts)}" fill="none" stroke="${doc.color}" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>`);
   for (const st of doc.stations) {
     const [px, py] = P([st.lon, st.lat]).split(',').map(Number);
     out.push(`<circle cx="${px}" cy="${py}" r="${st.transfers.length ? 6 : 4.5}" fill="#fff" stroke="${st.transfers.length ? '#111' : doc.color}" stroke-width="2.5"/>`);

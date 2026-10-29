@@ -33,14 +33,12 @@ export function subGains(state, subs) {
   return out;
 }
 
-/** 존별 인구 가중 평균 체감 개선 */
-export function zoneGains(zoneProps, subs, gains) {
+/** 존별 인구 가중 평균 체감 개선. extra: 존의 자료 소구역 밖 소구역 [[소구역, 존], ...] (떼어 낸 남측 법정리) */
+export function zoneGains(zoneProps, subs, gains, extra = []) {
   const g = new Float64Array(zoneProps.length), w = new Float64Array(zoneProps.length);
-  zoneProps.forEach((z, i) => z.subs.forEach((_, k) => {
-    const s = z.sub0 + k, p = subs.pop[s];
-    if (!(p > 0)) return;
-    g[i] += gains[s] * p; w[i] += p;
-  }));
+  const add = (i, s) => { const p = subs.pop[s]; if (!(p > 0)) return; g[i] += gains[s] * p; w[i] += p; };
+  zoneProps.forEach((z, i) => z.subs.forEach((_, k) => add(i, z.sub0 + k)));
+  for (const [s, i] of extra) add(i, s);
   for (let i = 0; i < g.length; i++) g[i] = w[i] ? g[i] / w[i] : 0;
   return g;
 }
@@ -58,7 +56,7 @@ export function updateMayorApproval(state, zGains) {
   const prev = state.zoneGainPrev || [];
   for (const [k, off] of Object.entries(state.local?.offices || {})) {
     if (!k.startsWith('m:')) continue;
-    const i = +k.slice(2);
+    const i = parseInt(k.slice(2), 10);   // 분구한 구의 구청장은 'm:존#구'
     const d = (zGains[i] || 0) - (prev[i] ?? zGains[i] ?? 0);
     off.approval = clamp(off.approval + clamp(d * SENTI.mayorStep, -SENTI.mayorMax, SENTI.mayorMax), 0, 100);
   }
@@ -72,15 +70,16 @@ export function registerSentimentMetrics(METRICS) {
     voteMayor: { label: '득표율 지도 (시군구청장, 국민의힘)', ramp: party, stops: [0.3, 0.42, 0.5, 0.58, 0.7], fmt: (v) => `${Math.round(v * 100)}%` },
     voteGov: { label: '득표율 지도 (광역단체장, 국민의힘)', ramp: party, stops: [0.3, 0.42, 0.5, 0.58, 0.7], fmt: (v) => `${Math.round(v * 100)}%` },
     mayorApproval: { label: '지자체장 지지율 (시군구청장)', ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [30, 40, 50, 60, 70], fmt: (v) => `${Math.round(v)}%` },
-    subHappy: { label: '읍면동 주민 행복도', sub: true, ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [40, 50, 60, 70, 80], fmt: (v) => v.toFixed(0) },
-    subApproval: { label: '읍면동 지지율', sub: true, ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [35, 45, 55, 65, 75], fmt: (v) => `${Math.round(v)}%` },
-    subGain: { label: '읍면동 교통 체감 개선 (시작 대비)', sub: true, ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-5, -1, 0, 3, 10], fmt: (v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}점` },
+    subHappy: { label: '리 주민 행복도', sub: true, ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [40, 50, 60, 70, 80], fmt: (v) => v.toFixed(0) },
+    subApproval: { label: '리 지지율', sub: true, ramp: ['#8f2318', '#e88a3c', '#f5e08a', '#7fc29b', '#1f6f4a'], stops: [35, 45, 55, 65, 75], fmt: (v) => `${Math.round(v)}%` },
+    subGain: { label: '리 교통 체감 개선 (시작 대비)', sub: true, ramp: ['#b2182b', '#f4a582', '#f7f7f7', '#92c5de', '#2166ac'], stops: [-5, -1, 0, 3, 10], fmt: (v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}점` },
   });
 }
 
 /** 득표율 (국민의힘 몫): 단체장의 정당과 득표율로 */
 export function pShare(off) {
-  if (!off || off.share == null) return null;
+  if (!off || off.share == null || off.appointed) return null;
+  if (off.party !== 'P' && off.party !== 'D') return null;   // 3당·무소속 당선: 두 큰 정당 득표율 지도에서는 비운다
   return off.party === 'P' ? off.share : 1 - off.share;
 }
 

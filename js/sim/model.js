@@ -8,6 +8,9 @@ const DENS_DX = 0.0113, DENS_DY = 0.009;   // 약 1km
 function densCell(x, y) { return [Math.floor(x / DENS_DX), Math.floor(y / DENS_DY)]; }
 function densKey(x, y) { const [i, j] = densCell(x, y); return `${i}:${j}`; }
 
+/** 신호 고도화·장편성 개량으로 늘어난 선로 수송력 배수 */
+const capUp = (l) => (l.sig ? P.signalCapFactor : 1) * (l.long ? P.longTrainFactor : 1);
+
 export class Model {
   /**
    * @param {object[]} zones data/zones.json의 존 속성 배열 (subs: 소구역 [경도, 위도, 인구비중, 면적])
@@ -23,6 +26,7 @@ export class Model {
     this.korean = Float64Array.from(zones, (z) => (z.ext ? Math.min(z.korean || 0, z.pop) : 0));
     this.extCountry = zones.map((z) => (z.ext ? z.country : ''));
     this.extIncome = Float64Array.from(zones, (z) => z.income || 0);
+    this.extMassW = Float64Array.from(zones, (z) => (z.ext ? z.massW ?? 1 : 1));   // 먼 나라 도시: 통행 발생 비중을 더 줄인다
     // 관광 목적지: 하루 방문객(명). 북측 관광지는 통합도만큼 열린다
     this.tour = Float64Array.from(zones, (z) => z.tour || 0);
     this.tourKP = Float64Array.from(zones, (z) => z.tourKP || 0);
@@ -43,6 +47,9 @@ export class Model {
     this.eys = new Float64Array(Z);
     this.hdi = new Float64Array(Z);
     this.amenity = new Float64Array(Z);
+    // 북측 지역 매력 가운데 시작 때 소득 격차를 메우던 몫(남측 평균보다 높은 만큼)과 그때 소득: 소득이 따라잡는 만큼 줄어든다
+    this.amenExcess = new Float64Array(Z);
+    this.inc0 = new Float64Array(Z);
     this.access = new Float64Array(Z);
     this.healthAccess = new Float64Array(Z);
     this.ccomp = new Float32Array(Z * Z);
@@ -58,6 +65,8 @@ export class Model {
   /** 저장된 존 상태 복원 */
   restore(s) {
     for (const k of ['pop', 'income', 'le', 'mys', 'eys', 'hdi', 'amenity']) this[k].set(s[k]);
+    if (s.amenExcess?.length === this.Z) { this.amenExcess.set(s.amenExcess); this.inc0.set(s.inc0); }
+    else this.initAmenityGap(true);   // 예전 저장·기준 연도: 지금 매력에서 다시 나누고, 시작 소득은 북측 기본값으로 본다
     if (s.subW && s.subW.length === this.S) {
       this.subW.set(s.subW); this.subAmenity.set(s.subAmenity); this.subAmenityReady = true;
     }
@@ -149,7 +158,7 @@ export class Model {
 
   snapshot() {
     const o = { K: this.K, railASC: this.railASC, hsrASC: this.hsrASC, transitASC: this.transitASC, accessRef: this.accessRef, frontier: this.frontier };
-    for (const k of ['pop', 'income', 'le', 'mys', 'eys', 'hdi', 'amenity']) o[k] = Array.from(this[k]);
+    for (const k of ['pop', 'income', 'le', 'mys', 'eys', 'hdi', 'amenity', 'amenExcess', 'inc0']) o[k] = Array.from(this[k]);
     o.subW = Array.from(this.subW, (v) => Math.round(v * 1e6) / 1e6);
     o.subAmenity = Array.from(this.subAmenity, (v) => Math.round(v * 1e4) / 1e4);
     o.waits = Array.from(this.stationNode, (nd, i) => [nd, Math.round(this.stationWait[i] * 10) / 10]);
@@ -187,7 +196,9 @@ export class Model {
         // 모든 역에 서는 계통(광역 전철 등)은 밑 선로의 기본 열차와 시간이 똑같아 배정이 기본 열차로만 가므로,
         // 시간표가 정해진 계통을 아주 조금 낫게 친다 (계통 이용객이 0으로 잡히지 않게)
         this.freeTime[i] = Math.max(1, t - l.skip * P.railDwellMin) * 0.995;
-        this.capacity[i] = l.trains * (l.seatCap || P.railPaxPerTrain[l.cls]);
+        // 다니는 구간이 모두 장편성이면 이 계통 열차도 길게 다닌다
+        const longF = l.via.length && l.via.every((v) => L[v].long) ? P.longTrainFactor : 1;
+        this.capacity[i] = l.trains * (l.seatCap || P.railPaxPerTrain[l.cls]) * longF;
         this.virtual.push(i);
         continue;
       }
@@ -212,7 +223,7 @@ export class Model {
         this.capacity[i] = cap;
       } else if (l.mode === 2) {
         this.freeTime[i] = (l.len / l.speed) * 60 + (l.freqWait || 0);
-        this.capacity[i] = P.metroTrainsPerDay * P.metroPaxPerTrain * (l.tracks >= 3 ? 1.5 : 1) * (l.freq || 1);
+        this.capacity[i] = P.metroTrainsPerDay * P.metroPaxPerTrain * (l.tracks >= 3 ? 1.5 : 1) * (l.freq || 1) * capUp(l);
       } else {
         const pen = l.power === 'AC' ? 1 : P.railNonACPenalty;
         // 양 끝이 역이면 정차 시간을 반씩 얹는다 (모든 역에 서는 열차 기준)
@@ -221,14 +232,15 @@ export class Model {
         this.freeTime[i] = (l.len / l.speed) * 60 * pen + dwell + (l.freqWait || 0);
         // 고속철도는 모두 복선이다 (OSM에서 방향별 선로를 따로 그린 구간이 단선으로 들어오는 것을 바로잡는다)
         const tracks = l.cls === 'hsr' ? Math.max(2, l.tracks) : l.tracks;
-        this.capacity[i] = P.railTrainsPerDay[Math.min(tracks, 4)] * P.railPaxPerTrain[l.cls] * (l.freq || 1);
+        this.capacity[i] = P.railTrainsPerDay[Math.min(tracks, 4)] * P.railPaxPerTrain[l.cls] * (l.freq || 1) * capUp(l);
       }
     }
     // 운행 계통 열차(광역 통근 전동차 등)는 제 정원만큼 밑 선로 수송력을 늘린다.
     // 선로 기본 용량은 보통 열차 정원(450명)으로 잡혀 있어, 정원 1,600명 전동차가 다니는 구간의 혼잡을 부풀린다
     for (const v of this.virtual) {
       const lv = L[v];
-      const extra = lv.trains * ((lv.seatCap || P.railPaxPerTrain[lv.cls]) - P.railPaxPerTrain[lv.cls]);
+      const longF = lv.via.length && lv.via.every((v) => L[v].long) ? P.longTrainFactor : 1;
+      const extra = lv.trains * ((lv.seatCap || P.railPaxPerTrain[lv.cls]) - P.railPaxPerTrain[lv.cls]) * longF;
       if (extra > 0) for (const u of new Set(lv.via)) this.capacity[u] += extra;
     }
     if (!this.volume || this.volume.length !== L.length) {
@@ -312,9 +324,30 @@ export class Model {
     this.S = sx.length;
     this.subX = Float64Array.from(sx); this.subY = Float64Array.from(sy);
     this.subW = Float64Array.from(sw); this.subZone = Int32Array.from(sz);
+    this.subW0 = Float64Array.from(sw);   // 자료의 읍면동 몫 (예전 저장의 입주 인구 되돌리기에 쓴다)
     this.subArea = Float64Array.from(sa);
     this.subAmenity = new Float64Array(this.S);
     this.subAmenityReady = false;
+    this.useGrid(grid);
+  }
+
+  /**
+   * 1km 격자 인구를 바꾼다 (택지지구·역세권 개발에 들어온 인구를 더한 격자).
+   * 격자 인구가 바뀐 소구역은 다음 망 설정 때 역세권(역·도로 접근시간)을 다시 구하고, 도심 도로 용량 보정도 다시 잰다
+   */
+  setGrid(grid) {
+    const sums = (off, pop) => { const out = new Float64Array(this.S); for (let s = 0; s < this.S; s++) for (let k = off[s]; k < off[s + 1]; k++) out[s] += pop[k]; return out; };
+    const before = sums(this.cellOff, this.cellPop), nBefore = Int32Array.from({ length: this.S }, (_, s) => this.cellOff[s + 1] - this.cellOff[s]);
+    this.useGrid(grid);
+    const after = sums(this.cellOff, this.cellPop);
+    this.gridDirty ||= new Set();
+    for (let s = 0; s < this.S; s++) {
+      if (Math.abs(after[s] - before[s]) > 0.5 || this.cellOff[s + 1] - this.cellOff[s] !== nBefore[s]) this.gridDirty.add(s);
+    }
+    this.urbanCapCache = new Map();
+  }
+
+  useGrid(grid) {
     // 소구역별 격자 목록 (CSR)
     const n = grid ? grid.length / 4 : 0;
     const count = new Int32Array(this.S + 1);
@@ -338,9 +371,9 @@ export class Model {
   /**
    * 존(시군구) 안에서 도시철도를 타는 짧은 통행: 모형은 존 사이 통행만 배정하므로 같은 구 안 이용이 빠진다.
    * 역마다 역세권(반경 약 800m) 인구 × metroLocalRate명이 타고, 평균 metroLocalKm만큼 노선을 따라 간다고 보고 구간에 얹는다.
-   * 갈림길에서는 갈래마다 나눈다. 보고하는 이용객과 혼잡도에만 더한다 (경로 선택에는 쓰지 않는다)
+   * 갈림길에서는 갈래마다 나눈다. 보고하는 이용객·혼잡도와 경로 선택의 혼잡(updateCosts)에 더한다
    */
-  metroLocalLoads() {
+  metroLocalLoads(scale = null) {
     const L = this.net.links, out = new Float32Array(L.length);
     const adj = new Map();
     L.forEach((l, i) => {
@@ -352,7 +385,8 @@ export class Model {
     for (const s of adj.keys()) {
       if (!stations.has(s)) continue;
       const [x, y] = this.net.nodes[s];
-      const riders = this.densityAt(x, y) * 2 * P.metroLocalRate;   // 밀도(명/km²) × 약 2km² (반경 800m)
+      // 밀도(명/km²) × 약 2km² (반경 800m). scale: 존마다 수단 선택(updateLocalTrips)으로 나온 구 안 도시철도 통행 / 이 고정 비율의 승차
+      const riders = this.densityAt(x, y) * 2 * P.metroLocalRate * (scale ? scale[this.nodeZone(s)] ?? 1 : 1);
       if (!(riders > 0)) continue;
       // 노선을 따라 퍼진다: [노드, 간 거리, 몫, 온 링크]
       const stack = [[s, 0, 1, -1]], seen = new Set([s]);
@@ -381,7 +415,62 @@ export class Model {
    * @param {number[]} zones 계산할 존
    * @returns {Float64Array} 존마다 Σ 통행 × 기대 비용 (분·통행/일)
    */
-  localTransitCost(zones) {
+  /** 노드가 든 존 (가장 가까운 읍면동의 존) */
+  nodeZone(n) {
+    (this.nodeZoneCache ||= new Map());
+    let z = this.nodeZoneCache.get(n);
+    if (z != null) return z;
+    const [x, y] = this.net.nodes[n];
+    let best = 0, bd = Infinity;
+    for (let s = 0; s < this.S; s++) { const d = (this.subX[s] - x) ** 2 + (this.subY[s] - y) ** 2; if (d < bd) { bd = d; best = s; } }
+    z = this.subZone[best];
+    this.nodeZoneCache.set(n, z);
+    return z;
+  }
+
+  /** 도착지 주차 부담 (분): 밀도가 높은 도심일수록 주차장 찾기·걷기와 요금 */
+  parkMin(z) {
+    if (this.isExt[z]) return 0;
+    const dens = this.densityAt(this.cx[z], this.cy[z]);
+    const t = Math.min(1, Math.max(0, (dens - P.carParkDensLo) / (P.carParkDensHi - P.carParkDensLo)));
+    return t * (P.carParkMaxMin + P.carParkMaxFee / P.vot);
+  }
+
+  /**
+   * 존(시군구) 안 읍면동 사이 통행의 수단 분담: 승용차·버스·도시철도(일반철도 광역전철 포함) 로짓 (localTransitCost와 같은 시간).
+   * 지역 간 통행만 세던 분담률에 같은 구·시 안 통행(도시철도 이용 대부분)을 더하고, 도시철도 구 안 이용객(metroLocal)도 이 몫에 맞춘다.
+   * @returns {{trips, car, bus, metro, kr: {trips, car, bus, metro}}} 하루 통행
+   */
+  updateLocalTrips() {
+    const zones = [];
+    for (let z = 0; z < this.Z; z++) if (!this.isExt[z]) zones.push(z);
+    const sh = { car: new Float64Array(zones.length), bus: new Float64Array(zones.length), met: new Float64Array(zones.length) };
+    this.localTransitCost(zones, sh);
+    const tot = { trips: 0, car: 0, bus: 0, metro: 0, kr: { trips: 0, car: 0, bus: 0, metro: 0 } };
+    const metZ = new Float64Array(this.Z);
+    zones.forEach((z, k) => {
+      const c = sh.car[k], b = sh.bus[k], m = sh.met[k];
+      metZ[z] = m;
+      for (const t of this.isKP[z] ? [tot] : [tot, tot.kr]) { t.trips += c + b + m; t.car += c; t.bus += b; t.metro += m; }
+    });
+    // 도시철도 구 안 이용객: 역세권 고정 비율로 퍼뜨린 승차를 존마다 수단 선택 몫에 맞춘다 (0.2~5배)
+    const fixedBoard = new Float64Array(this.Z), stations = new Set(this.net.stations), seen = new Set();
+    for (const l of this.net.links) {
+      if (l.mode !== 2 || !l.active || l.via) continue;
+      for (const s of [l.a, l.b]) {
+        if (!stations.has(s) || seen.has(s)) continue;
+        seen.add(s);
+        fixedBoard[this.nodeZone(s)] += this.densityAt(...this.net.nodes[s]) * 2 * P.metroLocalRate;
+      }
+    }
+    const scale = new Float64Array(this.Z).fill(1);
+    for (let z = 0; z < this.Z; z++) if (fixedBoard[z] > 0) scale[z] = Math.min(5, Math.max(0.2, metZ[z] / fixedBoard[z]));
+    this.metroLocal = this.metroLocalLoads(scale);
+    this.localTotals = tot;
+    return tot;
+  }
+
+  localTransitCost(zones, shares = null) {
     const L = this.net.links, M = P.metroCandidates, K = P.stationCandidates;   // this.K는 통행량 보정 계수다 (역 후보 수가 아니다)
     const adj = new Map();
     // 시간이 숫자가 아닌 선로(속도·길이 없는 구간)는 뺀다: NaN이 섞이면 아래 최단 경로가 끝나지 않는다
@@ -413,28 +502,38 @@ export class Model {
       let d = cache.get(src);
       if (d) return d;
       d = new Map([[src, 0]]);
-      const hk = [0], hv = [src];   // 이진 힙 (시간, 노드)
+      const hk = [0], hv = [src];   // 이진 힙 (시간, 노드): 배열을 새로 만들지 않고 자리만 바꾼다
       const push = (k, v) => {
         let i = hk.length; hk.push(k); hv.push(v);
-        while (i > 0) { const p = (i - 1) >> 1; if (hk[p] <= hk[i]) break; [hk[p], hk[i]] = [hk[i], hk[p]]; [hv[p], hv[i]] = [hv[i], hv[p]]; i = p; }
-      };
-      const pop = () => {
-        const k = hk[0], v = hv[0], lk = hk.pop(), lv = hv.pop();
-        if (hk.length) {
-          hk[0] = lk; hv[0] = lv;
-          for (let i = 0; ;) {
-            const l = 2 * i + 1, r = l + 1;
-            let m = i;
-            if (l < hk.length && hk[l] < hk[m]) m = l;
-            if (r < hk.length && hk[r] < hk[m]) m = r;
-            if (m === i) break;
-            [hk[m], hk[i]] = [hk[i], hk[m]]; [hv[m], hv[i]] = [hv[i], hv[m]]; i = m;
-          }
+        while (i > 0) {
+          const p = (i - 1) >> 1;
+          if (hk[p] <= k) break;
+          hk[i] = hk[p]; hv[i] = hv[p]; i = p;
         }
-        return [k, v];
+        hk[i] = k; hv[i] = v;
+      };
+      let popK = 0;
+      const pop = () => {
+        const v = hv[0], lk = hk.pop(), lv = hv.pop();
+        popK = hk.length ? hk[0] : lk;
+        if (hk.length) {
+          const n = hk.length;
+          let i = 0;
+          for (;;) {
+            const l = 2 * i + 1, r = l + 1;
+            let m = i, mk = lk;
+            if (l < n && hk[l] < mk) { m = l; mk = hk[l]; }
+            if (r < n && hk[r] < mk) { m = r; mk = hk[r]; }
+            if (m === i) break;
+            hk[i] = hk[m]; hv[i] = hv[m]; i = m;
+          }
+          hk[i] = lk; hv[i] = lv;
+          return v;
+        }
+        return lv;
       };
       while (hk.length) {
-        const [du, u] = pop();
+        const u = pop(), du = popK;
         if (du > d.get(u)) continue;
         const a = adj.get(u);
         if (!a) continue;
@@ -457,6 +556,7 @@ export class Model {
         for (let b = s0; b < s0 + n; b++) {
           if (a === b) continue;
           const d = kmBetween(this.subX[a], this.subY[a], this.subX[b], this.subY[b]);
+          if (d > P.localPairMaxKm) continue;   // 먼 쌍은 통행이 거의 없다 (exp(−12/3) ≈ 2%): 북측 리 수백 개짜리 군에서 쌍이 수만 개라 무거웠다
           const g = Math.max(this.subW[a], 0) * Math.max(this.subW[b], 0) * Math.exp(-d / P.localTripKm);
           if (g > 0) { pairs.push(a, b, d, g); gsum += g; }
         }
@@ -465,9 +565,13 @@ export class Model {
       const candCache = new Map();
       const candOf = (a) => { let c = candCache.get(a); if (!c) candCache.set(a, (c = cands(a))); return c; };
       const trips = this.pop[z] * P.localTripRate;
+      const parkZ = this.parkMin(z) * P.localParkShare;   // 도심 주차 부담 (구 안 짧은 통행은 주차가 더 쉽다: 일부만)
       let cost = 0;
       for (let k = 0; k < pairs.length; k += 4) {
-        const a = pairs[k], b = pairs[k + 1], dr = pairs[k + 2] * P.localDetour, T = (trips * pairs[k + 3]) / gsum;
+        const a = pairs[k], b = pairs[k + 1], dr = pairs[k + 2] * P.localDetour;
+        // 택지지구: 역 중심으로 짓고 연계 버스·보행로를 함께 놓아 도시철도까지 가깝고, 새로 든 사람은 통행이 많다
+        const tod = this.housingSubs && (this.housingSubs.has(a) || this.housingSubs.has(b));
+        const T = ((trips * pairs[k + 3]) / gsum) * (tod ? P.housingTripBoost : 1);
         const car = (dr / P.localCarKmh) * 60 + P.localCarExtraMin;
         const bus = (dr / P.localBusKmh) * 60 + P.localBusExtraMin;
         let met = Infinity;
@@ -479,8 +583,10 @@ export class Model {
             if (t != null) met = Math.min(met, accA + t + cb[j + 1]);
           }
         }
-        const e = Math.exp(-th * car) + Math.exp(-th * bus) + (met < Infinity ? Math.exp(-th * met) : 0);
+        if (tod && met < Infinity) met = Math.max(1, met - P.housingMetroBonusMin);
+        const eC = Math.exp(-th * (car + parkZ)), eB = Math.exp(-th * bus), eM = met < Infinity ? Math.exp(-th * met) : 0, e = eC + eB + eM;
         cost += T * (-Math.log(e) / th);
+        if (shares) { shares.car[zi] += (T * eC) / e; shares.bus[zi] += (T * eB) / e; shares.met[zi] += (T * eM) / e; }
       }
       out[zi] = cost;
     });
@@ -527,10 +633,8 @@ export class Model {
     const a = this.cellOff[s], b = this.cellOff[s + 1];
     let rad = 0;
     for (let c = a; c < b; c++) rad = Math.max(rad, kmBetween(cx, cy, this.cellX[c], this.cellY[c]));
-    // accessMinutes는 걷기·연계 두 갈래에서 각각 늘어난다: 구간 [lo, hi]에서의 최솟값
-    const walk = (d) => d * P.accessDetour / P.walkSpeedKmh * 60;
-    const feed = (d) => P.feederPenaltyMin + d * P.accessDetour / P.feederSpeedKmh * 60;
-    const lower = (lo, hi) => (lo <= P.walkMaxKm ? Math.min(walk(lo), hi > P.walkMaxKm ? feed(Math.max(lo, P.walkMaxKm)) : Infinity) : feed(lo));
+    // accessMinutes는 거리에 따라 늘기만 한다: 구간 [lo, hi]에서의 최솟값은 lo에서
+    const lower = (lo) => accessMinutes(lo);
     const order = cands.map((nd) => {
       const dc = kmBetween(cx, cy, nodes[nd][0], nodes[nd][1]);
       const r = rad * 1.01 + 0.01;   // 경위도 거리 근사의 오차 여유
@@ -565,7 +669,9 @@ export class Model {
     const metroNodes = new Set();
     for (const l of net.links) if (l.active && l.mode === 2) { metroNodes.add(l.a); metroNodes.add(l.b); }
     const sig = accessSignature(roadNodes, railNodes, hsrNodes, metroNodes, net.stations, nodes.length);
-    if (this.accessSig === sig) {
+    const dirty = this.gridDirty?.size ? this.gridDirty : null;   // 격자 인구가 바뀐 소구역 (택지지구 입주 등)
+    this.gridDirty = null;
+    if (this.accessSig === sig && !dirty) {
       // 역 구성이 같으므로 역 배열·대기시간은 그대로, 해마다 새로 정하던 것만 다시 (승차 인원 0, 출발 묶음)
       this.boardings = new Float64Array(this.stationNode.length);
       this.stationFreshCap?.fill(0);   // 역 구성이 같으면 새로 문을 연 역이 없다
@@ -579,6 +685,7 @@ export class Model {
     // 기준선에 담겨 온 결과(preloadAccess)가 이 망 것이면, 바뀐 노드가 없는 셈으로 쳐서 소구역 계산을 모두 건너뛴다
     const pre = this.accessPreload;
     this.accessPreload = null;
+    this.accessReused = !!(pre && pre.sig === sig);   // 불러오기 단계 표시용 (worker.js)
     if (pre && pre.sig === sig) {
       Object.assign(this, pre.arrays);
       this.stationNodePrev = pre.stations;
@@ -611,7 +718,7 @@ export class Model {
     let redone = 0;
     for (let s = 0; s < S; s++) {
       // 바뀐 노드가 지금 고른 R개 가운데 가장 먼 것보다 가까우면 (새로 생겼거나 없어졌거나) 다시 고른다
-      if (!full && !near(s, dRoad, this.subRoadFar[s] + 1e-6)) continue;
+      if (!full && !near(s, dRoad, this.subRoadFar[s] + 1e-6) && !dirty?.has(s)) continue;
       redone++;
       const nearK = roadIdx.nearestK(this.subX[s], this.subY[s], R);
       let wsum = 0, far = 0;
@@ -637,7 +744,7 @@ export class Model {
       this.subMetroAcc = new Float64Array(S * M);
     }
     for (let s = 0; s < S; s++) {
-      if (!full && !near(s, dMetro, P.metroRadiusKm)) continue;
+      if (!full && !near(s, dMetro, P.metroRadiusKm) && !dirty?.has(s)) continue;
       for (let k = 0; k < M; k++) { this.subMetro[s * M + k] = -1; this.subMetroAcc[s * M + k] = 0; }
       const scored = this.bestByAccess(s, mIdx.within(this.subX[s], this.subY[s], P.metroRadiusKm), M);
       scored.forEach(([nd, acc], k) => { this.subMetro[s * M + k] = nd; this.subMetroAcc[s * M + k] = acc; });
@@ -679,7 +786,7 @@ export class Model {
     }
     this.stationNodePrev = this.stationNode;
     for (let s = 0; s < S; s++) {
-      if (!full && !near(s, dSt, P.stationRadiusKm)) continue;
+      if (!full && !near(s, dSt, P.stationRadiusKm) && !dirty?.has(s)) continue;
       for (let k = 0; k < K; k++) { this.subSt[s * K + k] = -1; this.subStAcc[s * K + k] = 0; }
       const cands = stIdx.within(this.subX[s], this.subY[s], P.stationRadiusKm);
       const scored = this.bestByAccess(s, cands, K);
@@ -761,9 +868,13 @@ export class Model {
   }
 
   updateCosts() {
+    this.road?.fixCosts(null); this.transit?.fixCosts(null);   // 펴 둔 간선 비용은 이제 맞지 않는다
     const L = this.net.links;
     for (let i = 0; i < L.length; i++) {
-      const vc = this.capacity[i] > 0 ? this.volume[i] / this.capacity[i] : 0;
+      // 도시철도는 구 안 짧은 이용객(metroLocal)도 같은 열차를 탄다: 경로 선택의 혼잡에도 넣는다 (예전에는 보고에만 더해,
+      // 지도에는 붐비는 노선이 배정에는 비어 보여 존 사이 통행이 가장 빠른 한 노선에만 몰렸다)
+      const vol = L[i].mode === 2 ? this.volume[i] + (this.metroLocal?.[i] || 0) : this.volume[i];
+      const vc = this.capacity[i] > 0 ? vol / this.capacity[i] : 0;
       if (L[i].mode === 0) {
         const r = Math.min(1 + P.bprAlpha * vc ** P.bprBeta, P.bprMaxRatio);
         // 지체는 짧은 구간(다리 진입부·교차로)에도 최소 bprMinBaseMin분 기준으로 붙인다.
@@ -772,6 +883,9 @@ export class Model {
         const t = t0 + Math.max(t0, P.bprMinBaseMin) * (r - 1);
         // 운전자는 같은 시간이면 고속도로를 고른다 (신호·교차로·안전에 대한 체감 차이)
         this.cost[i] = t * (P.roadPerceived[L[i].cls] ?? 1);
+      } else if (L[i].mode === 2) {
+        // 도시철도 혼잡: 붐비기 시작하면(혼잡도 0.6~) 서서 가고 한두 대 보내는 불편이 커진다 → 나란한 노선·버스·광역철도로 나뉜다
+        this.cost[i] = this.freeTime[i] * Math.min(1 + P.metroCrowdAlpha * vc ** P.metroCrowdBeta, P.metroCrowdMax);
       } else {
         this.cost[i] = this.freeTime[i] * (1 + 0.5 * Math.max(0, vc - 1));
         // 고속철도 구간은 비싼 운임(일반철도와의 차이)을 시간으로 바꿔 경로 비용에 넣는다:
@@ -1018,6 +1132,7 @@ export class Model {
       lap('main origins');
       const rs = await pending;
       lap('wait helpers');
+      rs.forEach((r, k) => tm.push([`helper${k} begin/pass`, `${r.tBegin}/${r.tPass}`]));
       for (const r of rs) this.mergeOrigins(run, r, it);
       lap('merge');
       this.endIteration(run, it);
@@ -1104,6 +1219,7 @@ export class Model {
 
   /** 보조 워커 쪽: 주 워커와 같은 교통량으로 맞춘 뒤 제 몫의 출발 존을 계산해 돌려준다 */
   originsFor(msg) {
+    const t0 = performance.now();
     this.volume.set(msg.volume);
     this.stationWait.set(msg.stationWait);
     this.airOD.set(msg.airOD);
@@ -1111,10 +1227,11 @@ export class Model {
     const run = this.startAssign(msg.integration, false, null);
     run.iters = msg.iters;
     this.beginIteration(run, msg.D);
+    const t1 = performance.now();
     const zones = [];
     for (let i = msg.part; i < this.Z; i += msg.parts) zones.push(i);
     this.originPass(run, msg.it, zones, null);
-    return { aux: run.aux, stOD: run.stOD, airOD: run.airOD, latentOD: run.latentOD, totals: run.totals, ccomp: this.ccomp, zones,
+    return { tBegin: Math.round(t1 - t0), tPass: Math.round(performance.now() - t1), aux: run.aux, stOD: run.stOD, airOD: run.airOD, latentOD: run.latentOD, totals: run.totals, ccomp: this.ccomp, zones,
       odT: msg.it === msg.iters ? run.odT : null, odTime: msg.it === msg.iters ? run.odTime : null };
   }
 
@@ -1130,6 +1247,9 @@ export class Model {
     const auxT = this.auxT && this.auxT.length === this.transitLinkCount ? this.auxT : (this.auxT = new Float64Array(this.transitLinkCount));
     const nodeDemand = this.nodeDemandBuf && this.nodeDemandBuf.length === nNodes ? this.nodeDemandBuf : (this.nodeDemandBuf = new Float64Array(nNodes));
     const croad = new Float64Array(Z), ctr = new Float64Array(Z);
+    // 도착지 주차: 밀도가 높은 도심일수록 주차장 찾기·걷기와 주차 요금이 든다 (도시철도가 승용차를 덜어내는 큰 이유)
+    const park = new Float64Array(Z);
+    for (let j = 0; j < Z; j++) park[j] = this.parkMin(j);
     const egress = new Int32Array(this.S);   // 대중교통 도착 소구역별 하차 노드
     const mass = this.tripMass();
     // 관광 통행: 목적지 쪽 질량에 관광 매력도를 더한다 (방문객 1명 ≈ 인구 tourismMass명)
@@ -1140,7 +1260,11 @@ export class Model {
     const crail = new Float64Array(Z), airC = new Array(Z), compAcc = new Float64Array(Z), timeAcc = new Float64Array(Z), tAcc = new Float64Array(Z);
     const lam = P.logitLambda;
     const A = this.airports.length;
+    const kmRow = new Float64Array(Z), bcRow = new Float64Array(Z);   // 출발 존마다 한 번 (승용차 출발 묶음마다 다시 재지 않게)
     let done = 0;
+    // 이 반복 동안 링크 비용은 그대로다: 간선 순서로 펴 둔 비용을 쓴다 (최단경로가 링크 번호로 건너뛰며 읽지 않게)
+    this.road.fixCosts(this.cost);
+    this.transit.fixCosts(this.costT);
 
     for (const i of zoneList) {
       const o0 = this.zoneSub0[i], on = this.zoneSubN[i];
@@ -1193,6 +1317,7 @@ export class Model {
       const carPen = P.carlessPenaltyMin * Math.max(0, 1 - this.income[i] / P.carOwnershipIncome);
       // 승용차: 출발 소구역 묶음마다 따로 최단경로 트리를 만든다.
       // 존 전체를 한 트리로 하면 모든 통행이 가장 유리한 접속점 하나로 나가, 같은 시군구 안 다른 읍면동 쪽 도로는 비어 보인다
+      for (let j = 0; j < Z; j++) { kmRow[j] = kmBetween(this.cx[i], this.cy[i], this.cx[j], this.cy[j]) * 1.25; bcRow[j] = this.borderCost(i, j, integration); }
       let zw = 0;
       for (let o = o0; o < o0 + on; o++) zw += Math.max(this.subW[o], 0);
       for (let g = this.grpOff[i]; g < this.grpOff[i + 1]; g++) {
@@ -1227,9 +1352,9 @@ export class Model {
 
         nodeDemand.fill(0);
         for (let j = 0; j < Z; j++) {
-          const km = kmBetween(this.cx[i], this.cy[i], this.cx[j], this.cy[j]) * 1.25;
-          const bc = this.borderCost(i, j, integration);
-          const gr = croad[j] + (km * P.carCostPerKm) / P.vot + bc + carPen;
+          const km = kmRow[j];
+          const bc = bcRow[j];
+          const gr = croad[j] + (km * P.carCostPerKm) / P.vot + bc + carPen + park[j];
           let hsrShare = 0;
           for (let k = pickOff[j]; k < pickOff[j + 1]; k += 3) {
             if (this.stationHsr[pick[k]] && this.stationHsr[pick[k + 1]]) hsrShare += pick[k + 2];
@@ -1243,7 +1368,7 @@ export class Model {
           const gu = ctr[j] + tfare / P.vot + this.transitASC + bc;
           const air = airC[j];
           if (!air) { compAcc[j] += share * gr; continue; }
-          const afare = (P.airBaseFare + km * P.airFarePerKm) * (air.intl ? P.airIntlFareFactor : 1);
+          const afare = airFare(km) * (air.intl ? P.airIntlFareFactor : 1);
           const ga = air.cost + afare / P.vot + P.airASC + bc;
           const eR = Math.exp(-lam * gr), eT = isFinite(gt) ? Math.exp(-lam * gt) : 0, eU = isFinite(gu) ? Math.exp(-lam * gu) : 0;
           const eA = isFinite(ga) ? Math.exp(-lam * ga) : 0;
@@ -1267,7 +1392,7 @@ export class Model {
           if (tAir > 0) airOD[air.a * A + air.b] += tAir;
           // 운항하지 않는 노선이 열렸다면 생겼을 수요 (자동 취항 판단용)
           if (air.pa >= 0 && air.pot < air.cost - 5) {
-            const pfare = (P.airBaseFare + km * P.airFarePerKm) * (air.pIntl ? P.airIntlFareFactor : 1);
+            const pfare = airFare(km) * (air.pIntl ? P.airIntlFareFactor : 1);
             const eP = Math.exp(-lam * (air.pot + pfare / P.vot + P.airASC + bc));
             latentOD[air.pa * A + air.pb] += T * eP / (sum - eA + eP);
           }
@@ -1306,6 +1431,8 @@ export class Model {
       done++;
       if (progress && done % 25 === 0) progress(((it - 1) + 0.9 * done / zoneList.length) / iters);
     }
+    this.road.fixCosts(null);
+    this.transit.fixCosts(null);
   }
 
   /**
@@ -1400,7 +1527,7 @@ export class Model {
     const m = new Float64Array(this.Z);
     for (let i = 0; i < this.Z; i++) {
       const rel = this.income[i] > 0 ? this.income[i] / this.frontier : 1;
-      const eff = this.isExt[i] ? (this.pop[i] - this.korean[i]) * P.extMassFactor + this.korean[i] * P.koreanDiasporaFactor : this.pop[i];
+      const eff = this.isExt[i] ? ((this.pop[i] - this.korean[i]) * P.extMassFactor + this.korean[i] * P.koreanDiasporaFactor) * this.extMassW[i] : this.pop[i];
       m[i] = eff / 1e4 * rel ** P.propensityIncomeElasticity;
     }
     return m;
@@ -1522,13 +1649,36 @@ export class Model {
       this.hdi[i] = hdiOf(this.le[i], this.mys[i], this.eys[i], this.income[i]);
     }
     this.calibrateAmenity(0, 'closed');
+    this.initAmenityGap();
     this.calibrateSubAmenity();
+  }
+
+  /**
+   * 기준 연도 보정은 북측 소득이 남측의 20분의 1인데도 사람이 떠나지 않도록 북측 지역 매력을 남측보다 2 넘게 높게 잡는다.
+   * 그 몫(남측 인구 가중 평균보다 높은 만큼)을 따로 적어 두고, 북측 소득이 남측 수준으로 따라잡는 만큼 줄인다
+   * (예전에는 소득이 따라잡은 뒤에도 남아 2050년대부터 남측 인구가 북측으로 크게 옮겨 갔다). old: 예전 저장에서 다시 나눌 때
+   */
+  initAmenityGap(old = false) {
+    let a = 0, w = 0;
+    for (let i = 0; i < this.Z; i++) if (!this.isExt[i] && !this.isKP[i]) { a += this.amenity[i] * this.pop[i]; w += this.pop[i]; }
+    const kr = w ? a / w : 0;
+    for (let i = 0; i < this.Z; i++) {
+      this.amenExcess[i] = this.isKP[i] && !this.isExt[i] ? Math.max(0, this.amenity[i] - kr) : 0;
+      this.inc0[i] = old && this.isKP[i] ? Math.min(this.income[i], P.incomeKP) : this.income[i];
+    }
+  }
+
+  /** 북측 소득이 시작 때에서 남측 수준(frontier)까지 따라잡은 몫 (0~1) */
+  catchUp(i) {
+    const a = Math.log(this.inc0[i] || 1), b = Math.log(this.frontier);
+    return b > a ? Math.min(1, Math.max(0, (Math.log(this.income[i]) - a) / (b - a))) : 1;
   }
 
   utility(i) {
     const dens = this.pop[i] / this.area[i];
     return Math.log(this.income[i]) + P.migAccessWeight * Math.log(this.access[i] / this.accessRef + 1e-6)
-      - P.migDensityElasticity * Math.log(dens + 1) + this.amenity[i];
+      - P.migDensityElasticity * Math.log(dens + 1) + this.amenity[i] - this.amenExcess[i] * this.catchUp(i)
+      + 0.1 * (this.edu?.[i] || 0);   // 새 대학 가까이로 청년이 조금 모인다
   }
 
   /** 존별 인구이동 흐름. 반환: 존별 순유입 */
@@ -1586,10 +1736,35 @@ export class Model {
     }
   }
 
+  /**
+   * 대학 효과: 시군마다 90분 안팎에 닿는 대학 정원(거리에 따라 줄어듦, e^(−분/45))을 청년 수요(인구의 2% + 2만)에 견준 충족도 f.
+   * 게임에서 새로 세운 대학이 더한 몫(지금 대학 전체의 f − 처음부터 있던 대학만의 f)의 2.5배만큼 기대 교육연수 목표를 올린다 (최대 1.5년)
+   * (처음부터 있던 대학의 효과는 기준 연도 교육 수준에 이미 들어 있다). univ: [[존, 정원, 새 대학이면 1]]
+   */
+  eduBoost(univ) {
+    const { Z, ccomp } = this;
+    const out = new Float64Array(Z);
+    if (!univ?.some((u) => u[2])) return out;
+    for (let i = 0; i < Z; i++) {
+      if (this.isExt[i]) continue;
+      let all = 0, old = 0;
+      for (const [z, seats, isNew] of univ) {
+        const v = seats * Math.exp(-(i === z ? 10 : ccomp[i * Z + z]) / 45);
+        all += v;
+        if (!isNew) old += v;
+      }
+      const need = this.pop[i] * 0.02 + 20000;
+      out[i] = Math.min(1.5, 2.5 * ((1 - Math.exp(-all / need)) - (1 - Math.exp(-old / need))));
+    }
+    return out;
+  }
+
   /** 1년 진행: 소득 수렴, 건강·교육, 인구이동, 자연증감 */
-  advanceYear(integration, policy, sez = []) {
+  advanceYear(integration, policy, sez = [], univ = []) {
     const { Z } = this;
     this.computeAccess();
+    const edu = this.eduBoost(univ);
+    this.edu = edu;
     this.frontier *= 1 + P.frontierGrowth;
     // 경제특구: 투자가 몰려 소득이 빨리 따라잡고(수렴 속도 ×1.8, 목표 +15%), 일자리를 찾아 사람이 모인다(편의 +)
     const special = new Set(sez);
@@ -1604,8 +1779,8 @@ export class Model {
       this.income[i] = Math.exp(Math.log(this.income[i]) + r * (Math.log(target) - Math.log(this.income[i])));
       this.le[i] += 0.08 * (this.leTarget(i) - this.le[i]);
       const ii = incomeIndex(this.income[i]);
-      this.eys[i] += 0.05 * (6 + 10.5 * ii - this.eys[i]);
-      this.mys[i] += 0.02 * (7 + 6 * ii - this.mys[i]);
+      this.eys[i] += 0.05 * (6 + 10.5 * ii + edu[i] - this.eys[i]);   // 새 대학: 기대 교육연수 목표 +최대 1.5년
+      this.mys[i] += 0.02 * (7 + 6 * ii + edu[i] * 0.6 - this.mys[i]);   // 평균 교육연수는 수십 년에 걸쳐 따라간다
       this.hdi[i] = hdiOf(this.le[i], this.mys[i], this.eys[i], this.income[i]);
     }
     const mig = this.migrationFlows(integration, policy);
@@ -1646,9 +1821,86 @@ export class Model {
       }
       const old = this.pop[z], now = old + d.persons;
       for (let s = s0; s < s0 + n; s++) this.subW[s] *= old / now;
-      this.subW[best] += d.persons / now;
+      // 택지지구는 지구가 덮는 읍면동마다 넓이만큼 나눠 산다 (예전에는 지구 가운데에서 가장 가까운 읍면동 하나에 다 몰렸다)
+      const parts = (d.parts || []).filter((q) => q.sub >= s0 && q.sub < s0 + n);
+      if (parts.length) for (const q of parts) this.subW[q.sub] += (d.persons * q.share) / now;
+      else this.subW[best] += d.persons / now;
       this.pop[z] = now;
+      if (parts.length) for (const q of parts) this.holdSubShare(q.sub);
+      else this.holdSubShare(best);
     }
+  }
+
+  /**
+   * 예전 저장: 이미 입주한 개발 인구가 해마다 같은 존의 다른 소구역으로 흩어져 있다.
+   * 입주한 소구역 인구가 (존 인구 − 입주 인구) × 자료 몫 + 입주 인구에 모자라면 모자란 만큼을 새로 지은 것처럼 순증으로 채우고 붙든다
+   * (흩어진 주민은 옮겨 간 읍면동에 그대로 산다. 이미 그만큼이면 그대로)
+   */
+  /**
+   * 예전 저장: 택지지구 입주 인구가 가장 가까운 읍면동 하나에 몰려 있다. 그 읍면동에서 덜어 지구가 덮는 읍면동들로 넓이만큼 나눈다 (한 번)
+   * @param {{zone:number, lon:number, lat:number, persons:number, parts:{sub:number, share:number}[]}[]} list
+   */
+  spreadDevelopments(list) {
+    for (const d of list) {
+      const z = d.zone;
+      if (!(z >= 0) || this.isExt[z] || !(d.persons > 0)) continue;
+      const s0 = this.zoneSub0[z], n = this.zoneSubN[z], P = this.pop[z];
+      const parts = (d.parts || []).filter((q) => q.sub >= s0 && q.sub < s0 + n);
+      if (parts.length < 2 || !(P > 0)) continue;
+      let best = s0, bd = Infinity;
+      for (let s = s0; s < s0 + n; s++) {
+        const dd = (this.subX[s] - d.lon) ** 2 + (this.subY[s] - d.lat) ** 2;
+        if (dd < bd) { bd = dd; best = s; }
+      }
+      const keep = parts.find((q) => q.sub === best)?.share || 0;
+      const move = Math.min(d.persons * (1 - keep), this.subW[best] * P * 0.9);
+      if (!(move > 0)) continue;
+      this.subW[best] -= move / P;
+      const others = parts.filter((q) => q.sub !== best), tot = others.reduce((t, q) => t + q.share, 0) || 1;
+      for (const q of others) this.subW[q.sub] += (move * q.share) / tot / P;
+      for (const q of parts) this.holdSubShare(q.sub);
+    }
+  }
+
+  anchorDevelopments(list) {
+    for (const d of list) {
+      const z = d.zone;
+      if (!(z >= 0) || this.isExt[z] || !(d.persons > 0)) continue;
+      const s0 = this.zoneSub0[z], n = this.zoneSubN[z], P = this.pop[z];
+      if (n < 2 || !(P > d.persons)) continue;
+      let best = s0, bd = Infinity;
+      for (let s = s0; s < s0 + n; s++) {
+        const dd = (this.subX[s] - d.lon) ** 2 + (this.subY[s] - d.lat) ** 2;
+        if (dd < bd) { bd = dd; best = s; }
+      }
+      const target = (P - d.persons) * this.subW0[best] + d.persons, cur = P * this.subW[best];
+      const add = target - cur;
+      if (add > 1) {
+        const now = P + add;
+        for (let s = s0; s < s0 + n; s++) this.subW[s] *= P / now;
+        this.subW[best] += add / now;
+        this.pop[z] = now;
+        this.anchoredAdd = (this.anchoredAdd || 0) + add;
+      }
+      this.holdSubShare(best);
+    }
+  }
+
+  /**
+   * 소구역이 지금 몫(subW)을 균형 몫으로 갖도록 편의(subAmenity)를 올린다. 해마다 relocateWithinZones가 소구역 몫을
+   * 균형 몫으로 끌어당겨, 택지지구에 들어온 인구가 몇 해 만에 같은 시군구의 다른 읍면동으로 흩어지던 것 (지은 집은 남는다)
+   */
+  holdSubShare(s) {
+    if (!this.subAmenityReady) this.calibrateSubAmenity();
+    const z = this.subZone[s], a = this.zoneSub0[z], n = this.zoneSubN[z];
+    if (n < 2) return;
+    const t = (k) => this.subArea[k] * Math.exp(this.subUtility(k) + this.subAmenity[k]);
+    let sum = 0;
+    for (let k = a; k < a + n; k++) sum += t(k);
+    const ts = t(s), w = this.subW[s];
+    if (!(ts > 0) || !(sum > ts) || !(w > 0) || w >= 0.999) return;
+    const want = (w * (sum - ts)) / (1 - w);
+    if (want > ts) this.subAmenity[s] += Math.log(want / ts);
   }
 
   // ------------------------------------------------------------ 결과
@@ -1659,7 +1911,9 @@ export class Model {
     for (let i = 0; i < n; i++) {
       vol[i] = this.volume[i] + (this.metroLocal?.[i] || 0);
       vc[i] = this.capacity[i] > 0 ? vol[i] / this.capacity[i] : 0;
-      speed[i] = this.cost[i] > 0 ? this.net.links[i].len / (this.cost[i] / 60) : 0;
+      // 도로의 실제 속도는 경로 선택용 체감 비용(고속도로 ×0.85 등)을 빼고 잰다: 그러지 않으면 설계 속도보다 빠르게 나왔다
+      const l = this.net.links[i], road = l.mode === 0, t = road ? this.cost[i] / (P.roadPerceived[l.cls] ?? 1) : this.cost[i];
+      speed[i] = t > 0 ? (road ? Math.min(l.len / (t / 60), l.speed) : l.len / (t / 60)) : 0;
     }
     // 운행 계통 구간별 이용객 (가상 링크 순서 그대로)
     const svcVol = Float32Array.from(this.virtual || [], (i) => this.volume[i]);
@@ -1672,6 +1926,7 @@ export class Model {
       hdi: Float64Array.from(this.hdi), le: Float64Array.from(this.le),
       access: Float64Array.from(this.access), station: this.primaryStations(),
       netMig: this.lastMigration.net ? Float64Array.from(this.lastMigration.net) : new Float64Array(this.Z),
+      edu: this.edu ? Float64Array.from(this.edu) : new Float64Array(this.Z),   // 새 대학이 올린 기대 교육연수 목표 (년)
     };
   }
 
@@ -1787,24 +2042,31 @@ export class Model {
         const intl = ap[a].country !== ap[b].country && (ap[a].ext || ap[b].ext);
         if (km < P.airMinKm || (ap[a].ext && ap[b].ext)) continue;
         if (intl && !(ap[a].intl && ap[b].intl)) continue;
+        // 장거리(동남아·미주·유럽·대양주)는 허브 공항(인천)에서만 뜬다 (대형기·환승 수요)
+        if ((ap[a].longhaul && !ap[b].hub) || (ap[b].longhaul && !ap[a].hub)) continue;
         if (banned.has(routeKey(ap[a].id, ap[b].id))) continue;
         // 새로 열린 노선은 하루 2회쯤에서 시작한다고 본다
         this.potFlight[a * A + b] = time(a, b) + Math.min(P.airScheduleMaxMin, P.airScheduleBase / 2);
       }
     }
     const Z = this.Z;
-    this.zoneAir = new Int32Array(Z * 2).fill(-1);
-    this.zoneAirAcc = new Float64Array(Z * 2);
+    const NA = this.NA = 3;
+    this.zoneAir = new Int32Array(Z * NA).fill(-1);
+    this.zoneAirAcc = new Float64Array(Z * NA);
     for (let z = 0; z < Z; z++) {
-      const near = ap.map((a, k) => [k, kmBetween(this.cx[z], this.cy[z], a.lon, a.lat)])
-        .filter(([k, d]) => d <= P.airAccessMaxKm && (!this.isExt[z] || ap[k].ext))
-        .sort((x, y) => x[1] - y[1]).slice(0, 2);
+      const all = ap.map((a, k) => [k, kmBetween(this.cx[z], this.cy[z], a.lon, a.lat)])
+        .filter(([k, d]) => (!this.isExt[z] || ap[k].ext) && (d <= P.airAccessMaxKm || (ap[k].hub && !this.isExt[z] && d <= P.airHubAccessKm)))
+        .sort((x, y) => x[1] - y[1]);
+      // 가까운 둘 + 허브 (국제선은 허브로 가려고 조금 더 멀리서도 간다)
+      const near = all.slice(0, 2);
+      const hub = all.find(([k]) => ap[k].hub);
+      if (hub && !near.includes(hub)) near.push(hub); else if (all[2]) near.push(all[2]);
       near.forEach(([k, d], n) => {
-        this.zoneAir[z * 2 + n] = k;
+        this.zoneAir[z * NA + n] = k;
         const road = (d * P.accessDetour / P.airAccessSpeedKmh) * 60;
         // 공항역이 있으면 철도로 가는 편이 빠른 존은 철도로 간다 (공항철도를 놓으면 공항 수요가 는다)
         const rail = this.airRailAccess(k, z);
-        this.zoneAirAcc[z * 2 + n] = Math.min(road, rail) + P.airTerminalMin;
+        this.zoneAirAcc[z * NA + n] = Math.min(road, rail) + P.airTerminalMin;
       });
     }
   }
@@ -1878,14 +2140,17 @@ export class Model {
   /** 존 i→j 항공 일반화 시간 (분): 운항 노선 기준과, 잠재 노선까지 열렸을 때 기준 */
   airCost(i, j) {
     const A = this.airports.length;
+    const NA = this.NA, ap = this.airports;
     let best = Infinity, ba = -1, bb = -1, pot = Infinity, pa = -1, pb = -1;
-    for (let p = 0; p < 2; p++) {
-      const a = this.zoneAir[i * 2 + p];
+    for (let p = 0; p < NA; p++) {
+      const a = this.zoneAir[i * NA + p];
       if (a < 0) break;
-      for (let q = 0; q < 2; q++) {
-        const b = this.zoneAir[j * 2 + q];
+      for (let q = 0; q < NA; q++) {
+        const b = this.zoneAir[j * NA + q];
         if (b < 0) break;
-        const ground = this.zoneAirAcc[i * 2 + p] + this.zoneAirAcc[j * 2 + q] + this.airPenalty[a] + this.airPenalty[b];
+        // 허브(인천) 국제선 이점: 운항이 잦고 연결편·대형기가 많다
+        const hub = (ap[a].hub || ap[b].hub) && ap[a].country !== ap[b].country ? P.airHubIntlMin : 0;
+        const ground = this.zoneAirAcc[i * NA + p] + this.zoneAirAcc[j * NA + q] + this.airPenalty[a] + this.airPenalty[b] - hub;
         const c = ground + this.flight[a * A + b] + this.routePenalty[a * A + b];
         if (c < best) { best = c; ba = a; bb = b; }
         const c2 = ground + this.potFlight[a * A + b];
@@ -2067,7 +2332,7 @@ export class Model {
         if (!bestAir || c < bestAir.min) bestAir = { min: c, a: ap[a].id, b: ap[b].id, freq: this.routeFreq[a * A + b] };
       }
     }
-    if (bestAir) out.air = { ...bestAir, cost: Math.round(P.airBaseFare + crowKm * P.airFarePerKm) };
+    if (bestAir) out.air = { ...bestAir, cost: Math.round(airFare(crowKm)) };
     return out;
   }
 
@@ -2147,9 +2412,16 @@ export function hdiOf(le, mys, eys, gni) {
 }
 
 /** 격자에서 역까지 접근시간(분): 걸어갈 만한 거리는 도보, 그보다 멀면 버스·승용차 연계 */
+/** 항공 운임 (원): 장거리는 km당 운임이 줄어든다 */
+export function airFare(km) {
+  return P.airBaseFare + Math.min(km, P.airFareTaperKm) * P.airFarePerKm + Math.max(0, km - P.airFareTaperKm) * P.airFarePerKmLong;
+}
+
 export function accessMinutes(km) {
-  if (km <= P.walkMaxKm) return km * P.accessDetour / P.walkSpeedKmh * 60;
-  return P.feederPenaltyMin + km * P.accessDetour / P.feederSpeedKmh * 60;
+  // 걷기와 연계(버스·승용차) 가운데 빠른 쪽. 예전에는 1.5km 안이면 무조건 걸어 0.7~1.5km 역세권이 연계보다 최대 9분 손해였다
+  const feed = P.feederPenaltyMin + km * P.accessDetour / P.feederSpeedKmh * 60;
+  if (km <= P.walkMaxKm) return Math.min(km * P.walkDetour / P.walkSpeedKmh * 60, feed);
+  return feed;
 }
 
 /** 노드 공간 색인 (0.05도 버킷) */

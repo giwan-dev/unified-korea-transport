@@ -10,8 +10,10 @@ export const HOUSING = {
   sizes: {
     s: { label: '소규모', households: 10000 },
     m: { label: '중규모', households: 25000 },
-    l: { label: '신도시급', households: 50000 },
+    l: { label: '2기 신도시급', households: 50000 },
+    xl: { label: '1기 신도시급 (분당·일산 규모)', households: 100000 },
   },
+  bigTown: 80000,            // 이 세대 수 이상이면 간선 축을 여덟 방향 6차로로 (분당·일산처럼 격자 간선망)
   density: 6000,             // 직접 그린 구역: km²당 세대 (3기 신도시 평균쯤)
   householdSize: 2.4,
   siteCost: { capital: 0.9, metro: 0.6, other: 0.4, kp: 0.25 },   // 세대당 토지 보상·단지 안 기반시설 (억원)
@@ -25,9 +27,9 @@ export const HOUSING = {
   complaintKm: 3,            // 입주를 마쳤는데 이보다 먼 곳에만 철도역이 있으면 교통 대책 민원
 };
 
-/** 세대 수에 따른 공기 (1만 세대 5년, 5만 세대 8년쯤) */
+/** 세대 수에 따른 공기 (1만 세대 5년, 5만 세대 8년, 10만 세대 10년쯤: 분당은 1989년 착공, 1996년 준공) */
 export function housingYears(households) {
-  return Math.round(Math.min(9, 4 + households / 12500));
+  return Math.round(Math.min(10, 4 + households / 12500));
 }
 
 /**
@@ -49,7 +51,7 @@ export function housingPlan({ households, zone, lat, lon, score = 0.5, years }) 
  * 착공. phases 2면 세대를 반씩 나눠 2단계는 phase2Lag년 늦게 끝난다.
  * roads: 함께 놓는 도로 링크 id (단지 안 간선도로·연결도로, 1단계와 함께 완공). roadCost: 그 공사비
  */
-export function startHousing(state, { name, zone, lon, lat, size, ring = null, households, plan, phases = 1, roads = [], roadCost = 0, score = 0.5, railKm = null }) {
+export function startHousing(state, { name, zone, lon, lat, size, ring = null, households, plan, phases = 1, roads = [], roadCost = 0, score = 0.5, railKm = null, ang = null }) {
   const total = plan.cost + plan.levy + roadCost;
   if (!canAfford(state, total, plan.years)) return { ok: false, reason: '예산과 차입 한도가 부족합니다.' };
   const id = crypto.randomUUID();
@@ -57,7 +59,7 @@ export function startHousing(state, { name, zone, lon, lat, size, ring = null, h
   const ph = split.map((hh, k) => ({ id: k ? crypto.randomUUID() : id, households: hh, done: false }));
   (state.housing ||= []).push({
     id, name, zone, lon, lat, size, ring, households, persons: plan.persons, net: plan.persons, revenue: plan.revenue,
-    score, railKm, levy: plan.levy, phases: ph, moving: [], occupied: 0, done: false, built: false, applied: true,
+    score, railKm, levy: plan.levy, ang, phases: ph, moving: [], occupied: 0, done: false, built: false, applied: true,
   });
   ph.forEach((p, k) => {
     const share = p.households / households;
@@ -81,7 +83,7 @@ export function settleHousing(state, doneProjects) {
       if (ids.has(h.id)) {
         h.done = h.built = true;
         state.budget += h.revenue;
-        out.push({ zone: h.zone, lon: h.lon, lat: h.lat, persons: h.persons, net: 1 });
+        out.push({ zone: h.zone, lon: h.lon, lat: h.lat, persons: h.persons, net: 1, hid: h.id });
       }
       continue;
     }
@@ -105,7 +107,7 @@ export function settleHousing(state, doneProjects) {
     h.moving = h.moving.filter((m) => m.step < HOUSING.moveIn.length);
     if (inc > 0) {
       h.occupied = Math.min(h.persons, (h.occupied || 0) + inc);
-      out.push({ zone: h.zone, lon: h.lon, lat: h.lat, persons: inc, net: 1 });
+      out.push({ zone: h.zone, lon: h.lon, lat: h.lat, persons: inc, net: 1, hid: h.id });
     }
     if (!h.done && h.phases.every((p) => p.done) && !h.moving.length) {
       h.done = true;

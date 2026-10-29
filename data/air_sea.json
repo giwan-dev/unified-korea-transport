@@ -6,8 +6,9 @@
    "name": "인천국제공항",
    "lon": 126.4407,
    "lat": 37.4602,
-   "cap": 77,
-   "intl": true
+   "cap": 106,
+   "intl": true,
+   "hub": true
   },
   {
    "id": "GMP",
@@ -414,6 +415,162 @@
    "pop": 0.62,
    "income": 30000,
    "korean": 0.01
+  },
+  {
+   "id": "BKK",
+   "name": "방콕",
+   "country": "TH",
+   "lon": 100.75,
+   "lat": 13.69,
+   "pop": 15,
+   "income": 18000,
+   "korean": 0.02,
+   "massW": 1.0,
+   "longhaul": true
+  },
+  {
+   "id": "SGN",
+   "name": "호찌민",
+   "country": "VN",
+   "lon": 106.65,
+   "lat": 10.82,
+   "pop": 9,
+   "income": 9000,
+   "korean": 0.05,
+   "massW": 0.9,
+   "longhaul": true
+  },
+  {
+   "id": "HAN",
+   "name": "하노이",
+   "country": "VN",
+   "lon": 105.81,
+   "lat": 21.22,
+   "pop": 8,
+   "income": 8000,
+   "korean": 0.03,
+   "massW": 0.8,
+   "longhaul": true
+  },
+  {
+   "id": "MNL",
+   "name": "마닐라",
+   "country": "PH",
+   "lon": 121.02,
+   "lat": 14.51,
+   "pop": 14,
+   "income": 9000,
+   "korean": 0.03,
+   "massW": 0.8,
+   "longhaul": true
+  },
+  {
+   "id": "SIN",
+   "name": "싱가포르",
+   "country": "SG",
+   "lon": 103.99,
+   "lat": 1.36,
+   "pop": 6,
+   "income": 80000,
+   "korean": 0.02,
+   "massW": 0.7,
+   "longhaul": true
+  },
+  {
+   "id": "HKG",
+   "name": "홍콩",
+   "country": "HK",
+   "lon": 113.92,
+   "lat": 22.31,
+   "pop": 7.5,
+   "income": 50000,
+   "korean": 0.01,
+   "massW": 0.8,
+   "longhaul": true
+  },
+  {
+   "id": "SYD",
+   "name": "시드니",
+   "country": "AU",
+   "lon": 151.18,
+   "lat": -33.94,
+   "pop": 5.3,
+   "income": 65000,
+   "korean": 0.05,
+   "massW": 0.4,
+   "longhaul": true
+  },
+  {
+   "id": "LAX",
+   "name": "로스앤젤레스",
+   "country": "US",
+   "lon": -118.41,
+   "lat": 33.94,
+   "pop": 13,
+   "income": 75000,
+   "korean": 0.25,
+   "massW": 0.5,
+   "longhaul": true
+  },
+  {
+   "id": "JFK",
+   "name": "뉴욕",
+   "country": "US",
+   "lon": -73.78,
+   "lat": 40.64,
+   "pop": 20,
+   "income": 85000,
+   "korean": 0.2,
+   "massW": 0.4,
+   "longhaul": true
+  },
+  {
+   "id": "YVR",
+   "name": "밴쿠버",
+   "country": "CA",
+   "lon": -123.18,
+   "lat": 49.19,
+   "pop": 2.6,
+   "income": 55000,
+   "korean": 0.05,
+   "massW": 0.3,
+   "longhaul": true
+  },
+  {
+   "id": "FRA",
+   "name": "프랑크푸르트",
+   "country": "DE",
+   "lon": 8.56,
+   "lat": 50.04,
+   "pop": 5.8,
+   "income": 60000,
+   "korean": 0.03,
+   "massW": 0.3,
+   "longhaul": true
+  },
+  {
+   "id": "CDG",
+   "name": "파리",
+   "country": "FR",
+   "lon": 2.55,
+   "lat": 49.01,
+   "pop": 12,
+   "income": 60000,
+   "korean": 0.01,
+   "massW": 0.4,
+   "longhaul": true
+  },
+  {
+   "id": "LHR",
+   "name": "런던",
+   "country": "GB",
+   "lon": -0.45,
+   "lat": 51.47,
+   "pop": 14,
+   "income": 60000,
+   "korean": 0.03,
+   "massW": 0.4,
+   "longhaul": true
   }
  ],
  "gateways": [
@@ -2494,6 +2651,71 @@
    "FNJ",
    "TPE",
    1
+  ],
+  [
+   "ICN",
+   "BKK",
+   10
+  ],
+  [
+   "ICN",
+   "HKG",
+   12
+  ],
+  [
+   "ICN",
+   "MNL",
+   8
+  ],
+  [
+   "ICN",
+   "SGN",
+   8
+  ],
+  [
+   "ICN",
+   "HAN",
+   8
+  ],
+  [
+   "ICN",
+   "SIN",
+   6
+  ],
+  [
+   "ICN",
+   "LAX",
+   4
+  ],
+  [
+   "ICN",
+   "JFK",
+   3
+  ],
+  [
+   "ICN",
+   "SYD",
+   2
+  ],
+  [
+   "ICN",
+   "YVR",
+   2
+  ],
+  [
+   "ICN",
+   "FRA",
+   2
+  ],
+  [
+   "ICN",
+   "CDG",
+   2
+  ],
+  [
+   "ICN",
+   "LHR",
+   2
   ]
  ],
  "corridors": [
@@ -5272,5 +5494,72 @@
     ]
    ]
   }
+ ],
+ "longhaulRoutes": [
+  [
+   "ICN",
+   "BKK",
+   10
+  ],
+  [
+   "ICN",
+   "HKG",
+   12
+  ],
+  [
+   "ICN",
+   "MNL",
+   8
+  ],
+  [
+   "ICN",
+   "SGN",
+   8
+  ],
+  [
+   "ICN",
+   "HAN",
+   8
+  ],
+  [
+   "ICN",
+   "SIN",
+   6
+  ],
+  [
+   "ICN",
+   "LAX",
+   4
+  ],
+  [
+   "ICN",
+   "JFK",
+   3
+  ],
+  [
+   "ICN",
+   "SYD",
+   2
+  ],
+  [
+   "ICN",
+   "YVR",
+   2
+  ],
+  [
+   "ICN",
+   "FRA",
+   2
+  ],
+  [
+   "ICN",
+   "CDG",
+   2
+  ],
+  [
+   "ICN",
+   "LHR",
+   2
+  ]
  ]
 }

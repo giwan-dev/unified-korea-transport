@@ -7,7 +7,8 @@ import { kmBetween } from '../sim/model.js';
  * - 중국·러시아 거점은 국경 통과점을 거쳐 북측 도로·철도와 가상 링크로 이어진다.
  * - 여객선 항로는 도로 수단의 항로 링크(cls 'ferry')로 넣는다.
  */
-export const FOREIGN_PROVINCE = { CN: '중화인민공화국', RU: '러시아', JP: '일본', TW: '중화민국' };
+export const FOREIGN_PROVINCE = { CN: '중화인민공화국', RU: '러시아', JP: '일본', TW: '중화민국', HK: '홍콩', TH: '태국', VN: '베트남', PH: '필리핀',
+  SG: '싱가포르', AU: '오스트레일리아', US: '미국', CA: '캐나다', DE: '독일', FR: '프랑스', GB: '영국' };
 
 export function extendWorld(base, zoneProps, world) {
   const roadNodes = new Set(), railNodes = new Set();
@@ -31,7 +32,7 @@ export function extendWorld(base, zoneProps, world) {
     const id = zoneProps.length;
     zoneProps.push({
       id, name: f.name, province: FOREIGN_PROVINCE[f.country], country: f.country, ext: 1,
-      pop: f.pop * 1e6, korean: (f.korean || 0) * 1e6, income: f.income, area: 1000, cx: f.lon, cy: f.lat, subs: [[f.lon, f.lat, 1, 1000]], sub0,
+      pop: f.pop * 1e6, korean: (f.korean || 0) * 1e6, income: f.income, area: 1000, massW: f.massW ?? 1, longhaul: f.longhaul ? 1 : 0, cx: f.lon, cy: f.lat, subs: [[f.lon, f.lat, 1, 1000]], sub0,
     });
     sub0 += 1;
     cityNode[f.id] = base.nodes.length;
@@ -86,7 +87,7 @@ export function extendWorld(base, zoneProps, world) {
     base.links.push({ a, b, len: Math.round(km * 100) / 100, mode: 0, cls: 'ferry', lanes: 2, speed, paved: 1, kp: 0, ext: typeof f.to === 'string' ? 1 : 0, name: `${f.name} 여객선`, geom: p.geom });
   }
   base.airports = world.airports.map((a) => ({ ...a, country: a.kp ? 'KP' : 'KR' }))
-    .concat(world.foreign.filter((f) => f.airport !== false).map((f) => ({ id: f.id, name: `${f.name} 공항`, lon: f.lon, lat: f.lat, cap: 60, intl: true, ext: 1, country: f.country })));
+    .concat(world.foreign.filter((f) => f.airport !== false).map((f) => ({ id: f.id, name: `${f.name} 공항`, lon: f.lon, lat: f.lat, cap: 60, intl: true, ext: 1, country: f.country, longhaul: !!f.longhaul })));
   return base;
 }
 

@@ -17,9 +17,10 @@ export const UPGRADES = [
     apply: (l) => ({ paved: 1, speed: Math.round(l.speed / 0.6) }),
   },
   {
-    id: 'realign', mode: 0, label: '선형 개량', perKm: 60, years: 2,
-    applies: (l) => l.cls !== 'motorway' && l.speed < roadMaxSpeed(l.cls),
-    apply: (l) => ({ speed: Math.min(l.speed + 15, roadMaxSpeed(l.cls)) }),
+    // 한 구간에 한 번: 굽은 길·급경사를 펴서 설계 속도를 올린다 (지도 선형은 그대로, 길을 새로 내려면 국도 신설)
+    id: 'realign', mode: 0, label: '선형 개량 (굽은 길·경사 완화, 한 번만)', perKm: 60, years: 2,
+    applies: (l) => l.cls !== 'motorway' && !l.realigned && l.speed < roadMaxSpeed(l.cls),
+    apply: (l) => ({ speed: Math.min(l.speed + 15, roadMaxSpeed(l.cls)), realigned: 1 }),
   },
   {
     id: 'widen', mode: 0, label: '차로 확장 (+2)', years: 3,
@@ -27,18 +28,31 @@ export const UPGRADES = [
     applies: (l) => l.lanes < 10,
     apply: (l) => ({ lanes: l.lanes + 2 }),
   },
+  // 고속도로를 줄이거나 내리는 개량: 수요가 적은 북측 고속도로·도심 구간 정리
+  {
+    id: 'narrow', mode: 0, label: '차로 축소 (−2차로, 유지비 절감·보행 공간)', perKm: 15, years: 1,
+    applies: (l) => l.lanes > 2,
+    apply: (l) => ({ lanes: l.lanes - 2 }),
+  },
+  {
+    id: 'tonational', mode: 0, label: '국도 전환 (고속도로 지정 해제, 80km/h)', perKm: 10, years: 1,
+    applies: (l) => l.cls === 'motorway',
+    apply: (l) => ({ cls: 'trunk', speed: Math.min(l.speed, 80) }),
+  },
   {
     id: 'tomotorway', mode: 0, label: '고속도로 격상 (4차로)', perKm: 300, years: 4,
     applies: (l) => l.cls !== 'motorway',
     apply: (l) => ({ cls: 'motorway', lanes: Math.max(4, l.lanes), speed: 95, paved: 1 }),
   },
   {
-    id: 'railimprove', mode: 1, label: '선형개량·노반 보강', perKm: 70, years: 3,
-    applies: (l) => l.cls === 'conv' && l.speed < 150,
-    apply: (l) => ({ speed: Math.min(Math.max(Math.round(l.speed * 1.5), l.speed + 30), 150) }),
+    // 한 구간에 한 번: 지금 자리에서 곡선 캔트·노반·궤도를 손봐 최고 속도를 올린다 (지도 선형은 그대로)
+    id: 'railimprove', mode: 1, label: '노반·궤도 보강 (지금 선로 그대로, 한 번만)', perKm: 70, years: 3,
+    applies: (l) => l.cls === 'conv' && !l.improved && l.speed < 150,
+    apply: (l) => ({ speed: Math.min(Math.max(Math.round(l.speed * 1.5), l.speed + 30), 150), improved: 1 }),
   },
   {
-    id: 'straighten', mode: 1, label: '직선화 (곡선 구간 펴기)', perKm: 250, years: 5,
+    // '구간 직선화'(두 역 사이에 새 선로를 곧게 놓는 신설)와 다르다: 같은 길을 따라 급곡선만 잘라 펴므로 지도 선형은 그대로 둔다
+    id: 'straighten', mode: 1, label: '곡선 완화 (급곡선 잘라 펴기, 거리 −10%, 한 번만)', perKm: 250, years: 5,
     applies: (l) => l.cls === 'conv' && !l.straight,
     apply: (l) => ({ straight: 1, len: Math.round(l.len * 0.9 * 100) / 100, speed: Math.min(200, Math.max(l.speed + 40, 160)) }),
   },
@@ -52,6 +66,27 @@ export const UPGRADES = [
     applies: (l) => l.tracks >= 2 && l.tracks < 4,
     apply: () => ({ tracks: 4 }),
   },
+  // 선로 수를 더 늘리지 않고 수송력을 키우는 개량 (2복선 뒤에도 붐비는 구간)
+  {
+    id: 'signal', mode: 1, label: '신호 고도화 (KTCS-2·열차 간격 단축, 운행 횟수 +30%)', perKm: 30, years: 3, keepGauge: true,
+    applies: (l) => !l.sig,
+    apply: () => ({ sig: 1 }),
+  },
+  {
+    id: 'longtrain', mode: 1, label: '장편성 (승강장 연장, 열차 정원 +50%)', perKm: 20, years: 3, keepGauge: true,
+    applies: (l) => l.cls === 'conv' && !l.long,
+    apply: () => ({ long: 1 }),
+  },
+  {
+    id: 'cbtc', mode: 2, label: '신호 고도화 (CBTC·무인 운전, 운행 횟수 +30%)', perKm: 60, years: 3,
+    applies: (l) => !l.sig,
+    apply: () => ({ sig: 1 }),
+  },
+  {
+    id: 'metrolong', mode: 2, label: '장편성 (지하 승강장 연장, 열차 정원 +50%)', perKm: 80, years: 4,
+    applies: (l) => !l.long,
+    apply: () => ({ long: 1 }),
+  },
   {
     id: 'electrify', mode: 1, years: 2,
     label: (l) => (l.power === 'DC' ? '교류 25kV 전환 (북 직류 3kV)' : '전철화 (교류 25kV)'),
@@ -60,12 +95,13 @@ export const UPGRADES = [
     apply: () => ({ power: 'AC' }),
   },
   {
-    id: 'metroexpress', mode: 2, label: '급행화 (대피선·급행 운행)', perKm: 150, years: 3,
-    applies: (l) => l.speed < 50,
-    apply: (l) => ({ speed: Math.min(l.speed + 12, 50) }),
+    // 대피선을 놓고 급행·완행을 섞어 다닌다: 따로 급행 계통을 만들지 않고 이 구간을 지나는 승객의 평균(표정) 속도를 올린 것으로 본다
+    id: 'metroexpress', mode: 2, label: '급행화 (대피선·급행·완행 혼합 운행, 표정 속도 상승, 한 번만)', perKm: 150, years: 3,
+    applies: (l) => !l.express && l.speed < 50,
+    apply: (l) => ({ speed: Math.min(l.speed + 12, 50), express: 1 }),
   },
   {
-    id: 'metrocap', mode: 2, label: '증편 (신호 개량·차량 증차)', perKm: 60, years: 2,
+    id: 'metrocap', mode: 2, label: '증편 (차량 증차·배차 간격 단축)', perKm: 60, years: 2,
     applies: (l) => !(l.tracks >= 3),
     apply: () => ({ tracks: 3 }),
   },
@@ -74,14 +110,30 @@ export const UPGRADES = [
     applies: (l) => l.cls === 'conv' && l.speed < 200,
     apply: (l) => ({ speed: 200, tracks: Math.max(2, l.tracks), power: 'AC' }),
   },
+  // 고속철도 증속: 230~285km/h로 다니는 고속선(기존선 병용·저속 설계 구간)을 300km/h로, 300km/h 고속선을 차세대 열차(최고 370km/h급) 운행 350km/h로
+  {
+    id: 'hsr300', mode: 1, label: '고속선 증속 (궤도·전차선·신호 보강, 300km/h)', perKm: 180, years: 3,
+    applies: (l) => l.cls === 'hsr' && l.speed < 300,
+    apply: () => ({ speed: 300, tracks: 2, power: 'AC' }),
+  },
+  {
+    id: 'hsr350', mode: 1, label: '고속선 증속 (차세대 고속열차, 350km/h)', perKm: 300, years: 4,
+    applies: (l) => l.cls === 'hsr' && l.speed >= 300 && l.speed < 350,
+    apply: () => ({ speed: 350 }),
+  },
   // 북측 철도를 한 번에 남측 규격으로: 선형·노반 보강 + 복선 + 교류 25kV + 표준궤 (따로 하는 개량들의 합)
   {
     id: 'kpstd', mode: 1, label: '남측 규격 일괄 개량 (복선·교류 25kV·120km/h·표준궤)', years: 5,
     perKm: (l) => 70 + (l.tracks < 2 ? 140 : 0) + (l.power === 'AC' ? 0 : l.power === 'DC' ? 15 : 25),
-    applies: (l) => !!l.kp && l.cls === 'conv' && (l.speed < 120 || l.tracks < 2 || l.power !== 'AC' || !l.std),
+    applies: (l) => !!l.kp && !l.sstd && l.cls === 'conv' && (l.speed < 120 || l.tracks < 2 || l.power !== 'AC' || !l.std),
     apply: (l) => ({ speed: Math.max(l.speed, 120), tracks: Math.max(2, l.tracks), power: 'AC' }),
   },
   // 고속도로 재건축: 북측 고속도로(시속 60km급)는 남측 규격으로, 남측의 2차로 고속도로는 4차로로 다시 짓는다
+  {
+    id: 'mw120', mode: 0, label: '설계 속도 상향 (120km/h, 선형·안전시설 보강)', perKm: 150, years: 3,
+    applies: (l) => l.cls === 'motorway' && l.lanes >= 4 && l.paved && l.speed >= 95 && l.speed < 120,
+    apply: () => ({ speed: 120 }),
+  },
   {
     id: 'mwrebuild', mode: 0, years: 4,
     label: (l) => (l.kp ? '남측 규격 고속도로로 재건축 (4차로 이상·95km/h)' : '고속도로 재건축 (4차로 이상·95km/h)'),
@@ -101,7 +153,9 @@ export const UPGRADES = [
 export const NEW_BUILDS = {
   motorway: { mode: 0, label: '고속도로 신설 (4차로)', perKm: 450, years: 5, attrs: { cls: 'motorway', lanes: 4, speed: 100, paved: 1 } },
   trunk: { mode: 0, label: '국도 신설 (4차로)', perKm: 180, years: 3, attrs: { cls: 'trunk', lanes: 4, speed: 70, paved: 1 } },
-  hsr: { mode: 1, label: '고속철도 신설', perKm: 850, years: 6, attrs: { cls: 'hsr', tracks: 2, speed: 250, power: 'AC' } },
+  hsr: { mode: 1, label: '고속철도 신설 (300km/h)', perKm: 850, years: 6, attrs: { cls: 'hsr', tracks: 2, speed: 300, power: 'AC' } },
+  // 차세대 고속열차(최고 370km/h급)용: 곡선 반경·터널 단면을 키워 더 비싸다
+  hsr350: { mode: 1, label: '고속철도 신설 (350km/h급)', perKm: 1000, years: 6, attrs: { cls: 'hsr', tracks: 2, speed: 350, power: 'AC' } },
   gtx: { mode: 1, label: '광역급행철도 신설 (대심도)', perKm: 1100, years: 6, attrs: { cls: 'conv', tracks: 2, speed: 120, power: 'AC' } },   // 최고 180km/h, 역마다 서고 가감속하므로 평균(표정) 속도로
   rail: { mode: 1, label: '일반철도 신설 (복선전철)', perKm: 400, years: 5, attrs: { cls: 'conv', tracks: 2, speed: 150, power: 'AC' } },
   // 단선 비전철: 싸고 빨리 짓지만 열차를 많이 못 다니고 느리다. 나중에 구간을 눌러 복선화·전철화할 수 있다
@@ -138,8 +192,8 @@ export function formatWon(eok) {
   return `${Math.round(eok).toLocaleString()}억`;
 }
 
-/** 개량을 적용한 속성. 철도 개량은 선로를 다시 까므로 북측 협궤(762mm)도 표준궤가 된다 (std) */
+/** 개량을 적용한 속성. 철도 개량은 선로를 다시 까므로 북측 협궤(762mm)도 표준궤가 된다 (std). 신호·승강장만 손보는 개량은 그대로 */
 export function upgradeAttrs(u, link) {
   const a = u.apply(link);
-  return u.mode === 1 ? { ...a, std: 1 } : a;
+  return u.mode === 1 && !u.keepGauge ? { ...a, std: 1 } : a;
 }
