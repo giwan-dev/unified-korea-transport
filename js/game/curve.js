@@ -178,6 +178,25 @@ export function minRadiusKm(line) {
   return r;
 }
 
+/** 선형에서 곡선 반경이 rKm보다 급한 자리들 [경도, 위도, 반경 km] (minRadiusKm과 같은 셈: 200m 간격으로 솎은 세 점, 첫 셋은 뺀다) */
+export function sharpSpots(line, rKm) {
+  const k = Math.cos(((line[0]?.[1] ?? 37) * Math.PI) / 180) * 111.32;
+  const P = [], src = [];
+  for (const [x, y] of line) {
+    const q = [x * k, y * 110.95];
+    if (!P.length || Math.hypot(q[0] - P[P.length - 1][0], q[1] - P[P.length - 1][1]) >= 0.2) { P.push(q); src.push([x, y]); }
+  }
+  const out = [];
+  for (let i = 3; i + 1 < P.length; i++) {
+    const a = P[i - 2], b = P[i - 1], c = P[i];
+    const ab = Math.hypot(b[0] - a[0], b[1] - a[1]), bc = Math.hypot(c[0] - b[0], c[1] - b[1]), ca = Math.hypot(a[0] - c[0], a[1] - c[1]);
+    const area2 = Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]));
+    const r = area2 > 1e-9 ? (ab * bc * ca) / (2 * area2) : Infinity;
+    if (r < rKm) out.push([...src[i - 1], r]);
+  }
+  return out;
+}
+
 /** 곡선 반경(km)이 허락하는 최고 속도(km/h): 철도는 캔트를 둔 V ≈ 4.2√R(m) (R 7km → 350), 도로는 편경사+횡마찰 0.2로 V ≈ √(25R(m)) (R 0.4km → 100) */
 export function curveSpeed(rKm, mode) {
   if (!Number.isFinite(rKm)) return Infinity;

@@ -299,13 +299,34 @@ export function drawUrbanEdges() {
   const x0 = b.getWest(), y0 = b.getSouth();
   const ni = Math.ceil(((b.getEast() - x0) * kx) / cell), nj = Math.ceil(((b.getNorth() - y0) * ky) / cell);
   if (ni * nj > 40000) return;
-  const urban = new Set();
+  const raw = new Set();
   for (let i = 0; i < ni; i++) for (let j = 0; j < nj; j++) {
     const x = x0 + ((i + 0.5) * cell) / kx, y = y0 + ((j + 0.5) * cell) / ky;
-    if (popNear(x, y, 0.35) / (Math.PI * 0.35 * 0.35) > HOUSING_SITE.urbanDensity || urbanFabric(x, y, true)) urban.add(`${i},${j}`);
+    if (popNear(x, y, 0.35) / (Math.PI * 0.35 * 0.35) > HOUSING_SITE.urbanDensity || urbanFabric(x, y, true)) raw.add(`${i},${j}`);
   }
-  const lines = traceCells(urban).filter((l) => l.length >= 8)
-    .map((l) => smoothRing(l.map(([u, v]) => [x0 + (u * cell) / 2 / kx, y0 + (v * cell) / 2 / ky]), 1))
+  // 칸 판정을 다수결로 두 번 다듬는다 (3×3 가운데 5칸 넘게 시가지면 시가지): 칸 하나짜리 돌기·홈·구멍이 계단처럼 보이던 것
+  let urban = raw;
+  for (let pass = 0; pass < 2; pass++) {
+    const next = new Set();
+    for (let i = 0; i < ni; i++) for (let j = 0; j < nj; j++) {
+      let n = 0;
+      for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) if (urban.has(`${i + di},${j + dj}`)) n++;
+      if (n >= 5) next.add(`${i},${j}`);
+    }
+    urban = next;
+  }
+  // 테두리: 꺾이는 점만 남기고 촘촘한 점은 솎은 뒤 곡선으로 (택지지구 모양과 같은 다듬기). 0.5km²보다 작은 덩어리·구멍은 긋지 않는다
+  const minCells = 0.5 / (cell * cell) * 4;   // traceCells 좌표는 반 칸 단위: 둘레 넓이도 4배
+  const lines = traceCells(urban).filter((l) => l.length >= 8 && Math.abs(l.reduce((t, q, k) => { const r = l[(k + 1) % l.length]; return t + q[0] * r[1] - r[0] * q[1]; }, 0)) / 2 >= minCells)
+    .map((l) => {
+      const corners = l.filter((q, k) => {
+        const a = l[(k - 1 + l.length) % l.length], b = l[(k + 1) % l.length];
+        return (q[0] - a[0]) * (b[1] - q[1]) - (q[1] - a[1]) * (b[0] - q[0]) !== 0;
+      });
+      const thin = [];
+      for (const q of corners) if (!thin.length || Math.hypot(q[0] - thin[thin.length - 1][0], q[1] - thin[thin.length - 1][1]) >= 3) thin.push(q);
+      return smoothRing((thin.length >= 3 ? thin : l).map(([u, v]) => [x0 + (u * cell) / 2 / kx, y0 + (v * cell) / 2 / ky]), 3);
+    })
     .map((r) => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [...r, r[0]] } }));
   // 이어진 시가지 덩어리마다 이름 하나 (가장 큰 덩어리부터, 같은 이름은 한 번)
   const seen = new Set(), comps = [];

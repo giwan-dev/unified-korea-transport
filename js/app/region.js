@@ -1,7 +1,7 @@
 // 행정: 읍면동 편입, 북측 1945년 면, 행정 소속표, 시군구 신설, 청사.
 import { adminSig, buildAdmin } from '../game/admin.js';
 import { formatWon } from '../game/catalog.js';
-import { countyDisplayName, EVENT_COST, isMetroCity, metroName, PARTIES, promotedName, regionOf, unitId } from '../game/local.js';
+import { countyDisplayName, dueum, EVENT_COST, isMetroCity, metroName, PARTIES, promotedName, regionOf, unitId } from '../game/local.js';
 import { stem } from '../game/naming.js';
 import { placeName, save } from '../game/state.js';
 import { t } from '../i18n.js';
@@ -22,7 +22,17 @@ import { extraOf, extraSubs, extrasOfParent, extrasOfZone, padSubsFC } from './r
 
 /** 읍면동 열쇠: 자료의 도·시군·읍면동 이름 (존 번호가 바뀌어도 그대로) */
 /** 읍면동 이름: 직접 바꾼 이름·행정구역 정리(노동자구 폐지 → 리, 두음법칙)를 반영한다 (자료 이름 그대로 쓰면 창·목록에 '○○로동자구'가 남았다) */
-export function subName(i) { return riToDong(i, placeName(state, 'unit', i, subsFC?.features[i]?.properties.name || '')); }
+export function subName(i) { return riToDong(i, placeName(state, 'unit', i, pieceName(i, subsFC?.features[i]?.properties.name || ''))); }
+
+/**
+ * 존을 옛 군 경계로 자를 때 읍면동 이름 없이 시군 이름이 붙은 조각: 그 자리의 읍면동·리 이름으로 보인다
+ * (개성시 중구 안의 '개성시' 등). 열쇠(subKey)는 자료 이름 그대로 둔다 (예전 저장의 편입 기록이 맞도록)
+ */
+const PIECE_NAMES = { '경기도|연천군': '신서면', '경기도|파주시': '적성면', '강원도|금강군': '이포리', '개성시|개성시': '박연리' };
+export function pieceName(i, name) {
+  const z = zoneProps[subInfo(i)?.[0]];
+  return z && name === z.name ? PIECE_NAMES[`${z.province}|${z.name}`] || name : name;
+}
 
 // ------------------------------------------------------------ 북측 읍면 (1945년 면, data/kp_myeon.json)
 // 북측은 1952년에 면을 없애 리가 바로 군에 딸린다. 남측처럼 군은 읍·면 단위로, 시는 동 단위로 보이게:
@@ -236,6 +246,13 @@ export function unitRepZone(id) {
 }
 /** 시군 id의 보이는 이름 */
 export function unitName(id) { const u = admin()?.unit(id); return u ? u.name : id.startsWith('z:') ? countyNameOf(+id.slice(2)) : id; }
+/** 광역시 몸통: 구로 나누지 않은 광역시 그 자체 (청진광역시 밑 청진광역시, 나선광역시 밑 라선시, 세종). 화면에서는 광역 바로 밑이 동 */
+export function isMetroBody(id) {
+  const u = admin()?.unit(id), r = u?.region;
+  if (!r || !isMetroCity(r)) return false;
+  const k = (s) => dueum(s.replace(/(특별자치시|광역시|직할시|특별시|시)$/, ''));
+  return k(u.name) === k(r);
+}
 /** 시군 id의 단체장 자리 열쇠 */
 export function unitOfficeKey(id) { return id.startsWith('z:') ? `m:${id.slice(2)}` : `m:${id}`; }
 

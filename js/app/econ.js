@@ -348,7 +348,7 @@ export function renderSelection() {
   el.querySelectorAll('[data-line-batch]').forEach((b) => {
     b.onclick = () => {
       const k = b.dataset.lineBatch, x = lineBatch(selection.id)[k], name = linkAt(base, state, selection.id).name;
-      const r = startUpgrade(base, state, x.ids, 'electrify', { discount: LINE_BATCH_DISCOUNT, label: `${name} ${k === 'DC' ? '노선 전체 승압 (교류 25kV)' : '노선 전체 전철화'}` });
+      const r = startUpgrade(base, state, x.ids, k === 'kpstd' ? 'kpstd' : 'electrify', { discount: LINE_BATCH_DISCOUNT, label: `${name} ${k === 'kpstd' ? '노선 전체 남측 규격 개량' : k === 'DC' ? '노선 전체 승압 (교류 25kV)' : '노선 전체 전철화'}` });
       if (!r.ok) return alert(r.reason);
       save(state); refreshLinks(); renderAll();
       showGazette(state.projects[state.projects.length - 1], { fromBuild: true });

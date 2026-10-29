@@ -67,7 +67,8 @@ export function unitId(state, z) {
 export function promotedName(state, z) {
   const up = state.local?.cityUp;
   const legacy = legacyKey(state, z);
-  return up?.length && (up.includes(unitId(state, z)) || (legacy && up.includes(legacy))) ? z.name.replace(/군$/, '시') : z.name;
+  // 되살린 군(연백군: 배천·연안 존)은 그 군 이름으로 (연백시). 예전에는 존 이름으로 '배천시'가 되어 연백시 배천구를 누르면 배천시 → 배천광역시 승격이 떴다
+  return up?.length && (up.includes(unitId(state, z)) || (legacy && up.includes(legacy))) ? (restoredCounty(state, z)?.name || z.name).replace(/군$/, '시') : z.name;
 }
 
 /**
@@ -80,7 +81,7 @@ export function countyDisplayName(state, z) {
   const L = state.local, pn = promotedName(state, z), base = state.adminNames?.[`z:${z.id}`] || z.name;
   const own = pn !== z.name ? base.replace(/군$/, '시') : base;
   if (!L || z.ext) return own;
-  // 광역시로 승격한 시 자리: 분구하지 않았으면 구가 없다 (광역시 그 자체, 기초단체장 없음). 분구했으면 구 이름이 따로 붙는다
+  // 광역시로 승격한 시 자리: 분구하지 않았으면 구가 없다 (광역시 그 자체, 기초단체장 없음: 화면에서는 광역 바로 밑이 동). 분구했으면 구 이름이 따로 붙는다
   if (!z.city && /시$/.test(pn) && L.independent?.includes(pn) && z.province !== pn) return L.bungu?.[pn] ? '중구' : metroName(pn);
   // 광역시 아래에 시는 없다: 광역시에 든 시(편입한 시, 승격한 뒤 편입한 군)는 구로 (벽성시 → 벽성구)
   if (!z.city && z.name !== z.province && /시$/.test(own) && isMetroCity(regionOf(state, z))) return own.replace(/시$/, '구');
@@ -88,6 +89,7 @@ export function countyDisplayName(state, z) {
   if (L.gunToGu?.includes(unitId(state, z)) && /군$/.test(own)) return own.replace(/군$/, '구');
   // 북측 직할시의 시 본체(개성시 안의 개성시: 개풍·장풍·판문과 나란한 시내)는 중구로. 예전에는 광역단체장과 같은 '개성시장'이 겹치고,
   // 개성광역시로 바꾸면 '광역시와 같은 이름의 시'라 기초단체장이 없어져 시내에 지방자치가 없었다. 시 전체가 한 시군인 라선은 그대로
+  // (광역시 몸통: 화면에서는 광역 바로 밑이 동)
   if (!z.city && z.name === z.province && KP_DIRECT_CITIES.includes(z.province) && z.province !== '라선시' && isMetroCity(regionOf(state, z))) return '중구';
   return own;
 }

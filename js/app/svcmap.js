@@ -261,7 +261,7 @@ export function linkPanel(id) {
        <tr><td>교통량</td><td>${Math.round(vol).toLocaleString()} PCU/일</td></tr>`
     : `<tr><td>선로</td><td>${l.tracks === 1 ? '단선' : l.tracks === 2 ? '복선' : l.tracks + '선'}</td></tr>
        <tr><td>전력</td><td>${{ AC: '교류 25kV', DC: '직류 3kV', none: '비전철' }[l.power]}</td></tr>
-       <tr><td>규격</td><td>${railStd(l) ? '개량 전 북측 철도 (아래 "남측 규격 일괄 개량"으로 한 번에 바꿀 수 있습니다)' : '남측 규격'}</td></tr>
+       <tr><td>규격</td><td>${railStd(l) ? '개량 전 북측 철도 (아래 "남측 규격 일괄 개량"으로 이 구간을, "노선 일괄"로 노선 전체를 한 번에 바꿀 수 있습니다)' : '남측 규격'}</td></tr>
        <tr><td>최고 운행 속도</td><td>${l.speed} km/h</td></tr>
        ${capRows}
        <tr><td>이용객</td><td>${Math.round(vol).toLocaleString()} 명/일</td></tr>`;
@@ -329,23 +329,24 @@ export const LINE_BATCH_DISCOUNT = 0.9;
 export function lineBatch(id) {
   const work = linksUnderWork(state), u = UPGRADES.find((x) => x.id === 'electrify');
   const route = sameRoute(id, true).filter((i) => !work.has(i) && !(i < base.links.length && linkPending(base, state, i)) && !state.replaced?.[i]);
-  const make = (pw) => {
-    const ids = route.filter((i) => { const m = linkAt(base, state, i); return m.mode === 1 && !m.ext && m.power === pw; });
+  const make = (pw, up = u) => {
+    const ids = route.filter((i) => { const m = linkAt(base, state, i); return m.mode === 1 && !m.ext && (pw ? m.power === pw : up.applies(m)); });
     const ls = ids.map((i) => linkAt(base, state, i));
-    const cost = Math.round(ls.reduce((s0, m) => s0 + upgradeCost(u, m), 0) * LINE_BATCH_DISCOUNT);
-    return { ids, km: ls.reduce((s0, m) => s0 + m.len, 0), cost, ok: ids.length > 0 && canAfford(state, cost, u.years, fundFor(state, ls)) };
+    const cost = Math.round(ls.reduce((s0, m) => s0 + upgradeCost(up, m), 0) * LINE_BATCH_DISCOUNT);
+    return { ids, km: ls.reduce((s0, m) => s0 + m.len, 0), cost, years: up.years, ok: ids.length > 0 && canAfford(state, cost, up.years, fundFor(state, ls)) };
   };
-  return { DC: make('DC'), none: make('none'), years: u.years };
+  // 북측 철도 일괄 개량: 이 노선의 개량 전 북측 구간을 모두 남측 규격으로 (복선·교류 25kV·120km/h·표준궤)
+  return { DC: make('DC'), none: make('none'), kpstd: make(null, UPGRADES.find((x) => x.id === 'kpstd')), years: u.years };
 }
 export function lineBatchHTML(l, id) {
   if (l.mode !== 1 || !l.name || l.ext) return '';
   const b = lineBatch(id);
-  if (!b.DC.ids.length && !b.none.ids.length) return '';
+  if (!b.DC.ids.length && !b.none.ids.length && !b.kpstd.ids.length) return '';
   const row = (k, label) => (b[k].ids.length ? `<div class="item opt"><div class="opt-row"><span>${label} · ${b[k].km.toFixed(0)}km (${b[k].ids.length}개 구간)</span>
-    <span class="btns"><button class="small ${b[k].ok ? 'primary' : ''}" data-line-batch="${k}" ${b[k].ok ? '' : 'disabled'}>${formatWon(b[k].cost)} · ${b.years}년</button></span></div></div>` : '');
+    <span class="btns"><button class="small ${b[k].ok ? 'primary' : ''}" data-line-batch="${k}" ${b[k].ok ? '' : 'disabled'}>${formatWon(b[k].cost)} · ${b[k].years}년</button></span></div></div>` : '');
   return `<h4>노선 일괄 · ${esc(l.name)}</h4>
     <p class="hint">이 노선의 해당 구간을 모두 한 사업으로 (구간을 고르지 않아도 되고 10% 덜 듭니다). 다 지으면 남측 전동차가 이 노선으로 직통할 수 있습니다.</p>
-    <div class="list">${row('DC', '노선 전체 승압 (직류 3kV → 교류 25kV)')}${row('none', '노선 전체 전철화 (비전철 → 교류 25kV)')}</div>`;
+    <div class="list">${row('kpstd', '노선 전체 남측 규격 개량 (북측 구간: 복선·교류 25kV·120km/h·표준궤)')}${row('DC', '노선 전체 승압 (직류 3kV → 교류 25kV)')}${row('none', '노선 전체 전철화 (비전철 → 교류 25kV)')}</div>`;
 }
 
 /** 폐도·폐선은 되돌릴 수 없으니 한 번 더 묻는다 (지나는 운행 계통 수도 알려 준다) */

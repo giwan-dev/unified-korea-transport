@@ -142,6 +142,9 @@ table.cmp th.asc, table.cmp th.desc { color: var(--ink); }
 .item.line { display: flex; align-items: center; gap: var(--s3); padding: var(--s2) var(--s3); }
 .item.line .n { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .item.line .n b { font-size: 13px; font-weight: 600; }
+/* 노선 이름 옆 단계 표시 (1단계·2단계): 이름과 한 줄에 (예전에는 세로로 쌓는 칸이라 한 줄 아래, 오른쪽 끝으로 밀렸다) */
+.item.line .n .t-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+details.fold-sub .item.line .n .t-row .phase-tag { margin-left: 0; }
 .item.decided { border-style: dashed; background: var(--panel-2); }
 .item.decided.accepted { border-color: var(--good); background: var(--good-soft); border-style: solid; animation: settle .9s ease-out; }
 .item.decided.rejected { opacity: .75; }

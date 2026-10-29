@@ -1,7 +1,7 @@
 // 두 지점 소요 시간, 그리는 노선의 점 편집·확정.
 import { trackHeadings } from '../game/branch.js';
 import { KP_COST_FACTOR } from '../game/catalog.js';
-import { curveSpeed, easeCurves, minRadiusKm, polylineKm, smoothSegments, tangentCurve } from '../game/curve.js';
+import { curveSpeed, easeCurves, minRadiusKm, polylineKm, sharpSpots, smoothSegments, tangentCurve } from '../game/curve.js';
 import { autoLineName } from '../game/lines.js';
 import { canAfford, effectiveNetwork, isKP, linkAt, NEW_BUILDS, save, splitLink, startNewBuild } from '../game/state.js';
 import { loadTerrain, terrainAt, terrainCostFactor, terrainProfile, terrainReady, terrainRoute, terrainRule } from '../game/terrain.js';
@@ -450,8 +450,27 @@ export function drawDraft() {
   // i: 끌어 옮길 점 번호, pass: 역·IC가 없는 경유점 (작고 속이 빈 점)
   const f = draft.points.map((p, i) => (p.via ? null : { type: 'Feature', properties: { i, pass: p.name || p.kind ? 0 : 1 }, geometry: { type: 'Point', coordinates: [p.lon, p.lat] } })).filter(Boolean);
   if (draft.points.length > 1) {
-    const line = smoothSegments(draftPoints()).flatMap((seg, i) => (i ? seg.slice(1) : seg));
+    const segs = smoothSegments(draftPoints()), line = segs.flatMap((seg, i) => (i ? seg.slice(1) : seg));
     f.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } });
+    // 급곡선: 설계 속도를 깎는 곡선 자리를 빨간 점과 그 곡선이 허락하는 속도로 (역·IC 사이마다, draftCost의 lims와 같은 셈)
+    const spec = NEW_BUILDS[draft.type];
+    if (spec.mode !== 2 && spec.attrs?.speed) {
+      const stops = draft.points.map((p, i) => i).filter((i) => !draft.points[i].via || i === 0 || i === draft.points.length - 1);
+      for (let s0 = 0; s0 + 1 < stops.length; s0++) {
+        const g = segs.slice(stops[s0], stops[s0 + 1]).flatMap((q, k) => (k ? q.slice(1) : q));
+        // 설계 속도를 내는 데 드는 반경보다 급한 곳 (곡선 하나에 점이 몇 개씩 몰리면 가장 급한 하나만)
+        const spots = sharpSpots(g, Infinity).filter(([, , r]) => curveSpeed(r, spec.mode) < spec.attrs.speed);
+        const kept = [];
+        for (const q of spots) {
+          const near = kept.find((w) => Math.hypot(w[0] - q[0], w[1] - q[1]) < 0.01);
+          if (!near) kept.push(q); else if (q[2] < near[2]) near.splice(0, 3, ...q);
+        }
+        for (const [x, y, r] of kept) {
+          const v = Math.max(curveSpeed(r, spec.mode), 30);
+          f.push({ type: 'Feature', properties: { sharp: 1, label: `${v}km/h · R${r < 1 ? `${Math.round(r * 1000)}m` : `${r.toFixed(1)}km`}` }, geometry: { type: 'Point', coordinates: [x, y] } });
+        }
+      }
+    }
   }
   map.getSource('draft').setData({ type: 'FeatureCollection', features: f });
 }

@@ -83,14 +83,19 @@ const unitFiles = new Map();
 export function setNameResolver(fn) { nameResolver = fn; }
 
 let regionKey = '';
-let lastInner = null, mixedZones = [];
+let lastInner = null, lastSido = null, mixedZones = [];
 /** 시군 경계선: 같은 광역 단체 안 변 가운데, 양쪽 존이 모두 소속이 바뀐 존(편입·시군구 신설)인 변은 빼고 (그 자리는 읍면동 경계로 다시 긋는다) */
 function applyZoneLineFilter(map) {
   if (!lastInner || !map.getLayer('zones-line')) return;
+  // 소속이 바뀐 읍면동이 있는 존에 닿은 조각은 긋지 않는다: 그 존 안팎의 시군·광역 경계는 drawAdmin이 읍면동 경계로 긋는다
+  // (예전에는 시군 경계만 다시 그어, 구 하나를 다른 광역시로 옮겨도 굵은 광역 경계가 옛 자리에 남았다)
+  const off = ['any', ['in', ['get', 'a'], ['literal', mixedZones]], ['in', ['get', 'b'], ['literal', mixedZones]]];
   const base = ['in', ['get', 'i'], ['literal', lastInner]];
-  map.setFilter('zones-line', mixedZones.length
-    ? ['all', base, ['!', ['all', ['in', ['get', 'a'], ['literal', mixedZones]], ['in', ['get', 'b'], ['literal', mixedZones]]]]]
-    : base);
+  map.setFilter('zones-line', mixedZones.length ? ['all', base, ['!', off]] : base);
+  if (lastSido && map.getLayer('bg-sido')) {
+    const sido = ['in', ['get', 'i'], ['literal', lastSido]];
+    map.setFilter('bg-sido', mixedZones.length ? ['all', sido, ['!', off]] : sido);
+  }
 }
 export function setMixedZones(map, zones) {
   const k = zones.join(',');
@@ -120,9 +125,8 @@ export function setRegions(map, regionOfZone, countryOfZone, zoneCenter, short =
       if (same && countyOfZone && countyOfZone[a] === countyOfZone[b]) continue;
       (same ? inner : ids).push(i);
     }
-    map.setFilter('bg-sido', ['in', ['get', 'i'], ['literal', ids]]);
     map.setFilter('bg-sido-water', ['in', ['get', 'i'], ['literal', water]]);
-    lastInner = inner;
+    lastInner = inner; lastSido = ids;
     applyZoneLineFilter(map);
   });
   // 이름 자리: 단체에 속한 존 중심들의 가운데에 가장 가까운 존 중심 (바다·다른 도 위에 뜨지 않게)
@@ -526,7 +530,7 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addLayer({
     // 시군구 경계: 경계선 조각(edges) 가운데 같은 광역 단체 안의 변만 (도 경계는 bg-sido, 해안은 bg-coast가 한 번씩 그린다)
     id: 'zones-line', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1], layout: { 'line-join': 'round', 'line-cap': 'round' },
-    paint: { 'line-color': '#7a7f86', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.2, 9, 0.8], 'line-opacity': 0.7 },
+    paint: { 'line-color': '#686d74', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.2, 9, 0.9, 12, 1.6], 'line-opacity': 0.8 },
   }, below);
   map.addLayer({
     id: 'zones-sel-edge', type: 'line', source: 'edges', filter: ['==', ['get', 'i'], -1], layout: { 'line-join': 'round', 'line-cap': 'round' },
@@ -756,7 +760,13 @@ export function addLayers(map, zonesFC, linksFC, subsFC) {
   map.addSource('draft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({ id: 'draft-line', type: 'line', source: 'draft', filter: ['==', ['geometry-type'], 'LineString'],
     paint: { 'line-color': '#1f5fbf', 'line-width': 3, 'line-dasharray': [1.5, 1] } });
-  map.addLayer({ id: 'draft-pts', type: 'circle', source: 'draft', filter: ['==', ['geometry-type'], 'Point'],
+  // 급곡선 자리 (route.js drawDraft): 역·경유점 밑에
+  map.addLayer({ id: 'draft-sharp', type: 'circle', source: 'draft', filter: ['has', 'sharp'],
+    paint: { 'circle-radius': 5, 'circle-color': '#d62828', 'circle-opacity': 0.85, 'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } });
+  map.addLayer({ id: 'draft-sharp-label', type: 'symbol', source: 'draft', filter: ['has', 'sharp'], minzoom: 8,
+    layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 11, 'text-offset': [0, 1.1], 'text-anchor': 'top' },
+    paint: { 'text-color': '#b01e1e', 'text-halo-color': '#fff', 'text-halo-width': 1.4 } });
+  map.addLayer({ id: 'draft-pts', type: 'circle', source: 'draft', filter: ['all', ['==', ['geometry-type'], 'Point'], ['!', ['has', 'sharp']]],
     paint: { 'circle-radius': ['case', ['==', ['get', 'pass'], 1], 4, 6], 'circle-color': ['case', ['==', ['get', 'pass'], 1], '#fff', '#1f5fbf'],
       'circle-stroke-color': ['case', ['==', ['get', 'pass'], 1], '#1f5fbf', '#fff'], 'circle-stroke-width': 2 } });
 }

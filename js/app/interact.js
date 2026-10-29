@@ -4,7 +4,7 @@ import { t } from '../i18n.js';
 import { setZoneOutline } from '../ui/map.js';
 import { draft, map, measure, selection, setSelection, state, zoneProps } from './core.js';
 import { krRi, loadRiFiles, riAt, riCodeMap } from './mapdata.js';
-import { admin, subAtLngLat, subKey, subRegion, subUnit, unitPick, unitPickClick, unitRepZone } from './region.js';
+import { admin, isMetroBody, subAtLngLat, subKey, subRegion, subUnit, unitPick, unitPickClick, unitRepZone } from './region.js';
 import { univPick, univPickClick } from './univ.js';
 import { catchLabel, placeAirport } from './draw.js';
 import { addDraftPoint, draftPress, enableDraftDrag, measureClick } from './route.js';
@@ -96,7 +96,8 @@ export function drillSelect(zid, ll) {
   const sel = selection, sameGu = (g) => sel?.type === 'gu' && countyRep(sel.id) === countyRep(rep) && sel.gu === g;
   const inUnit = sel && ((sel.type === 'unit' && sel.id === u) || (sel.type === 'zone' && !split && countyRep(sel.id) === rep) || (autoGu && sameGu(autoGu)));
   const many = (a.emds.get(emd)?.subs.length || 1) > 1, hasRi = !many && krRi?.[i]?.length > 0;
-  if (sel?.type === 'region' && sel.id === r) return select(level2);
+  // 구로 나누지 않은 광역시(광역시 몸통)는 광역 바로 밑이 동
+  if (sel?.type === 'region' && sel.id === r) return !g0 && isMetroBody(u) ? select({ type: 'emd', id: emd }) : select(level2);
   if (inUnit && genGu) return select({ type: 'gu', id: countyRep(rep), gu: genGu });
   if (inUnit || (genGu && sameGu(genGu))) {
     if (hasRi) loadRiFiles(ll.lng - 0.05, ll.lat - 0.05, ll.lng + 0.05, ll.lat + 0.05);   // 다음 번 누를 때(리) 바로 고르게 미리 받는다

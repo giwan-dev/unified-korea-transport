@@ -27,7 +27,7 @@ import { addTrainsLayer, setTrainsProvider } from './ui/trainsmap.js';
 import { assignTourism, countyKey, ctx, gains, onWorker, zoneLabel, zoneName } from './app/year.js';
 import { renamePyongyangMetro, resetNamer } from './app/sez.js';
 import { drawAnnexedSubs, linksFC, refreshLinks, refreshPoints } from './app/mapdata.js';
-import { admin, drawHalls, hallList, halls, riToDong, setHalls, startUnitPick, unitMyeon } from './app/region.js';
+import { admin, drawHalls, hallList, halls, pieceName, riToDong, setHalls, startUnitPick, unitMyeon } from './app/region.js';
 import { drawUnivs, fixPropagandaUnivs, setUnivs, univs } from './app/univ.js';
 import { bindMap, select, selectBox } from './app/interact.js';
 import { cancelDraft, popNear, startDraft } from './app/draw.js';
@@ -292,7 +292,7 @@ async function init() {
     addPlansLayer(map);
     addTrainsLayer(map);
     setTrainsProvider(trainsData);
-    setNameResolver((level, id, original) => (level === 'zone' && zoneProps[id] ? (guNamesOfZone(id) && !isGeneralGu(id) ? '' : zoneLabel(id)) : level === 'unit' ? riToDong(id, placeName(state, level, id, original)) : placeName(state, level, id, original)));
+    setNameResolver((level, id, original) => (level === 'zone' && zoneProps[id] ? (guNamesOfZone(id) && !isGeneralGu(id) ? '' : zoneLabel(id)) : level === 'unit' ? riToDong(id, placeName(state, level, id, pieceName(id, original))) : placeName(state, level, id, original)));
     setUnitGroup((i) => unitMyeon(i));
     setLabelGroup((z) => ({ key: countyKey(z), weight: zoneProps[z]?.area || 0 }));
     refreshNames(map);

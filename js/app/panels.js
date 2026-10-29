@@ -516,7 +516,7 @@ export function renderBuild() {
         ${NEW_BUILDS[draft.type].mode >= 1 ? `<tr><td>역 반경 ${catchKm(draft.type)}km 인구</td><td>${fmtPeople(draft.points.filter((q) => q.name && q.kind !== 'IC').reduce((t, q) => t + popNear(q.lon, q.lat, catchKm(draft.type)), 0))} <span class="m">(역 ${draft.points.filter((q) => q.name && q.kind !== 'IC').length}곳, 겹친 곳도 셈)</span></td></tr>` : ''}
         <tr><td>사업비</td><td>${formatWon(cost)}</td></tr>
         ${lims.length && spec.mode !== 2 ? `<tr><td>${spec.mode === 0 ? '설계 속도' : '최고 속도'} (선형)</td><td>${slow.length
-          ? `<span class="neg">${Math.min(...slow.map((x) => x.v))}~${spec.attrs.speed}km/h</span> <span class="m">급곡선(반경 ${minR < 1 ? `${Math.round(minR * 1000)}m` : `${minR.toFixed(1)}km`}) 때문에 ${slow.length}/${lims.length}개 구간이 느림 · 경유점을 옮겨 곡선을 펴면 오릅니다</span>`
+          ? `<span class="neg">${Math.min(...slow.map((x) => x.v))}~${spec.attrs.speed}km/h</span> <span class="m">급곡선(반경 ${minR < 1 ? `${Math.round(minR * 1000)}m` : `${minR.toFixed(1)}km`}) 때문에 ${slow.length}/${lims.length}개 구간이 느림 (지도의 빨간 점) · 경유점을 옮겨 곡선을 펴면 오릅니다</span>`
           : `${spec.attrs.speed}km/h <span class="m">${Number.isFinite(minR) ? `가장 급한 곡선 반경 ${minR.toFixed(1)}km` : '직선'}</span>`}</td></tr>` : ''}
         <tr><td>공사 기간 · 연 분담</td><td>${years}년 · ${formatWon(cost / years)}</td></tr>
         ${foreignKm > 0.5 ? `<tr><td>외국 구간 (상대국 절반 부담)</td><td>${foreignKm.toFixed(0)} km</td></tr>` : ''}

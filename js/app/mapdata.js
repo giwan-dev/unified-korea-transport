@@ -14,7 +14,7 @@ import {
 import { invalidateTrains } from '../ui/trainsmap.js';
 import { base, grid, happiness, historic, map, median, metric, result, state, subPop0, subsFC, zoneProps } from './core.js';
 import { gains } from './year.js';
-import { admin, adminCache, splitUnits, unitOfficeKey, unitPick, unitPop, unitRepZone } from './region.js';
+import { admin, adminCache, splitUnits, subNeighbors, subRegion, unitOfficeKey, unitPick, unitPop, unitRepZone } from './region.js';
 import { stationRiders } from './svc.js';
 import { countyRep, countyZones, mayorKey } from './election.js';
 import { edgeLines, guUnits, unitZones } from './bungu.js';
@@ -465,7 +465,12 @@ export async function drawAdmin() {
   if (!map.getSource('admin-lines')) {
     map.addSource('admin-lines', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     map.addLayer({ id: 'admin-lines', type: 'line', source: 'admin-lines', layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#7a7f86', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.2, 9, 0.8], 'line-opacity': 0.7 } },
+      paint: { 'line-color': '#686d74', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.2, 9, 0.9, 12, 1.6], 'line-opacity': 0.8 } },
+      map.getLayer('zones-sel-edge') ? 'zones-sel-edge' : undefined);
+    // 소속이 섞인 존 둘레의 광역 경계 (도 경계 bg-sido와 같은 모양): bg-sido는 그 존에 닿은 조각을 긋지 않는다
+    map.addSource('admin-region-lines', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'admin-region-lines', type: 'line', source: 'admin-region-lines', layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': map.getPaintProperty('bg-sido', 'line-color') || '#888', 'line-opacity': 0.85, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.6, 10, 3.2] } },
       map.getLayer('zones-sel-edge') ? 'zones-sel-edge' : undefined);
   }
   const mixed = [...a.mixed];
@@ -480,31 +485,39 @@ export async function drawAdmin() {
       fine = await unitFeaturesIn(map, Math.min(...xs) - 0.1, Math.min(...ys) - 0.1, Math.max(...xs) + 0.1, Math.max(...ys) + 0.1);
     }
     const mset = new Set(mixed);
+    // 곁 읍면동: 섞인 존 읍면동과 맞닿은 다른 존의 읍면동 (존 경계 조각을 긋지 않으므로 그 둘레 시군·광역 경계도 여기서 긋는다)
+    const side = new Set();
+    for (const z of mixed) for (const i of a.subsOfZone(z)) for (const j of subNeighbors(i)) if (!mset.has(subInfo(j)[0])) side.add(j);
     const items = [], have = new Set();
     for (const f of fine) {
       const i = f.properties.id;
-      if (!Number.isInteger(i) || !mset.has(subInfo(i)[0])) continue;
+      if (!Number.isInteger(i) || have.has(i) || !(mset.has(subInfo(i)[0]) || side.has(i))) continue;
       const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
-      items.push({ key: a.unitOfSub[i], polys, sub: i });
+      items.push({ key: a.unitOfSub[i], polys, sub: i, need: !side.has(i) });
       have.add(i);
     }
-    for (const z of mixed) for (const i of a.subsOfZone(z)) {
+    for (const i of [...mixed.flatMap((z) => a.subsOfZone(z)), ...side]) {
       if (have.has(i)) continue;
+      have.add(i);
       const g = subsFC.features[i]?.geometry;
-      if (g) items.push({ key: a.unitOfSub[i], polys: g.type === 'Polygon' ? [g.coordinates] : g.coordinates, sub: i });
+      if (g) items.push({ key: a.unitOfSub[i], polys: g.type === 'Polygon' ? [g.coordinates] : g.coordinates, sub: i, need: !side.has(i) });
     }
     adminFine = new Map();
-    for (const it of items) { if (!adminFine.has(it.sub)) adminFine.set(it.sub, []); adminFine.get(it.sub).push(...it.polys); }
-    const lines = items.length ? edgeLines(items, 'between').map((line) => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } })) : [];
+    for (const it of items) if (it.need) { if (!adminFine.has(it.sub)) adminFine.set(it.sub, []); adminFine.get(it.sub).push(...it.polys); }
+    const asLines = (ls) => ls.map((line) => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } }));
+    const lines = items.length ? asLines(edgeLines(items, 'between', { needOnly: true })) : [];
+    const regionLines = items.length ? asLines(edgeLines(items.map((it) => ({ ...it, key: subRegion(it.sub) })), 'between', { needOnly: true })) : [];
     // 떼어 낸 리는 원래 읍면동과 경계 꼭짓점을 같이 쓰지 않아 위에서 잡히지 않는다: 소속 시군이 다르면 리 경계를 긋는다
     for (const e of extraSubs) {
       if (a.unitOfSub[e.g] === a.unitOfSub[e.parent]) continue;
       const g = e.feature.geometry, polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
-      for (const pg of polys) lines.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: pg[0] } });
+      const to = subRegion(e.g) !== subRegion(e.parent) ? regionLines : lines;
+      for (const pg of polys) to.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: pg[0] } });
     }
-    adminLineCache = { sig, lines };
+    adminLineCache = { sig, lines, regionLines };
   }
   map.getSource('admin-lines').setData({ type: 'FeatureCollection', features: adminLineCache.lines });
+  map.getSource('admin-region-lines').setData({ type: 'FeatureCollection', features: adminLineCache.regionLines });
   // 새 시군 이름 (시군 이름과 같은 모양): 그 읍면동들 가운데 (인구 가중)
   adminLabels = splitUnits().map((u) => {
     const w = u.subs.map((i) => Math.max(1, result ? result.subs.pop[i] : 1)), W = w.reduce((x, y) => x + y, 0);
@@ -641,7 +654,7 @@ export function drawEmdLines() {
   if (!map.getSource('emd-lines')) {
     map.addSource('emd-lines', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     map.addLayer({ id: 'emd-lines', type: 'line', source: 'emd-lines', minzoom: 7.5, layout: { 'line-join': 'round' },
-      paint: { 'line-color': '#7a7f86', 'line-width': 0.6, 'line-opacity': 0.75 } }, map.getLayer('zones-line') ? 'zones-line' : undefined);
+      paint: { 'line-color': '#8a8f96', 'line-width': 0.5, 'line-opacity': 0.55 } }, map.getLayer('zones-line') ? 'zones-line' : undefined);
   }
   if (!emdMoveHooked) { emdMoveHooked = true; let t = 0; map.on('moveend', () => { clearTimeout(t); t = setTimeout(drawEmdLines, 250); }); }
   const a = admin();

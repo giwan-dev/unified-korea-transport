@@ -84,8 +84,9 @@ export function annexTargets() {
     for (const j of adj.get(i) || []) {
       const d = byZone.get(j);
       if (!d || d.region === r || L.independent.includes(d.name)) continue;
-      // 광역시는 군·구만 받는다 (도의 군, 다른 광역시의 군·구 통째): 시는 광역시 밑에 둘 수 없다. 도는 군만 (다른 도·광역시의 군)
-      if (metro ? !/[군구]$/.test(d.name) : !/군$/.test(d.name)) continue;
+      // 광역시는 시·군·구를 받는다: 시는 광역시 밑에 둘 수 없어 구로 내려가고(함주시 → 함주구), 일반구가 있던 시는 그 구들이 각각 자치구가 된다.
+      // 도는 군만 (다른 도·광역시의 군)
+      if (metro ? !/[시군구]$/.test(d.name) : !/군$/.test(d.name)) continue;
       if (!out.has(r)) out.set(r, new Map());
       out.get(r).set(d.key, { ...d, via: i });
     }
@@ -727,6 +728,13 @@ export function moveGuTo(subs, gu, to) {
   (state.local.splitUnit ||= {})[key] = { name: gu, home, region: to, year: state.year };
   adminInvalidate();
   for (const i of subs) setSubUnit(i, key);
+  // 원래 시의 구 목록에서 뺀다: 구가 하나만 남으면 분구를 푼다 (구 하나뿐인 시가 되지 않게)
+  for (const [u, b] of Object.entries(state.local.bungu || {})) {
+    if (!subs.some((i) => b.gu?.[subKey(i)] === gu)) continue;
+    for (const i of subs) delete b.gu[subKey(i)];
+    if (new Set(Object.values(b.gu)).size < 2) { delete state.local.bungu[u]; bunguLineCache.delete(u); } else bunguLineCache.delete(u);
+  }
+  adminInvalidate();
   state.log.unshift(`${state.year}년 ${from} ${unitName(fromUnit)} ${gu}, ${to}로 통째 편입`);
   holdElection([to, from], `${to} 구 편입 선거`);
   syncMayors();
@@ -946,16 +954,17 @@ export function drawGuSelection(sel) {
  * (예전에는 그런 변이 바깥 테두리로 잡혀 북측에서 분구한 구를 고르면 구 안의 동 경계가 파랗게 그려지고, 구와 구 사이 경계는 끊겼다).
  * 셋 이상이 만나는 점에서 선을 끊는다
  */
-export function edgeLines(items, mode) {
+export function edgeLines(items, mode, opts = {}) {
   const kp = (q) => `${q[0].toFixed(5)},${q[1].toFixed(5)}`, ek = (x, y) => (x < y ? `${x}|${y}` : `${y}|${x}`);
-  const cnt = new Map(), keys = new Map(), coords = new Map(), poly = new Map();
+  const cnt = new Map(), keys = new Map(), coords = new Map(), poly = new Map(), needE = new Set(), nearNeed = new Set();
   let pid = 0;
-  for (const { key, polys } of items) for (const pg of polys) {
+  for (const { key, polys, need } of items) for (const pg of polys) {
     pid++;
     for (const ring of pg) for (let k = 0; k + 1 < ring.length; k++) {
       const a = kp(ring[k]), c = kp(ring[k + 1]);
       if (a === c) continue;
       const e = ek(a, c);
+      if (need) needE.add(e);
       cnt.set(e, (cnt.get(e) || 0) + 1);
       if (!keys.has(e)) keys.set(e, new Set());
       keys.get(e).add(key);
@@ -991,7 +1000,7 @@ export function edgeLines(items, mode) {
       for (const f of grid.get(`${x},${y}`) || []) {
         if (f === e || [...poly.get(f)].some((v) => mine.has(v))) continue;
         const [r, s2] = coords.get(f);
-        if (segDist(m, r, s2, kx) < 0.04) for (const k of keys.get(f)) got.add(k);
+        if (segDist(m, r, s2, kx) < 0.04) { for (const k of keys.get(f)) got.add(k); if (needE.has(f)) nearNeed.add(e); }
       }
     }
     if (got.size) near.set(e, got);
@@ -1001,7 +1010,8 @@ export function edgeLines(items, mode) {
     let take;
     if (mode === 'between') take = keys.get(e).size >= 2 || (n === 1 && [...(near.get(e) || [])].some((k) => String(k) > String([...keys.get(e)][0])))   // 틈 양쪽 가운데 한쪽만;
     else take = n === 1 && !near.has(e);
-    if (!take) continue;
+    // opts.needOnly: need 표시가 있는 면(소속이 바뀐 존의 읍면동)이 낀 변만 (곁에 넣은 이웃 존끼리의 변은 존 경계선이 긋는다)
+    if (!take || (opts.needOnly && !needE.has(e) && !nearNeed.has(e))) continue;
     const [a, c] = e.split('|');
     for (const [x, y] of [[a, c], [c, a]]) { if (!adj.has(x)) adj.set(x, []); adj.get(x).push(y); }
   }
@@ -1042,8 +1052,9 @@ export async function drawBungu() {
   if (!map || !subsFC) return;
   if (!map.getSource('bungu')) {
     map.addSource('bungu', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    // 구 사이 선은 시군 경계와 같은 모양 (읍면동 경계 emd-lines보다 진하게: 예전에는 같은 굵기·색이라 분구한 구 경계가 동 경계에 묻혔다)
     map.addLayer({ id: 'bungu-line', type: 'line', source: 'bungu', layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#7a7f86', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.2, 9, 0.8], 'line-opacity': 0.7 } },
+      paint: { 'line-color': '#686d74', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.2, 9, 0.9, 12, 1.6], 'line-opacity': 0.8 } },
       map.getLayer('zones-sel-edge') ? 'zones-sel-edge' : undefined);
   }
   if (!map.getSource('bungu-prev')) {
@@ -1240,7 +1251,11 @@ export function bindLocalSettings(el) {
       (L.annex ||= {})[k] = annexBase(to, +b.dataset.annexZone);
       adminInvalidate();
       state.log.unshift(`${state.year}년 ${c.name}, ${c.region}에서 ${to}로 편입`);
-      if (nGu > 1) { makeBungu(k, nGu); drawBungu(); }
+      // 일반구가 있던 시: 그 구들이 각각 광역시의 자치구가 된다 (구청장 선거). 새로 나누면 일반구는 지운다
+      const old = L.bungu?.[k];
+      if (old?.general) { if (nGu > 1) delete L.bungu[k]; else delete old.general; adminInvalidate(); }
+      if (nGu > 1) makeBungu(k, nGu);
+      drawBungu();
       holdElection([to, c.region], `${to} 시군 편입 선거`);
       syncMayors();   // 편입한 시·군은 구: 시장·군수 → 구청장
       refreshNames(map);

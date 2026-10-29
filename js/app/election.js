@@ -645,19 +645,20 @@ export function zoneAdminHTML(id) {
   const annexBtn = ({ r, c }, gu = '') => `<button class="small primary" data-annex="${esc(c.key)}" data-annex-to="${esc(r)}" data-annex-zone="${c.via}"${gu ? ` data-annex-gu="${gu}"` : ''}>${esc(r)}에 편입</button>`;
   const toMetro = out.filter((o) => isMetroCity(o.r)), toProv = out.filter((o) => !isMetroCity(o.r));
   if (toMetro.length) {
-    const isCity = /시$/.test(toMetro[0].c.name), pre = toMetro[0].c.name.replace(/시$/, '');
+    const isCity = /시$/.test(toMetro[0].c.name), pre = toMetro[0].c.name.replace(/시$/, ''), gen = L.bungu?.[toMetro[0].c.key]?.general;
     rows.push(item(`광역시로 편입 (지금 ${esc(toMetro[0].c.region)})`,
-      isCity ? `${esc(toMetro[0].c.name)}는 광역시의 자치구가 됩니다(${esc(pre)}구). 여러 자치구로 나누면(${esc(pre)}구·${esc(pre)}동구…) 구마다 구청장을 뽑습니다. 두 광역 단체장을 다시 뽑습니다 · ${formatWon(EVENT_COST.annex)} (분구하면 + ${formatWon(EVENT_COST.cityUp)})`
+      isCity && gen ? `시는 광역시 밑에 둘 수 없어, ${esc(toMetro[0].c.name)}의 일반구(${esc([...new Set(Object.values(L.bungu[toMetro[0].c.key].gu))].join('·'))})가 각각 광역시의 자치구가 됩니다(구청장 선거). 새로 나누면 지금 구는 없어집니다. 두 광역 단체장을 다시 뽑습니다 · ${formatWon(EVENT_COST.annex)} (새로 나누면 + ${formatWon(EVENT_COST.cityUp)})`
+      : isCity ? `시는 광역시 밑에 둘 수 없어 ${esc(toMetro[0].c.name)}는 광역시의 자치구가 됩니다(${esc(pre)}구). 여러 자치구로 나누면(${esc(pre)}구·${esc(pre)}동구…) 구마다 구청장을 뽑습니다. 두 광역 단체장을 다시 뽑습니다 · ${formatWon(EVENT_COST.annex)} (분구하면 + ${formatWon(EVENT_COST.cityUp)})`
         : /구$/.test(toMetro[0].c.name) ? `구는 그 광역시의 자치구로 통째로 옮겨 갑니다(구청장은 그대로). 두 광역 단체장을 다시 뽑습니다 · ${formatWon(EVENT_COST.annex)}`
         : `군은 광역시의 군 그대로 들어갑니다. 두 광역 단체장을 다시 뽑습니다 · ${formatWon(EVENT_COST.annex)}`,
-      `${isCity ? bunguSelect('annex-gu', '한 자치구로') : ''} ${toMetro.map((o) => annexBtn(o, isCity ? 'annex-gu' : '')).join('')}`));
+      `${isCity ? bunguSelect('annex-gu', gen ? '지금 구를 자치구로' : '한 자치구로') : ''} ${toMetro.map((o) => annexBtn(o, isCity ? 'annex-gu' : '')).join('')}`));
   }
   if (toProv.length) rows.push(item(`다른 도로 편입 (지금 ${esc(toProv[0].c.region)})`,
     `맞닿은 도의 군이 됩니다. 두 광역 단체장을 다시 뽑습니다 · ${formatWon(EVENT_COST.annex)}`,
     toProv.map((o) => annexBtn(o)).join('')));
   const r = regionOf(state, z), inn = (at || []).find(([g]) => g === r)?.[1] || [];
   if (inn.length) rows.push(`<details class="item"><summary class="t">맞닿은 시군을 ${esc(r)}에 편입 (${inn.length}곳)</summary>
-    <div class="m">${isMetroCity(r) ? '광역시는 맞닿은 군·구를 (시는 광역시 밑에 둘 수 없다)' : '도는 맞닿은 군을'} 편입합니다 · 한 곳 ${formatWon(EVENT_COST.annex)}</div>
+    <div class="m">${isMetroCity(r) ? '광역시는 맞닿은 시·군·구를 (시는 광역시 밑에 둘 수 없어 구가 되고, 일반구가 있던 시는 그 구들이 각각 자치구가 된다)' : '도는 맞닿은 군을'} 편입합니다 · 한 곳 ${formatWon(EVENT_COST.annex)}</div>
     ${isMetroCity(r) && inn.some((c) => /시$/.test(c.name)) ? `<div class="m" style="margin-top:4px">시를 편입할 때 ${bunguSelect('annex-gu-in', '한 자치구로')}</div>` : ''}
     <div class="row" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${inn.map((c) => `<button class="small" data-annex="${esc(c.key)}" data-annex-to="${esc(r)}" data-annex-zone="${c.via}"${isMetroCity(r) && /시$/.test(c.name) ? ' data-annex-gu="annex-gu-in"' : ''} title="${esc(c.region)}에서 ${esc(r)}로">${esc(c.name)} <span class="m">${esc(c.region)} ${fmtPop(c.pop)}</span></button>`).join('')}</div></details>`);
   // 광역시 산하 군을 구로 (그 자리에서 분구도)
