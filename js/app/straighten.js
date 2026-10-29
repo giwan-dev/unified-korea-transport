@@ -395,7 +395,12 @@ export function straightenPanel() {
     ${pl.dropped.length ? `<div class="m" style="margin-top:4px">폐역: ${pl.dropped.map((d) => esc(d.name)).join(' · ')}</div>` : ''}
     <p class="hint">지도에서 사이의 역을 누르면 그 역을 자동(새 선로 위로)·제자리 유지(옛 자리에서 옛 선로 방향으로 지나감)·폐역 가운데 고를 수 있습니다.</p>
     ${merged.length ? `<div class="m" style="margin-top:4px">합치는 역: ${merged.join(' · ')}</div>` : ''}
-    <p class="hint">완공되면 옛 구간 ${pl.via.length}개는 폐선하고, 역 이름과 운행 계통의 정차역은 새 자리로 이어집니다.</p>
+    <div class="name-row"><span class="kind">옛 구간</span><select id="st-retire">
+      <option value="retire" ${straight.keepOld ? '' : 'selected'}>완공 때 폐선 (옛 역은 새 자리로)</option>
+      <option value="keep" ${straight.keepOld ? 'selected' : ''}>그대로 둔다 (연선 역·지선 유지, 보통열차가 다닐 수 있게)</option></select></div>
+    <p class="hint">${straight.keepOld
+      ? `옛 구간 ${pl.via.length}개와 그 역은 그대로 남고, 새 선로는 따로 놓입니다. 운행 계통은 그대로 옛 선로로 다니니 새 선로로 다닐 계통은 운행 탭에서 고르세요. 사이의 역은 새 선로 위에 새로 짓습니다.`
+      : `완공되면 옛 구간 ${pl.via.length}개는 폐선하고, 역 이름과 운행 계통의 정차역은 새 자리로 이어집니다.`}</p>
     ${fundSelect([operatorOf(state, { mode: 1, kp: isKP(nodeCoord(pl.A)[1], nodeCoord(pl.A)[0]) ? 1 : 0 })])}
     <div class="actions">
       <button class="primary" id="st-ok">착공</button><button id="st-prev">효과 미리보기</button><button id="st-cancel">취소</button></div>`;
@@ -406,6 +411,7 @@ export function bindStraighten(el) {
   el.querySelector('.close')?.addEventListener('click', endStraighten);
   el.querySelector('#st-cancel')?.addEventListener('click', endStraighten);
   el.querySelector('#st-ok')?.addEventListener('click', commitStraighten);
+  el.querySelector('#st-retire')?.addEventListener('change', (e) => { straight.keepOld = e.target.value === 'keep'; renderSelection(); });
   el.querySelector('#st-prev')?.addEventListener('click', previewStraighten);
 }
 
@@ -457,6 +463,17 @@ export function commitStraighten() {
     // 전철 구간을 새로 놓으면 승압까지 마친 교류 전철로 (북측 직류 3kV 노선을 직선화해도 새 선로는 교류)
     if (oldL?.power && oldL.power !== 'none') nl.power = 'AC';
   }
+  p.label = `${straight.line} 직선화 ${nodeNames().get(pl.A)?.name}–${nodeNames().get(pl.B)?.name} (${pl.oldKm.toFixed(0)}→${pl.newKm.toFixed(0)}km)`;
+  p.straightKm = [pl.oldKm, pl.newKm];   // 고시문: 연장 단축
+  // 옛 구간을 그대로 두면(연선 유지) 폐선·역 옮기기·지선 잇기를 하지 않는다: 옛 선로와 역은 그대로, 새 선로는 따로
+  if (straight.keepOld) {
+    p.keepOld = true;
+    state.log[0] = `${state.year}년 착공: ${p.label} (${formatWon(p.cost)}, ${p.years}년) · 옛 구간은 그대로 둡니다`;
+    endStraighten();
+    save(state); refreshLinks(); refreshPoints(); renderAll();
+    startedNotice(p);
+    return;
+  }
   // 완공 때 폐선할 옛 구간과 역 옮기기 (옛 역 → 새 역, 합친 역은 남는 역으로)
   const newStations = p.stations;
   p.retire = pl.via;
@@ -472,8 +489,6 @@ export function commitStraighten() {
   for (const i of pl.via) { vn = L[i].a === vn ? L[i].b : L[i].a; viaNodes.push(vn); }
   const onNew = new Set(p.links.flatMap((id) => { const l = linkAt(base, state, id); return [l.a, l.b]; }));
   const conns = reconnectBranches(p, L, viaNodes, new Set(p.retire), onNew, 1, newStations.filter((n) => nodeCoord(n)), new Set([straight.line]));
-  p.label = `${straight.line} 직선화 ${nodeNames().get(pl.A)?.name}–${nodeNames().get(pl.B)?.name} (${pl.oldKm.toFixed(0)}→${pl.newKm.toFixed(0)}km)`;
-  p.straightKm = [pl.oldKm, pl.newKm];   // 고시문: 연장 단축
   state.log[0] = `${state.year}년 착공: ${p.label} (${formatWon(p.cost)}, ${p.years}년)${conns.length ? ` · 갈라지던 ${[...new Set(conns)].join('·')}${obj([...new Set(conns)].pop())} 새 선로에 잇는 연결선 포함` : ''}`;
   endStraighten();
   save(state); refreshLinks(); refreshPoints(); renderAll();

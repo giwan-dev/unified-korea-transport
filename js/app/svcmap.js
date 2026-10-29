@@ -338,6 +338,15 @@ export function lineBatch(id) {
   // 북측 철도 일괄 개량: 이 노선의 개량 전 북측 구간을 모두 남측 규격으로 (복선·교류 25kV·120km/h·표준궤)
   return { DC: make('DC'), none: make('none'), kpstd: make(null, UPGRADES.find((x) => x.id === 'kpstd')), years: u.years };
 }
+/** 북측 철도 전체 일괄 개량: 개량 전 북측 선로(직류 3kV·비전철·단선·저속)를 모두 남측 규격으로 한 사업에 (노선 일괄과 같은 10% 할인) */
+export function kpStdAll() {
+  const work = linksUnderWork(state), u = UPGRADES.find((x) => x.id === 'kpstd');
+  const ids = allLinks().map((_, i) => i).filter((i) => !work.has(i) && !(i < base.links.length && linkPending(base, state, i)) && !state.replaced?.[i]
+    && (() => { const m = linkAt(base, state, i); return m.mode === 1 && !m.ext && u.applies(m); })());
+  const ls = ids.map((i) => linkAt(base, state, i));
+  const cost = Math.round(ls.reduce((s0, m) => s0 + upgradeCost(u, m), 0) * LINE_BATCH_DISCOUNT);
+  return { ids, km: ls.reduce((s0, m) => s0 + m.len, 0), lines: new Set(ls.map((m) => m.name).filter(Boolean)).size, cost, years: u.years, ok: ids.length > 0 && canAfford(state, cost, u.years, fundFor(state, ls)) };
+}
 export function lineBatchHTML(l, id) {
   if (l.mode !== 1 || !l.name || l.ext) return '';
   const b = lineBatch(id);

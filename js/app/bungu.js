@@ -6,7 +6,7 @@ import {
   unitId,
 } from '../game/local.js';
 import { applyMega, kpACCost, kpDCLines, MEGA, megaGeometry, TSR_FREIGHT } from '../game/mega.js';
-import { canAfford, renameKPLines, save, startMega } from '../game/state.js';
+import { canAfford, renameKPLines, save, startMega, startUpgrade } from '../game/state.js';
 import { t } from '../i18n.js';
 import { fetchEdges, refreshNames, unitFeaturesIn } from '../ui/map.js';
 import { toast } from '../ui/panel.js';
@@ -22,7 +22,7 @@ import { bunguElectionNotice, countyRep, countyZones, guKey, holdElection, mayor
 import { adminSetup, drawGuMetric, setAdmin } from './firstyear.js';
 import { inRing } from './housing.js';
 import { runPreview } from './preview.js';
-import { header } from './svcmap.js';
+import { header, kpStdAll, LINE_BATCH_DISCOUNT } from './svcmap.js';
 import { bindGuSplit, metroRename } from './selpanel.js';
 
 // ---- 군 → 시 승격, 광역시 편입
@@ -1127,7 +1127,19 @@ export function megaHTML() {
     const acInfo = m.id === 'kp-ac' ? (() => { const L = kpDCLines(base, state); return ` 남은 직류 구간 ${L.length}개 노선 ${Math.round(L.reduce((s0, g) => s0 + g.km, 0)).toLocaleString()}km.`; })() : '';
     return `<div class="item"><div class="t">${esc(m.name)} ${m.id === 'kp-ac' ? '' : `<button class="small" data-mega-show="${m.id}">선형 보기</button>`}</div>
       <div class="m">${esc(m.desc)}${m.id === 'tsr' ? ` 화물 수입 연 ${formatWon(TSR_FREIGHT)}.` : ''}${acInfo}</div><div class="row" style="display:flex;gap:4px;flex-wrap:wrap">${status}</div></div>`;
-  }).join('')}</div>`;
+  }).join('')}${kpStdAllHTML()}</div>`;
+}
+
+/** 북측 철도 전체를 남측 규격으로 (노선 창의 '노선 일괄'을 북측 모든 노선에 한꺼번에) */
+function kpStdAllHTML() {
+  const k = kpStdAll();
+  const doing = state.projects.some((x) => x.kpStdAll);
+  if (!k.ids.length && !doing) return '';
+  return `<div class="item"><div class="t">북측 철도 남측 규격 일괄 개량 (전체)</div>
+    <div class="m">개량 전 북측 철도를 노선마다 고르지 않고 모두 한 사업으로 남측 규격(복선·교류 25kV·120km/h·표준궤)으로 바꿉니다. 노선 일괄처럼 10% 덜 듭니다.
+      ${k.ids.length ? ` 남은 구간 ${k.lines}개 노선 ${Math.round(k.km).toLocaleString()}km.` : ''}</div>
+    <div class="row" style="display:flex;gap:4px;flex-wrap:wrap">${k.ids.length ? `<button class="small ${k.ok ? 'primary' : ''}" data-kpstd-all ${k.ok ? '' : 'disabled'}>착공 ${formatWon(k.cost)} · ${k.years}년</button>${k.ok ? '' : ' <span class="m">예산이 모자랍니다 (노선 창의 노선 일괄로 나눠 지을 수 있습니다)</span>'}` : ''}
+      ${doing ? '<span class="m">공사 중인 일괄 개량이 있습니다</span>' : ''}</div></div>`;
 }
 
 export function bindMega(el) {
@@ -1139,6 +1151,17 @@ ${formatWon(m.cost)} · ${m.years}년 (해마다 ${formatWon(m.cost / m.years)})
       const r = startMega(state, m.id);
       if (!r.ok) { alert(r.reason); return; }
       save(state); renderAll();
+    };
+  });
+  el.querySelectorAll('[data-kpstd-all]').forEach((b) => {
+    b.onclick = () => {
+      const k = kpStdAll();
+      if (!confirm(`북측 철도 ${k.lines}개 노선 ${Math.round(k.km).toLocaleString()}km를 남측 규격으로 일괄 개량할까요?
+${formatWon(k.cost)} · ${k.years}년 (해마다 ${formatWon(k.cost / k.years)})`)) return;
+      const r = startUpgrade(base, state, k.ids, 'kpstd', { discount: LINE_BATCH_DISCOUNT, label: '북측 철도 남측 규격 일괄 개량 (전체)' });
+      if (!r.ok) { alert(r.reason); return; }
+      state.projects[state.projects.length - 1].kpStdAll = true;
+      save(state); refreshLinks(); renderAll();
     };
   });
   el.querySelectorAll('[data-mega-show]').forEach((b) => { b.onclick = () => showMegaLine(b.dataset.megaShow); });
